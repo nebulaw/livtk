@@ -116,7 +116,16 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     }
     println!("\nhistory");
     for e in &history {
-        println!("  {}  {:<8}  {}", e.at, e.by, describe(ws, e));
+        match &e.op {
+            // Notes are the working record, so `show` prints them whole.
+            Op::NodeNote { data, .. } => {
+                println!("  {}  {:<8}  note:", e.at, e.by);
+                for line in data.text.lines() {
+                    println!("      {line}");
+                }
+            }
+            _ => println!("  {}  {:<8}  {}", e.at, e.by, describe(ws, e)),
+        }
     }
     Ok(())
 }
@@ -162,6 +171,14 @@ pub fn linked(
         (true, true) => println!("{s} already waits for {d}"),
         (false, _) => println!("{s} no longer waits for {d}"),
     }
+    Ok(())
+}
+
+pub fn noted(key: &str, events: &[Event], json: bool) -> Result<()> {
+    if json {
+        return print_json(&events);
+    }
+    println!("{key}: note added");
     Ok(())
 }
 
@@ -239,6 +256,16 @@ fn describe(ws: &Workspace, e: &Event) -> String {
                 parts.push("props edited".into());
             }
             parts.join(", ")
+        }
+        Op::NodeNote { data, .. } => {
+            let first = data.text.lines().next().unwrap_or_default();
+            let short: String = first.chars().take(80).collect();
+            let more = if short.len() < data.text.len() {
+                " ..."
+            } else {
+                ""
+            };
+            format!("note: {short}{more}")
         }
         Op::EdgeAdd { data } | Op::EdgeRemove { data } => {
             let what = if matches!(e.op, Op::EdgeAdd { .. }) {

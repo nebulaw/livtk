@@ -1,5 +1,7 @@
 //! `livtk`: the command line over livtk-core. Thin by design: parse, call the workspace, print.
 
+mod guard;
+mod hook;
 mod output;
 
 use std::io::Read;
@@ -86,12 +88,21 @@ enum Cmd {
         #[command(subcommand)]
         action: DepAction,
     },
+    /// Add a note to a task's history: what was tried, what failed, what was learned.
+    Note {
+        key: String,
+        /// The note; `-` reads it from stdin.
+        text: String,
+    },
     /// The best task to start now.
     Next,
     /// Event history of a task, or of the whole project.
     Log { key: Option<String> },
     /// Rebuild the database from the event log.
     Rebuild,
+    /// Answer a Claude Code hook: reads its JSON on stdin. Used by the livtk plugin.
+    #[command(hide = true)]
+    Hook { event: String },
 }
 
 #[derive(Subcommand)]
@@ -111,6 +122,9 @@ struct DepArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Cmd::Hook { event } = &cli.command {
+        return hook::run(event);
+    }
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -154,7 +168,7 @@ fn run(cli: Cli) -> Result<()> {
 
 fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> {
     match cmd {
-        Cmd::Init { .. } => unreachable!("handled before opening a workspace"),
+        Cmd::Init { .. } | Cmd::Hook { .. } => unreachable!("handled before opening a workspace"),
         Cmd::New {
             title,
             body,
@@ -238,6 +252,17 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             };
             let events = ws.execute(cmd, by)?;
             output::linked(ws, &src, &dst, add, &events, json)
+        }
+        Cmd::Note { key, text } => {
+            let text = read_body(Some(text))?.unwrap_or_default();
+            let events = ws.execute(
+                Command::Note {
+                    node: key.clone(),
+                    text,
+                },
+                by,
+            )?;
+            output::noted(&ws.node(&key)?.key, &events, json)
         }
         Cmd::Next => output::next(ws.next()?.as_ref(), json),
         Cmd::Log { key } => output::log(ws, key.as_deref(), json),

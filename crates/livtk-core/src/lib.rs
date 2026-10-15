@@ -15,4 +15,4 @@ pub use error::{Error, Result};
 pub use event::{Event, Op};
 pub use model::{Actor, Kind, Rel, State};
 pub use store::{Brief, Node, Snapshot, Summary};
-pub use workspace::{Command, Config, DIR_NAME, Links, Workspace};
+pub use workspace::{Command, Config, DIR_NAME, Hooks, Links, Workspace, find_dir};

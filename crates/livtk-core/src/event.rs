@@ -7,8 +7,10 @@ use uuid::Uuid;
 
 use crate::model::{Actor, Kind, Priority, Rel, State};
 
-/// The format version written into every event.
-pub const FORMAT_VERSION: u32 = 1;
+/// The newest format version this livtk reads. Each event carries the version its operation
+/// needs, so adding an operation never changes the bytes of older events, and an older livtk
+/// skips the new operation with a clear "update livtk" warning.
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -22,7 +24,7 @@ pub struct Event {
     pub op: Op,
 }
 
-/// Five operations cover every kind of node.
+/// Six operations cover every kind of node.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum Op {
@@ -30,6 +32,9 @@ pub enum Op {
     NodeCreate { node: Uuid, data: NodeData },
     #[serde(rename = "node.set")]
     NodeSet { node: Uuid, data: NodePatch },
+    /// A remark in a node's history: what was tried, what failed. Changes no state.
+    #[serde(rename = "node.note")]
+    NodeNote { node: Uuid, data: NoteData },
     #[serde(rename = "edge.add")]
     EdgeAdd { data: EdgeData },
     #[serde(rename = "edge.remove")]
@@ -41,15 +46,26 @@ impl Op {
         match self {
             Op::NodeCreate { .. } => "node.create",
             Op::NodeSet { .. } => "node.set",
+            Op::NodeNote { .. } => "node.note",
             Op::EdgeAdd { .. } => "edge.add",
             Op::EdgeRemove { .. } => "edge.remove",
+        }
+    }
+
+    /// The format version a reader needs to understand this operation.
+    pub const fn min_version(&self) -> u32 {
+        match self {
+            Op::NodeNote { .. } => 2,
+            _ => 1,
         }
     }
 
     /// The node an event is about, and for edges the node on the other end.
     pub const fn subjects(&self) -> (Uuid, Option<Uuid>) {
         match self {
-            Op::NodeCreate { node, .. } | Op::NodeSet { node, .. } => (*node, None),
+            Op::NodeCreate { node, .. } | Op::NodeSet { node, .. } | Op::NodeNote { node, .. } => {
+                (*node, None)
+            }
             Op::EdgeAdd { data } | Op::EdgeRemove { data } => (data.src, Some(data.dst)),
         }
     }
@@ -95,6 +111,11 @@ impl NodePatch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteData {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EdgeData {
     pub src: Uuid,
     pub dst: Uuid,
@@ -106,7 +127,7 @@ impl Event {
     pub fn new(after: Option<Uuid>, by: &Actor, op: Op) -> Event {
         let id = next_id(after);
         Event {
-            v: FORMAT_VERSION,
+            v: op.min_version(),
             id,
             at: timestamp_of(id),
             by: by.to_string(),
@@ -239,8 +260,8 @@ mod tests {
     fn newer_versions_and_unknown_ops_are_skipped_not_fatal() {
         let id = Uuid::now_v7();
         let newer =
-            format!(r#"{{"v":2,"id":"{id}","at":"x","by":"human","op":"node.fly","data":{{}}}}"#);
-        assert!(matches!(parse_line(&newer), Line::Newer { v: 2, id: Some(i) } if i == id));
+            format!(r#"{{"v":9,"id":"{id}","at":"x","by":"human","op":"node.fly","data":{{}}}}"#);
+        assert!(matches!(parse_line(&newer), Line::Newer { v: 9, id: Some(i) } if i == id));
         assert!(matches!(parse_line("not json"), Line::Garbage(_)));
         assert!(matches!(parse_line(r#"{"v":1}"#), Line::Garbage(_)));
     }

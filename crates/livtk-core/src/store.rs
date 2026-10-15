@@ -469,6 +469,19 @@ fn apply_one(tx: &Transaction<'_>, e: &Event) -> Result<Option<String>> {
     match &e.op {
         Op::NodeCreate { node, data } => create(tx, e, *node, data),
         Op::NodeSet { node, data } => set(tx, e, *node, data),
+        Op::NodeNote { node, .. } => {
+            // The note itself lives in `events`; the node only records the activity.
+            let touched = tx
+                .prepare_cached("UPDATE nodes SET updated = ?2 WHERE id = ?1")?
+                .execute(params![node.to_string(), e.at])?;
+            if touched == 0 {
+                return Ok(Some(format!(
+                    "event {}: note on unknown node {node}, kept in history only",
+                    e.id
+                )));
+            }
+            Ok(None)
+        }
         Op::EdgeAdd { data } => {
             if !exists(tx, data.src)? || !exists(tx, data.dst)? {
                 return Ok(Some(format!(

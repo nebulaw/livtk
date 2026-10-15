@@ -137,6 +137,39 @@ fn a_changed_plan_needs_a_new_acknowledgement() {
 }
 
 #[test]
+fn a_note_records_history_without_touching_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let t = task(&mut ws, "plan");
+    ack(&mut ws, &t);
+    let before = ws.node(&t).unwrap();
+    let note = |text: &str| Command::Note {
+        node: t.clone(),
+        text: text.into(),
+    };
+    let events = ws
+        .execute(note("  tried winit first; it panics on resize  "), &CLAUDE)
+        .unwrap();
+    assert_eq!(events[0].v, 2, "notes need format 2");
+    let after = ws.node(&t).unwrap();
+    assert_eq!(after.state, State::Acked, "a note is not a change of plan");
+    assert_eq!((after.title, after.body), (before.title, before.body));
+    match &ws.history(Some(&t)).unwrap().last().unwrap().op {
+        Op::NodeNote { data, .. } => {
+            assert_eq!(data.text, "tried winit first; it panics on resize")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        ws.execute(note("   "), &CLAUDE).is_err(),
+        "an empty note is refused"
+    );
+    let live = ws.snapshot().unwrap();
+    ws.rebuild().unwrap();
+    assert_eq!(ws.snapshot().unwrap(), live);
+}
+
+#[test]
 fn illegal_moves_say_where_a_node_can_go() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = init(dir.path());

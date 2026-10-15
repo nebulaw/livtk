@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::event::{EdgeData, Event, NodeData, NodePatch, Op};
+use crate::event::{EdgeData, Event, NodeData, NodePatch, NoteData, Op};
 use crate::log::{self, Log};
 use crate::model::{Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_prefix};
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
@@ -20,6 +20,7 @@ use crate::{Error, Result};
 pub const DIR_NAME: &str = ".livtk";
 const CONFIG_VERSION: u32 = 1;
 const TITLE_MAX: usize = 200;
+const NOTE_MAX: usize = 20_000;
 
 /// `.livtk/config.toml`, committed with the project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,56 @@ pub struct Config {
     pub version: u32,
     /// Key prefix for new nodes, as in `LIV-12`.
     pub prefix: String,
+    #[serde(default, skip_serializing_if = "Hooks::is_default")]
+    pub hooks: Hooks,
+}
+
+impl Config {
+    /// Read and validate `config.toml` in a `.livtk/` directory, without opening the store.
+    pub fn load(dir: &Path) -> Result<Config> {
+        load_config(dir)
+    }
+}
+
+/// What the Claude Code hooks run for this project. Every field is optional.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hooks {
+    /// Formatter run on a file Claude edited; `{file}` is replaced by its path.
+    pub format: Vec<String>,
+    /// File extensions the formatter applies to, without the dot.
+    pub format_extensions: Vec<String>,
+    /// Check run before an agent in `check_agents` may stop, such as `cargo check`.
+    pub check: Vec<String>,
+    /// Agent types the check applies to.
+    pub check_agents: Vec<String>,
+}
+
+impl Default for Hooks {
+    fn default() -> Self {
+        Hooks {
+            format: Vec::new(),
+            format_extensions: Vec::new(),
+            check: Vec::new(),
+            check_agents: vec!["livtk:implementer".to_owned()],
+        }
+    }
+}
+
+impl Hooks {
+    fn is_default(&self) -> bool {
+        *self == Hooks::default()
+    }
+}
+
+/// The nearest `.livtk/` directory in `start` or one of its parents.
+pub fn find_dir(start: &Path) -> Result<PathBuf> {
+    let start = start.canonicalize()?;
+    start
+        .ancestors()
+        .map(|d| d.join(DIR_NAME))
+        .find(|d| d.join("config.toml").is_file())
+        .ok_or(Error::NotFound)
 }
 
 /// A change to the workspace. Node references accept a key (`LIV-12`), a bare number (`12`), or
@@ -61,6 +112,11 @@ pub enum Command {
         src: String,
         rel: Rel,
         dst: String,
+    },
+    /// Add a note to a node's history. Changes no state.
+    Note {
+        node: String,
+        text: String,
     },
 }
 
@@ -106,6 +162,7 @@ impl Workspace {
         let config = Config {
             version: CONFIG_VERSION,
             prefix,
+            hooks: Hooks::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -123,13 +180,7 @@ impl Workspace {
 
     /// Open the workspace that holds `start`: the nearest `.livtk/` in it or a parent.
     pub fn open(start: &Path) -> Result<Workspace> {
-        let start = start.canonicalize()?;
-        let dir = start
-            .ancestors()
-            .map(|d| d.join(DIR_NAME))
-            .find(|d| d.join("config.toml").is_file())
-            .ok_or(Error::NotFound)?;
-        Workspace::open_dir(&dir)
+        Workspace::open_dir(&find_dir(start)?)
     }
 
     /// Open a `.livtk/` directory directly.
@@ -451,6 +502,24 @@ impl Workspace {
                         src: s.id,
                         dst: d.id,
                         rel,
+                    },
+                }])
+            }
+            Command::Note { node, text } => {
+                let n = self.node(&node)?;
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err(Error::Invalid("a note cannot be empty".into()));
+                }
+                if text.chars().count() > NOTE_MAX {
+                    return Err(Error::Invalid(format!(
+                        "a note is at most {NOTE_MAX} characters"
+                    )));
+                }
+                Ok(vec![Op::NodeNote {
+                    node: n.id,
+                    data: NoteData {
+                        text: text.to_owned(),
                     },
                 }])
             }

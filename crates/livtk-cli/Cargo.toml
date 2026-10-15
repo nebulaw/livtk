@@ -1,0 +1,26 @@
+[package]
+name = "livtk-cli"
+description = "The livtk command line: tasks for Claude Code and its human"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "livtk"
+path = "src/main.rs"
+
+[dependencies]
+livtk-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1307,7 +1307,9 @@ impl LivtkApp {
 
     fn form_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.as_ref()?;
-        let mut priorities = div().flex().gap_1();
+        // Compact, as in Linear: every priority as its mark; the chosen one also by name. The
+        // picker yields space first, so the Create button always fits inside the card.
+        let mut priorities = div().flex_1().min_w_0().flex().items_center().gap_1();
         for p in 1..=4u8 {
             let on = form.priority == p;
             priorities = priorities.child(
@@ -1315,6 +1317,7 @@ impl LivtkApp {
                     .id(SharedString::from(format!("prio-{p}")))
                     .h(px(28.))
                     .px_2()
+                    .flex_none()
                     .rounded_md()
                     .flex()
                     .items_center()
@@ -1325,14 +1328,14 @@ impl LivtkApp {
                         s.bg(color(SELECTED))
                             .border_color(color(BORDER_STRONG))
                             .text_color(color(TEXT))
+                            .child(priority_mark(p))
+                            .child(PRIORITY_NAMES[usize::from(p - 1)])
                     })
                     .when(!on, |s| {
                         s.border_color(color(BORDER))
-                            .text_color(color(TEXT_3))
                             .hover(|h| h.bg(color(HOVER)))
+                            .child(priority_mark(p))
                     })
-                    .child(priority_mark(p))
-                    .child(PRIORITY_NAMES[usize::from(p - 1)])
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(f) = &mut this.form {
                             f.priority = p;
@@ -1341,7 +1344,31 @@ impl LivtkApp {
                     })),
             );
         }
+        let create = div()
+            .id("create-task")
+            .debug_selector(|| "create-task".into())
+            .flex_none()
+            .h(px(28.))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_md()
+            .bg(color(ACCENT))
+            .text_color(color(TEXT))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|s| s.bg(color(ACCENT_HOVER)))
+            .child("Create task")
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(with_alpha(TEXT, 0.7))
+                    .child("Ctrl ↵"),
+            )
+            .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
         let card = div()
+            .debug_selector(|| "new-task-card".into())
             .w(px(640.))
             .p_4()
             .flex()
@@ -1361,49 +1388,20 @@ impl LivtkApp {
                             .unwrap_or_default(),
                     )
                     .child("›")
-                    .child("New task"),
+                    .child("New task")
+                    .child(div().text_color(color(TEXT_4)).child("· starts in Backlog")),
             )
             .child(Input::new(&form.title).appearance(false).text_lg())
             .child(Textarea::new(&form.body).appearance(false))
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
                 div()
+                    .w_full()
                     .flex()
                     .items_center()
                     .gap_3()
                     .child(priorities)
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(color(TEXT_4))
-                            .child("Starts in the backlog"),
-                    )
-                    .child(
-                        div()
-                            .id("create-task")
-                            .h(px(28.))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded_md()
-                            .bg(color(ACCENT))
-                            .text_color(color(TEXT))
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .hover(|s| s.bg(color(ACCENT_HOVER)))
-                            .child("Create task")
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(with_alpha(TEXT, 0.7))
-                                    .child("Ctrl ↵"),
-                            )
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.submit_form(window, cx)),
-                            ),
-                    ),
+                    .child(create),
             );
         Some(self.modal("new-task-modal", card, cx))
     }

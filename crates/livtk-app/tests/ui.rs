@@ -211,3 +211,19 @@ fn the_filter_narrows_the_list_and_typing_in_it_runs_no_command(cx: &mut TestApp
         "Enter went back to the list, where `a` decides"
     );
 }
+
+#[gpui_kit::test]
+fn the_create_button_sits_inside_the_new_task_card(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("n");
+    cx.run_until_parked();
+    let card = cx.debug_bounds("new-task-card").expect("the card is drawn");
+    let button = cx.debug_bounds("create-task").expect("the button is drawn");
+    assert!(
+        button.right() <= card.right()
+            && button.bottom() <= card.bottom()
+            && button.left() >= card.left(),
+        "the button {button:?} spills out of the card {card:?}"
+    );
+}

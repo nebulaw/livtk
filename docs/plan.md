@@ -1,0 +1,363 @@
+# livtk: plan
+
+Status: milestone 1 built (core and CLI); waiting for the developer to try it before milestone 2.
+
+A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
+Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
+Claude Code is the only intelligence, everything else is plain local tooling.
+
+## 1. Goals and non-goals
+
+**Goals**
+
+- Durable work: tasks, dependencies and history survive sessions, crashes, compaction and git
+  branches.
+- Human gates enforced in code: Claude plans, the human acknowledges; Claude proposes lessons,
+  the human ratifies.
+- Efficient memory: Claude sees only the rules and decisions relevant to the current prompt,
+  inside a fixed token budget.
+- Fast: hooks run on every prompt and tool call, so they must cost milliseconds.
+- One model for everything (tasks, lessons, decisions, findings), shown as a list, a board and a
+  graph.
+- Reusable: install into any project with `/plugin install`; per-project data.
+
+**Non-goals (for now)**
+
+- Multi-user sync, a server, a web UI, cloud anything.
+- Calling any model API. Embeddings run locally.
+- Autonomous self-modification. The OS learns only through human-ratified lessons.
+
+## 2. Principles
+
+1. **One truth.** The event log is the truth. Everything else (the SQLite database, the search
+   index, the app's state) is a projection that can be rebuilt from it.
+2. **Thin surfaces.** All logic lives in `livtk-core`. The CLI, the hooks and the app are thin
+   adapters over the same API. A rule enforced once is enforced everywhere.
+3. **Generic over specific.** A small, fixed set of event operations works for every kind of
+   node. New kinds and fields need no new operations and no data migration.
+4. **Deterministic.** The same events always give the same state and the same bytes.
+5. **Fail safe.** A hook that hits an internal error exits 0 and stays silent; it never breaks a
+   session. Only the human gates block.
+6. **Measured.** Every performance claim has a benchmark (section 9).
+
+## 3. Architecture
+
+```
+tasks/                       (git repo = Claude Code plugin + marketplace)
+├── .claude-plugin/          plugin.json, marketplace.json
+├── bin/livtk                wrapper: finds the installed livtk binary, explains if missing
+├── hooks/hooks.json         every hook is `livtk hook <event>`
+├── skills/  agents/         plan, work, review, remember / implementer, refuter, researcher
+├── crates/
+│   ├── livtk-core/          the library: model, log, store, gates, search
+│   ├── livtk-cli/           the `livtk` binary: commands + hook adapters + output
+│   └── livtk-app/           the GPUI desktop app (in-process, uses livtk-core)
+└── docs/
+```
+
+Crates stay few. Inside `livtk-core`, modules carry the boundaries; a module becomes a crate only
+when a real boundary hurts (compile time, an optional heavy dependency).
+
+| Module in livtk-core | Responsibility | Depends on |
+|---|---|---|
+| `model` | ids, keys, kinds, states, the transition table, validation. Pure, no IO | nothing |
+| `event` | the event format, versioning, (de)serialisation | `model` |
+| `log` | append, read, catch-up, change detection on `events.jsonl` | `event` |
+| `store` | SQLite projection: apply events, queries, rebuild | `event`, `model` |
+| `workspace` | the public API: open, commands, queries, the write lock | all above |
+| `search` | FTS5 ranking, embeddings, hybrid fusion (milestone 3) | `store` |
+
+Embeddings sit behind a cargo feature so the core builds without them.
+
+## 4. Data model
+
+Everything is a **node**, linked by **edges**, changed by **events**.
+
+**Node**: `id` (uuidv7, internal, never changes), `key` (readable, e.g. `LIV-12`), `kind`,
+`title`, `body` (markdown), `state`, `priority` (1 to 4, like Linear), `props` (kind-specific
+fields, JSON), `created`, `updated`, `created_by`.
+
+**Edge**: `src`, `dst`, `rel`. Relations: `depends_on`, `relates`, `supersedes`, `learned_from`,
+`parent`.
+
+**Kinds**
+
+| Kind | States | Milestone |
+|---|---|---|
+| task | backlog → planned → acked → doing → review → done; parked, canceled | 1 |
+| lesson | proposed → ratified / rejected. A ratified lesson is a rule | 3 |
+| decision | proposed → accepted → superseded | 3 |
+| finding | open → recorded | 3 |
+| note | none | 3 |
+
+**Task transitions**
+
+| From | To |
+|---|---|
+| backlog | planned, parked, canceled |
+| planned | **acked** (human only), backlog, parked, canceled |
+| acked | doing, planned, parked, canceled |
+| doing | review, acked (pause), parked, canceled |
+| review | done, doing |
+| done | doing (reopen) |
+| parked | backlog, planned |
+| canceled | backlog |
+
+**Gate rules (in `livtk-core`)**
+
+- Only two steps need actor `human`: acknowledging a task (`planned → acked`) and ratifying or
+  rejecting a lesson. Every other step, including marking a task `done`, is open to Claude. The
+  list is configurable per project.
+- `acked → doing` needs every `depends_on` node to be `done`.
+- Changing the title or body of an `acked` task moves it back to `planned`: the plan changed, so
+  it needs a fresh acknowledgement.
+- A `depends_on` edge that would close a cycle is refused.
+
+**Actor.** The app is always `human`. The CLI is `claude` when `CLAUDECODE=1` is set (Claude Code
+sets it in every shell it runs), otherwise `human`. Subagents can name themselves
+(`claude:refuter`). This is a guard rail, not security: milestone 2 adds a hook that blocks
+Claude from running human-only commands or stripping the variable. The human is the root of
+trust.
+
+## 5. Storage and durability
+
+```
+<project>/.livtk/
+├── events.jsonl      the truth, committed to git
+├── config.toml       project settings, committed
+├── .gitattributes    events.jsonl merge=union
+├── .gitignore        livtk.db*, lock
+├── livtk.db          SQLite: the event log plus its projection (WAL), rebuildable
+└── lock              write lock
+```
+
+**Why an event log instead of a snapshot.** A snapshot file (one line per task) conflicts in
+git whenever two branches touch the same task, and a conflict marker inside JSONL breaks the
+import. An append-only log with git's `union` merge never conflicts: both branches' lines are
+kept, and replay sorts them by time. The log is also the history, the activity feed and the
+undo source.
+
+**Event format (one line each, versioned)**
+
+```json
+{"v":1,"id":"<uuidv7>","at":"2026-10-16T12:00:00.000Z","by":"human","op":"node.set","node":"<uuid>","data":{"state":"acked"}}
+```
+
+| Op | Data |
+|---|---|
+| `node.create` | kind, key, title, body, state, priority, props |
+| `node.set` | any subset of fields (field-level last-writer-wins) |
+| `edge.add` / `edge.remove` | src, dst, rel |
+
+Five operations cover every kind. Validation happens when an event is written; replay only
+applies, so replay is total and can never fail on a merged log. Ordering is by uuidv7, which is
+time-ordered. Unknown ops or a newer `v` are skipped with a warning (forward compatibility).
+
+**Readable keys after a merge.** If two branches both create `LIV-13`, replay keeps the earlier
+one and gives the later one the next free number, deterministically. `LIV-13` always means the
+node that kept it; the other node's first key stays in its create event, and its history shows
+"created as LIV-13".
+
+**Write path (the one critical invariant)**
+
+1. Take the exclusive file lock (`std::fs::File::lock`).
+2. Catch up: apply any log lines the database has not seen.
+3. Validate the command against the current state (gates, transitions, cycles).
+4. Append the event to `events.jsonl` and fsync. This is the commit point.
+5. In one SQLite transaction: insert the event into `events`, update the projection, record the
+   new log offset.
+6. Release the lock.
+
+A crash after step 4 loses nothing: the next open catches up from the log.
+
+**Read path.** No lock. Compare the log's size and a hash of its head with what the database
+recorded. Appended lines are applied incrementally; any other change (git pull, checkout,
+rebase) triggers a full rebuild. Reads use SQLite WAL snapshots, so the app and the CLI never
+block each other.
+
+**What the database holds.** The full event log as a table (`events`: every event, indexed by
+time and by node), so history, the activity feed and undo are plain queries. Beside it, the
+projection built from those events: `nodes`, `edges`, `counters` (the last number per prefix),
+`meta` (format version, log offset and head hash) and, from milestone 3, the FTS5 index and the
+vectors. The JSONL file is the portable copy for git; the database carries the same events plus
+everything derived from them.
+
+**SQLite.** WAL, `synchronous=NORMAL` (safe because the log is fsynced first),
+`foreign_keys=ON`, `busy_timeout=5000`. Because the database is only a projection, a schema change
+is a version bump plus a rebuild. There are never data migrations. Only the event format needs
+care, and it is versioned.
+
+**Growth.** About 300 bytes per event. 100k events is about 30 MB and rebuilds in well under a
+second. `livtk compact` (snapshot plus a fresh log) is designed for later and not built now.
+
+## 6. Memory (milestone 3)
+
+- **Lessons are rules.** Claude proposes a lesson; the human ratifies it; a ratified lesson is a
+  binding rule. There is no separate rule kind and no copying into CLAUDE.md.
+- **Two kinds of rules.** `always` rules (a handful) are injected at session start. All others
+  are recalled by relevance.
+- **Recall per prompt.** Hybrid ranking: SQLite FTS5 (BM25) and model2vec embeddings, fused with
+  reciprocal rank fusion. Only results above a threshold are injected, inside a fixed token
+  budget (default about 400 tokens).
+- **Vectors as plain BLOBs**, compared by brute-force cosine in Rust. For tens of thousands of
+  nodes that takes a few milliseconds and avoids the pre-1.0 `sqlite-vec` dependency. Swap later
+  if it ever matters.
+- **Embedding model** behind a trait, `potion-base-8M` by default. Downloaded once by
+  `livtk embed setup`, then fully offline.
+- **CLAUDE.md** shrinks to a few lines that say the OS exists and how to use it.
+
+## 7. Claude Code integration (milestone 2)
+
+**Install.** `cargo install --locked --path crates/livtk-cli` once. The plugin's `bin/livtk` wrapper
+finds the binary and prints the install line if it is missing. Prebuilt releases come later.
+
+**Hooks**: all `livtk hook <event>`, each reading the hook JSON on stdin.
+
+| Event | Does |
+|---|---|
+| SessionStart | Brief: tasks in progress, tasks waiting for your ack, lessons waiting for ratification, `always` rules |
+| UserPromptSubmit | Recall (milestone 3); spot corrections and nudge Claude to propose a lesson |
+| PreToolUse (Bash) | Block human-only `livtk` commands and environment tampering |
+| PreCompact | Keep the tasks in progress in context |
+| SubagentStop / Stop | Run the project's check command, only if files changed and only for agents that write code |
+| PostToolUse (Edit/Write) | Run the project's format command on the edited file |
+
+Commands for checking and formatting come from `.livtk/config.toml`, so the OS stays language
+neutral (Rust today, anything tomorrow).
+
+**Skills**: `plan` (break work into tasks with acceptance checks), `work` (next → start → do →
+review), `review` (the refuter), `remember` (propose a lesson or decision).
+
+**Agents**: `implementer`, `refuter` (sees only the diff and the acceptance check), `researcher`.
+Project-specific specialists live in the project, not in the OS.
+
+**Claude Code's own todo list** stays for steps inside one session. `livtk` is for work that must
+survive the session.
+
+## 8. The app (milestones 4 and 5)
+
+- **GPUI + gpui-component**, pinned to an exact git revision. All GPUI code is in `livtk-app`, so
+  framework churn never touches the core.
+- **In-process.** The app links `livtk-core` directly; no server. A file watcher on `events.jsonl`
+  triggers catch-up and a re-render within about 100 ms of a change Claude makes.
+- **Projects** listed in `~/.config/livtk/projects.toml`; the sidebar switches between them.
+- **Views**
+  - Inbox: everything waiting for you (acks, lessons to ratify).
+  - List (grouped by state) and Board, keyboard-first like Linear (`j`/`k`, Enter, shortcuts).
+  - Task detail: markdown body, dependencies, the event timeline.
+  - Lessons and rules.
+  - Graph: every node and edge, force-directed, drawn on a GPU canvas (milestone 5).
+  - Search and a command palette (milestone 5).
+- Every edit goes through the same `livtk-core` commands with actor `human`.
+
+## 9. Quality
+
+- **Tests from the outside.**
+  - Unit tests for the transition table and gates.
+  - Property tests (`proptest`): any interleaving or merge of the same events gives the same
+    state; export → import gives identical bytes.
+  - Multi-process tests: many `livtk` processes writing at once lose nothing and never duplicate a
+    key.
+  - CLI tests with `assert_cmd`.
+- **Benchmarks with budgets** on a 10k-node project:
+
+  | Path | Budget |
+  |---|---|
+  | `livtk` command, warm | < 10 ms |
+  | any hook | < 20 ms |
+  | full rebuild, 100k events | < 1 s |
+  | recall, 10k nodes | < 15 ms |
+
+- **Lint**: `rustfmt`, `clippy -D warnings`, `cargo deny`. No `unwrap` on runtime paths. Errors
+  are typed (`thiserror`) in the core and carry a fix hint.
+- **Pinned toolchain** (`rust-toolchain.toml`), `[workspace.dependencies]` for versions, edition
+  2024.
+
+## 10. Milestones
+
+Each one ends with something you can use, and starts only after your acknowledgement.
+
+| # | Delivers | Done when |
+|---|---|---|
+| 1 | `livtk-core` + `livtk` CLI: tasks, dependencies, gates, the log, the projection | The tests in section 9 pass; you create, ack and move tasks in a terminal |
+| 2 | Plugin: hooks, skills, agents | Installed in `livspeil`; a session starts with the brief; Claude cannot ack |
+| 3 | Memory: lessons, decisions, findings, recall, embeddings | A ratified rule shows up when a matching prompt is typed; recall stays within budget |
+| 4 | App v1: inbox, list, board, detail, ack and ratify | You run a whole day of work from the app |
+| 5 | App v2: graph, search, palette, activity feed | Graph of a real project renders smoothly |
+
+Later, only when needed: `livtk compact`, prebuilt binaries, cross-project views, an MCP server.
+
+## 11. Risks
+
+| Risk | Mitigation |
+|---|---|
+| GPUI breaks between versions | Pinned revision; UI isolated in `livtk-app` |
+| Event log grows | Compaction is designed (section 5) |
+| Keys renumbered after a merge | Deterministic renumbering; the first key stays in the log |
+| Claude bypasses a human gate | Gate in core, guard hook, and the human as root of trust |
+| Static embeddings recall poorly | Hybrid with BM25; the embedder is swappable |
+
+## 12. Decisions (developer, 2026-10-16)
+
+1. The event log is the git truth (section 5), and every event is also stored in the database.
+2. The CLI is called `livtk`; per-project data lives in `.livtk/`.
+3. Human-only steps: acknowledge and ratify. Nothing else, including `done`.
+4. A ratified lesson is the rule itself; no separate copy.
+5. Install with `cargo install` for now; prebuilt binaries later.
+6. The app is GPUI + gpui-component.
+
+## 13. Milestone 1 in detail
+
+**Workspace.** Edition 2024, pinned toolchain, versions in `[workspace.dependencies]`.
+Dependencies: `rusqlite` (bundled SQLite), `uuid` (v7), `serde` + `serde_json`, `jiff` (time),
+`thiserror` (core errors), `clap` (CLI), `anyhow` (CLI only). Dev: `proptest`, `assert_cmd`,
+`tempfile`. Nothing else.
+
+**`livtk-core` public API** (everything the CLI and the app may call)
+
+```rust
+Workspace::init(dir, prefix) -> Result<Workspace>
+Workspace::open(dir) -> Result<Workspace>         // finds .livtk/ upward, catches up
+ws.execute(Command, Actor) -> Result<Vec<Event>>  // the only write entry point
+ws.node(KeyOrId) / ws.list(Filter) / ws.next() / ws.history(KeyOrId) / ws.deps(KeyOrId)
+```
+
+`Command` is an enum (`CreateTask`, `Edit`, `Move`, `SetPriority`, `Link`, `Unlink`). Each
+command is validated, then lowered to the five generic events. Queries return plain structs that
+derive `Serialize`, so `--json` output and the app share one shape.
+
+**`livtk` commands**
+
+| Command | Does |
+|---|---|
+| `livtk init [--prefix LIV]` | Create `.livtk/` with config, gitignore, gitattributes |
+| `livtk new "title" [--body ..] [--priority 1-4] [--after KEY]` | New task in backlog |
+| `livtk list [--state ..] [--all]` / `livtk board` | Open tasks grouped by state |
+| `livtk show KEY` | Task, its dependencies, its history |
+| `livtk edit KEY [--title ..] [--body ..]` | Edit (an acked task returns to planned) |
+| `livtk move KEY STATE` | Any legal transition |
+| `livtk ack KEY` | Human only |
+| `livtk start KEY` / `livtk done KEY` | Shortcuts for `move` |
+| `livtk dep add KEY --on KEY` / `dep rm` | Dependencies, cycles refused |
+| `livtk next` | The best runnable task |
+| `livtk log [KEY]` | Event history |
+| `livtk rebuild` | Rebuild the database from the log |
+
+Every command takes `--json`. Errors print one line saying what is wrong and how to fix it.
+
+**Tests that close the milestone**
+
+1. Transition table: every legal move passes, every illegal one fails with its reason.
+2. Gates: `ack` as `claude` is refused; `start` with an unfinished dependency is refused; editing
+   an acked task returns it to planned; a dependency cycle is refused.
+3. Replay determinism (property test): shuffling and merging the same event lines always yields
+   the same database state.
+4. Merge: two branches that both created the same key replay to distinct keys, and the old key
+   still resolves.
+5. Crash safety: an event appended to the log but never applied is picked up on the next open.
+6. Concurrency: 8 processes x 25 `livtk new` give exactly 200 tasks, 200 unique keys, a valid log.
+7. Rebuild: `livtk rebuild` reproduces the same state as incremental apply.
+8. Bench: `livtk list` on 10k tasks under 10 ms warm.
+
+Lint clean (`fmt`, `clippy -D warnings`). One commit for the scaffold, then one per working
+slice, all local.

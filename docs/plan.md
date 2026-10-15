@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 to 3 done; milestone 4 (the app) waits for the developer's go.
+Status: milestones 1 to 3 done; milestone 4 (the app) in progress.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -539,3 +539,70 @@ bring the hook to about 35 ms (a possible follow-up).
 
 **Done when** in a real session: a correction leads Claude to propose a lesson; you ratify it;
 a later, differently worded prompt brings that rule back into context.
+
+## 16. Milestone 4 in detail: the app
+
+**Goal.** The human's control surface: see the work, acknowledge plans, ratify lessons and accept
+decisions without a terminal, and watch Claude's changes arrive live.
+
+**Measured first (2026-10-16, this machine: Hyprland on Wayland, RTX 5070 Ti).** A spike with
+`gpui-kit` 0.7.3 listing a real livtk project's tasks: renders correctly; first frame 0.74 s after
+launch (mostly Vulkan start-up); 229 MB resident; 54 MB binary; 3 min cold release build.
+
+**Stack.** `gpui-kit = "=0.7.3"` (Apache-2.0): GPUI, GPUI Base, GPUI Component and default
+assets in one pinned dependency. It pins `gpui-pre = "=0.3.9"`, a published snapshot of Zed's
+GPUI rather than the official `gpui` crate, so versions are pinned exactly and upgraded
+deliberately, in their own commit.
+
+**Shape**
+
+- A separate binary, `livtk-app` (crate `crates/livtk-app`), so the CLI and the hooks stay small
+  and fast. The workspace's `default-members` leave it out, so `cargo test` stays quick; it is
+  built and tested with `-p livtk-app`.
+- In-process: the app links `livtk-core` and acts as the human through the same commands as the
+  CLI. No server.
+- **Live updates by polling.** Every 200 ms the app calls `Workspace::refresh` (one stat and two
+  small reads when nothing changed). Polling sees every kind of change, including git replacing
+  the file on checkout, which a file watch can miss. A rebuild after a large merge runs off the
+  main thread.
+- **Projects.** `livtk init` records the project in `~/.config/livtk/projects.toml`; the app lists
+  them in its sidebar and can add one with a folder picker. `livtk-app [DIR]` opens one directly.
+
+**Views (v1)**
+
+| View | What it shows and does |
+|---|---|
+| Sidebar | Projects; Inbox (with a count), Tasks, Lessons, Decisions, Findings |
+| Inbox | Everything waiting for the human, with its action: Acknowledge, Ratify (or as a standing rule), Accept, Reject |
+| Tasks | A list grouped by state, or a board with a column per state; blocked and priority marked |
+| Lessons, Decisions, Findings | Lists grouped by state |
+| Detail | Title, state, priority, the body as markdown, links, and the timeline of history and notes; actions for the node's legal next states; add a note |
+| New task | Title, priority, body |
+
+Keyboard first, like Linear: `j`/`k` move, `Enter` opens, `Esc` closes, `a` acknowledges, `r`
+ratifies, `n` creates a task, `1` to `4` set the priority, `g` then `i`, `t`, `l` jumps to the
+Inbox, Tasks or Lessons. Lists are virtualised, so 10,000 tasks scroll as smoothly as ten.
+
+**Look.** Linear's calm density, and nothing borrowed from Livspeil's glass: concentrated on
+efficiency, one typeface, quiet borders, generous but tight spacing. Visual cues carry meaning: a
+coloured state mark beside every key, priority as a small bar glyph, blocked work dimmed with a
+lock, what waits for the human highlighted in the accent colour. Transitions are short and
+purposeful (about 150 ms, ease out): the detail panel slides in, a row acknowledged from the
+Inbox fades away, the selection glides, new events from Claude flash once.
+
+**Not in v1** (milestone 5): the graph view, search and the command palette, the activity feed.
+
+**Tests**
+
+1. Headless UI tests with GPUI Kit's test harness: the app opens a temporary project; pressing `a`
+   on a planned task acknowledges it, and the core shows the event by `human`; ratifying from the
+   Inbox with the standing-rule option marks it `always`; illegal actions are not offered.
+2. Live update: a change written through `livtk-core` from outside appears after a refresh tick.
+3. Speed: opening a project of 10,000 tasks shows the first frame under 300 ms after start-up;
+   a refresh with nothing new costs under 1 ms.
+
+**Decisions (developer, 2026-10-16):** a separate `livtk-app` binary; polling every 200 ms;
+`livtk init` registers projects; Linear's calm density with visual cues and transitions, no glass.
+
+**Done when** you run your day's acknowledging and ratifying from the app, and Claude's changes
+show up in it while it is open.

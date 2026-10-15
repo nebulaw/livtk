@@ -91,7 +91,11 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Work", &["Drag"], "Move to another state or priority"),
     ("Display", &["/"], "Filter"),
     ("Display", &["B"], "List or board"),
-    ("Display", &["H"], "Show what is over too"),
+    (
+        "Display",
+        &["H"],
+        "Show dismissed: canceled, rejected, retired",
+    ),
     ("Display", &["O"], "Open a project folder"),
     ("Display", &["Ctrl", "+", "/"], "These shortcuts"),
 ];
@@ -669,7 +673,11 @@ impl LivtkApp {
             .child(order("order-created", "Created", Ordering::Created));
         let shown = segment(
             "show-all",
-            if self.model.show_all { "All" } else { "Active" },
+            if self.model.show_all {
+                "Dismissed shown"
+            } else {
+                "Dismissed hidden"
+            },
             self.model.show_all,
         )
         .rounded_md()
@@ -764,7 +772,7 @@ impl LivtkApp {
                 .size_full()
                 .child(empty(
                     &format!("No {what} here"),
-                    "Clear the filter, press H to show what is over, or N for a new task.",
+                    "Clear the filter, press H to show dismissed work, or N for a new task.",
                 ))
                 .into_any_element();
         }

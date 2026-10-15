@@ -472,6 +472,63 @@ fn dropping_moves_state_or_priority_and_refuses_with_the_reason() {
     );
 }
 
+#[test]
+fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = project(dir.path());
+    let k = planned(&mut ws, "finished work");
+    let canceled = create(&mut ws, Kind::Task, "dropped idea");
+    ws.execute(
+        Command::Move {
+            node: canceled,
+            to: State::Canceled,
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    ws.execute(
+        Command::Move {
+            node: k.clone(),
+            to: State::Acked,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    for to in [State::Doing, State::Review, State::Done] {
+        ws.execute(
+            Command::Move {
+                node: k.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Tasks);
+    assert_eq!(keys(&m), std::slice::from_ref(&k), "done shows; canceled does not");
+    assert_eq!(m.groups[0].key, GroupKey::State(State::Done));
+    let done_col = m
+        .columns()
+        .into_iter()
+        .find(|(s, _)| *s == State::Done)
+        .unwrap();
+    assert_eq!(done_col.1.len(), 1, "the board's Done column holds it");
+
+    let id = m.rows[0].id;
+    assert!(m.can_drop(id, GroupKey::State(State::Doing)));
+    m.drop_on(id, GroupKey::State(State::Doing));
+    assert!(m.notice.is_none(), "{:?}", m.notice);
+    assert_eq!(
+        Workspace::open(dir.path()).unwrap().node(&k).unwrap().state,
+        State::Doing
+    );
+
+    m.toggle_show_all();
+    assert_eq!(m.rows.len(), 2, "h brings back what was dismissed");
+}
+
 /// `cargo test --release -p livtk-app --test model -- --ignored --nocapture`: the app's budgets
 /// on 10,000 tasks.
 #[test]

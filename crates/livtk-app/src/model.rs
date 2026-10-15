@@ -156,7 +156,8 @@ pub struct Model {
     pub current: usize,
     pub view: View,
     pub layout: Layout,
-    /// Include what is over: done, canceled, rejected, retired, superseded.
+    /// Include what was dismissed: canceled, rejected, retired, superseded. Done work is always
+    /// shown.
     pub show_all: bool,
     /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
     pub rows: Vec<Summary>,
@@ -691,7 +692,7 @@ impl Model {
                     kind.states()
                         .iter()
                         .copied()
-                        .filter(|s| s.is_active())
+                        .filter(|s| !s.is_dismissed())
                         .collect()
                 };
                 project.ws.list(kind, &states)

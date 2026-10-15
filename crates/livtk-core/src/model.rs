@@ -224,6 +224,15 @@ impl State {
         matches!(self, State::Done | State::Canceled)
     }
 
+    /// Set aside without being done: canceled, rejected, retired or superseded. The app hides
+    /// these unless asked; done work stays in view.
+    pub const fn is_dismissed(self) -> bool {
+        matches!(
+            self,
+            State::Canceled | State::Rejected | State::Retired | State::Superseded
+        )
+    }
+
     /// Still part of the picture: shown in lists unless asked for everything.
     pub const fn is_active(self) -> bool {
         !matches!(

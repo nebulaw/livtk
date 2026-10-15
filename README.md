@@ -92,7 +92,23 @@ Changes from Claude show up while it is open, and flash once. It wears Linear's 
 The toolbar filters (`/`), narrows by priority, groups by state or priority, and orders by
 priority, last update or creation; groups are solid bands that collapse on a click. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
-`Ctrl+/` lists every shortcut.
+Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `h`.
+`Ctrl+/` lists every shortcut; the ones used most:
+
+| Keys | |
+|---|---|
+| `j` `k` | move |
+| `Enter` `Esc` | open, close the detail panel |
+| `a` | decide: acknowledge, ratify, accept |
+| `s` | ratify as a standing rule |
+| `x` | reject |
+| `n` | new task |
+| `c` | add a note |
+| `1`-`4` | priority |
+| `/` | filter |
+| `g i` `g t` `g l` `g d` `g f` | Inbox, Tasks, Lessons, Decisions, Findings |
+| `b` | list or board |
+| `h` | show dismissed work |
 
 ## Develop
 
@@ -102,6 +118,10 @@ cargo test -p livtk-app                              # the app, with headless UI
 cargo test --release -p livtk-cli -- --ignored       # the speed budget on 10k tasks
 cargo clippy --all-targets && cargo fmt --check
 ```
+
+Builds go to `target/`, about 3 GB for everything (dependencies carry no debug info). Cargo
+never prunes it and it grows with each toolchain and feature set, so run `cargo clean` when it
+gets large; the next build takes a few minutes.
 
 ## Licence
 

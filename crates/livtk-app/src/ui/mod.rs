@@ -1,19 +1,27 @@
-//! The window: a sidebar, the current view (inbox, list or board), the detail panel and the
-//! new-task form. It renders the model and forwards input to it; no behaviour lives here.
+//! The window: a sidebar on the black canvas, an inset content panel (header, display toolbar,
+//! the list or board), the detail panel, and overlays (new task, shortcuts, notices). It renders
+//! the model and forwards input to it; no behaviour lives here.
+//!
+//! Keys are bound only on the list area. Text fields (the filter, notes, the new-task form) live
+//! outside it, so typing never triggers a command.
 
 mod theme;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::input::{Input, InputEvent, InputState, TextareaState};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{self, Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use livtk_core::event::{Event, Op};
 use livtk_core::{Brief, Kind, State, Summary};
+use uuid::Uuid;
 
-use crate::model::{Choice, Layout, Model, View};
+use crate::model::{
+    Choice, Display, GroupKey, Grouping, Layout, Model, Ordering, View, choices, drop_allowed,
+};
 use theme::*;
 
 actions!(
@@ -42,12 +50,13 @@ actions!(
         Priority2,
         Priority3,
         Priority4,
+        FocusFilter,
+        ToggleHelp,
         Submit,
         Cancel
     ]
 );
 
-/// Keys act on the list only; text fields live outside it, so typing never triggers a command.
 const NAV: &str = "LivtkNav";
 const FORM: &str = "LivtkForm";
 
@@ -56,9 +65,41 @@ const FADE: Duration = Duration::from_millis(180);
 const FLASH: Duration = Duration::from_millis(900);
 const SLIDE: Duration = Duration::from_millis(160);
 
+/// Every shortcut, in the order the shortcuts modal shows them: (section, keys, what it does).
+/// In `keys`, the words "then", "or" and "+" are separators; everything else is a key cap.
+const SHORTCUTS: &[(&str, &[&str], &str)] = &[
+    ("Navigate", &["J", "or", "↓"], "Next row"),
+    ("Navigate", &["K", "or", "↑"], "Previous row"),
+    ("Navigate", &["Enter"], "Open the detail panel"),
+    ("Navigate", &["Esc"], "Close the panel or a modal"),
+    ("Navigate", &["G", "then", "I"], "Inbox"),
+    ("Navigate", &["G", "then", "T"], "Tasks"),
+    ("Navigate", &["G", "then", "L"], "Lessons"),
+    ("Navigate", &["G", "then", "D"], "Decisions"),
+    ("Navigate", &["G", "then", "F"], "Findings"),
+    ("Navigate", &["[", "or", "]"], "Previous or next project"),
+    ("Decide", &["A"], "Acknowledge, ratify or accept"),
+    ("Decide", &["S"], "Ratify as a standing rule"),
+    ("Decide", &["X"], "Reject"),
+    ("Work", &["N"], "New task"),
+    ("Work", &["C"], "Add a note"),
+    (
+        "Work",
+        &["1", "2", "3", "4"],
+        "Priority: urgent, high, medium, low",
+    ),
+    ("Work", &["Drag"], "Move to another state or priority"),
+    ("Display", &["/"], "Filter"),
+    ("Display", &["B"], "List or board"),
+    ("Display", &["H"], "Show what is over too"),
+    ("Display", &["O"], "Open a project folder"),
+    ("Display", &["Ctrl", "+", "/"], "These shortcuts"),
+];
+
 pub fn run(dirs: Vec<PathBuf>) {
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        theme::apply(cx);
         bind_keys(cx);
         let options = WindowOptions {
             app_id: Some("livtk".into()),
@@ -66,6 +107,7 @@ pub fn run(dirs: Vec<PathBuf>) {
                 title: Some("livtk".into()),
                 ..Default::default()
             }),
+            window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         };
         if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| {
@@ -94,6 +136,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("h", ToggleAll, nav),
         KeyBinding::new("c", Note, nav),
         KeyBinding::new("o", OpenFolder, nav),
+        KeyBinding::new("/", FocusFilter, nav),
         KeyBinding::new("g i", GoInbox, nav),
         KeyBinding::new("g t", GoTasks, nav),
         KeyBinding::new("g l", GoLessons, nav),
@@ -105,9 +148,61 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("2", Priority2, nav),
         KeyBinding::new("3", Priority3, nav),
         KeyBinding::new("4", Priority4, nav),
+        // Everywhere, typing included: Ctrl+/ is never text.
+        KeyBinding::new("ctrl-/", ToggleHelp, None),
         KeyBinding::new("escape", Cancel, Some(FORM)),
         KeyBinding::new("ctrl-enter", Submit, Some(FORM)),
     ]);
+}
+
+/// What is being dragged: a node, with what it takes to judge a drop target.
+#[derive(Clone)]
+struct Dragged {
+    id: Uuid,
+    key: String,
+    title: String,
+    kind: Kind,
+    state: State,
+    priority: u8,
+}
+
+impl Dragged {
+    fn of(r: &Summary) -> Dragged {
+        Dragged {
+            id: r.id,
+            key: r.key.clone(),
+            title: r.title.clone(),
+            kind: r.kind,
+            state: r.state,
+            priority: r.priority,
+        }
+    }
+
+    fn fits(&self, target: GroupKey) -> bool {
+        drop_allowed(self.kind, self.state, self.priority, target)
+    }
+}
+
+impl Render for Dragged {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .w(px(320.))
+            .rounded_md()
+            .bg(color(LIFTED))
+            .border_1()
+            .border_color(color(BORDER_STRONG))
+            .shadow_lg()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .text_color(color(TEXT))
+            .child(state_mark(self.kind, self.state))
+            .child(div().text_color(color(TEXT_3)).child(self.key.clone()))
+            .child(div().truncate().child(self.title.clone()))
+    }
 }
 
 struct NewTaskForm {
@@ -120,8 +215,10 @@ pub struct LivtkApp {
     model: Model,
     nav: FocusHandle,
     list_scroll: UniformListScrollHandle,
+    filter: Entity<InputState>,
     note: Entity<InputState>,
     form: Option<NewTaskForm>,
+    help: bool,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
 }
@@ -129,8 +226,12 @@ pub struct LivtkApp {
 impl LivtkApp {
     pub fn new(model: Model, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nav = cx.focus_handle();
-        let note = cx.new(|cx| InputState::new(window, cx).placeholder("Add a note, then Enter"));
-        let subscriptions = vec![cx.subscribe_in(&note, window, Self::on_note)];
+        let note = cx.new(|cx| InputState::new(window, cx).placeholder("Leave a note…"));
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter…"));
+        let subscriptions = vec![
+            cx.subscribe_in(&note, window, Self::on_note),
+            cx.subscribe_in(&filter, window, Self::on_filter),
+        ];
         // Claude, the CLI and git change the log from outside; look every 200 ms.
         let poll = cx.spawn(async move |this, cx| {
             loop {
@@ -153,11 +254,25 @@ impl LivtkApp {
             model,
             nav,
             list_scroll: UniformListScrollHandle::new(),
+            filter,
             note,
             form: None,
+            help: false,
             _subscriptions: subscriptions,
             _poll: poll,
         }
+    }
+
+    pub fn model(&self) -> &Model {
+        &self.model
+    }
+
+    pub fn help_open(&self) -> bool {
+        self.help
+    }
+
+    pub fn form_open(&self) -> bool {
+        self.form.is_some()
     }
 
     fn on_note(
@@ -175,11 +290,40 @@ impl LivtkApp {
         }
     }
 
-    pub fn model(&self) -> &Model {
-        &self.model
+    fn on_filter(
+        &mut self,
+        state: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let text = state.read(cx).value().to_string();
+                if text != self.model.display().filter {
+                    self.model.set_filter(&text);
+                    cx.notify();
+                }
+            }
+            InputEvent::PressEnter { .. } => self.nav.focus(window, cx),
+            _ => {}
+        }
     }
 
-    // ---- actions ------------------------------------------------------------------------------
+    /// Show the current view's filter text in the filter field.
+    fn sync_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let want = self.model.display().filter;
+        if self.filter.read(cx).value().as_ref() != want {
+            self.filter
+                .update(cx, |s, cx| s.set_value(want.clone(), window, cx));
+        }
+    }
+
+    fn go(&mut self, view: View, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.set_view(view);
+        self.sync_filter(window, cx);
+        cx.notify();
+    }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
         if let Some(i) = self.display_index() {
@@ -197,7 +341,7 @@ impl LivtkApp {
         let found = self
             .model
             .selected()
-            .map(|r| crate::model::choices(r.kind, r.state))
+            .map(|r| choices(r.kind, r.state))
             .and_then(|c| c.into_iter().find(|c| pick(c)));
         if let Some(c) = found {
             self.choose(&c, cx);
@@ -205,11 +349,12 @@ impl LivtkApp {
     }
 
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.help = false;
         let title = cx.new(|cx| InputState::new(window, cx).placeholder("Task title"));
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Goal, approach, acceptance check (markdown)")
-                .auto_grow(4, 12)
+                .placeholder("Add a plan: goal, approach, acceptance check…")
+                .auto_grow(5, 14)
         });
         let sub = cx.subscribe_in(&title, window, |this, _, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -232,6 +377,7 @@ impl LivtkApp {
         let body = form.body.read(cx).value().to_string();
         if self.model.create_task(&title, &body, Some(form.priority)) {
             self.form = None;
+            self.sync_filter(window, cx);
             self.nav.focus(window, cx);
             self.after_move(cx);
         } else {
@@ -239,8 +385,9 @@ impl LivtkApp {
         }
     }
 
-    fn close_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.form = None;
+        self.help = false;
         self.nav.focus(window, cx);
         cx.notify();
     }
@@ -272,22 +419,14 @@ impl LivtkApp {
 
     // ---- what the list shows ------------------------------------------------------------------
 
-    /// The task list with a header row before each state group.
+    /// The list as rows of the virtualised list: a band before each group, then its rows.
     fn items(&self) -> Vec<Item> {
-        let mut items = Vec::with_capacity(self.model.rows.len() + 8);
-        let mut current = None;
-        for (i, r) in self.model.rows.iter().enumerate() {
-            if current != Some(r.state) {
-                let count = self
-                    .model
-                    .rows
-                    .iter()
-                    .filter(|x| x.state == r.state)
-                    .count();
-                items.push(Item::Header(r.kind, r.state, count));
-                current = Some(r.state);
+        let mut items = Vec::with_capacity(self.model.rows.len() + self.model.groups.len());
+        for (gi, g) in self.model.groups.iter().enumerate() {
+            if g.key != GroupKey::All {
+                items.push(Item::Band(gi));
             }
-            items.push(Item::Row(i));
+            items.extend((g.start..g.start + g.shown).map(Item::Row));
         }
         items
     }
@@ -299,29 +438,44 @@ impl LivtkApp {
             .position(|it| matches!(it, Item::Row(i) if *i == sel))
     }
 
-    // ---- rendering ----------------------------------------------------------------------------
+    // ---- rendering: the frame -----------------------------------------------------------------
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _ = window;
         let mut side = div()
-            .w(px(220.))
+            .w(px(232.))
+            .flex_none()
             .h_full()
             .flex()
             .flex_col()
-            .bg(color(SIDEBAR))
-            .border_r_1()
-            .border_color(color(BORDER))
             .px_2()
             .py_3()
-            .gap_1()
+            .gap(px(2.))
             .child(
                 div()
                     .px_2()
-                    .pb_3()
+                    .pb_4()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().size(px(14.)).rounded(px(4.)).bg(color(ACCENT)))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("livtk")),
+                    .child(
+                        div()
+                            .size(px(18.))
+                            .rounded(px(5.))
+                            .bg(color(ACCENT))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::BOLD)
+                            .child("L"),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color(TEXT))
+                            .child("livtk"),
+                    ),
             )
             .child(section_label("Projects"));
         for (i, p) in self.model.projects.iter().enumerate() {
@@ -333,8 +487,9 @@ impl LivtkApp {
                     current,
                     p.inbox,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.model.select_project(i);
+                    this.sync_filter(window, cx);
                     cx.notify();
                 })),
             );
@@ -343,15 +498,17 @@ impl LivtkApp {
             div()
                 .id("open-folder")
                 .px_2()
-                .py_1()
+                .h(px(28.))
+                .flex()
+                .items_center()
                 .rounded_md()
-                .text_color(color(TEXT_3))
+                .text_color(color(TEXT_4))
                 .cursor_pointer()
-                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_2)))
-                .child("+ Open project  o")
+                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
+                .child("+ Open project")
                 .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
         );
-        side = side.child(div().h(px(12.))).child(section_label("Views"));
+        side = side.child(div().h(px(14.))).child(section_label("Views"));
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         for view in View::ALL {
             let count = if view == View::Inbox { inbox } else { 0 };
@@ -362,34 +519,36 @@ impl LivtkApp {
                     view == self.model.view,
                     count,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model.set_view(view);
-                    cx.notify();
-                })),
+                .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
             );
         }
         side.child(div().flex_1()).child(
             div()
+                .id("shortcuts")
                 .px_2()
-                .text_xs()
-                .text_color(color(TEXT_3))
+                .h(px(28.))
                 .flex()
-                .flex_col()
-                .gap_1()
-                .child("j k  move     Enter  open")
-                .child("a  decide     x  reject")
-                .child("s  standing rule")
-                .child("n  new task   c  note")
-                .child("g i / t / l / d / f  views")
-                .child("b  board      h  show all"),
+                .items_center()
+                .gap_2()
+                .rounded_md()
+                .text_xs()
+                .text_color(color(TEXT_4))
+                .cursor_pointer()
+                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
+                .child(kbd("Ctrl"))
+                .child(kbd("/"))
+                .child("Shortcuts")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.help = !this.help;
+                    cx.notify();
+                })),
         )
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let m = &self.model;
-        let title = m.view.title();
         let mut bar = div()
-            .h(px(44.))
+            .h(px(46.))
             .flex_none()
             .flex()
             .items_center()
@@ -397,21 +556,22 @@ impl LivtkApp {
             .px_4()
             .border_b_1()
             .border_color(color(BORDER))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
             .child(
                 div()
-                    .text_color(color(TEXT_3))
-                    .child(format!("{}", m.rows.len())),
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT))
+                    .child(m.view.title()),
+            )
+            .child(
+                div()
+                    .text_color(color(TEXT_4))
+                    .child(format!("{}", m.filtered.len())),
             )
             .child(div().flex_1());
         if m.view == View::Tasks {
             let board = m.layout == Layout::Board;
             bar = bar.child(
-                div()
-                    .flex()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(color(BORDER))
+                segments()
                     .child(segment("layout-list", "List", !board).on_click(cx.listener(
                         |this, _, _, cx| {
                             if this.model.layout == Layout::Board {
@@ -432,42 +592,121 @@ impl LivtkApp {
                     ),
             );
         }
-        if m.view != View::Inbox {
-            bar = bar.child(
-                segment(
-                    "show-all",
-                    if m.show_all { "All" } else { "Active" },
-                    m.show_all,
-                )
-                .rounded_md()
-                .border_1()
-                .border_color(color(BORDER))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.model.toggle_show_all();
-                    cx.notify();
-                })),
-            );
-        }
         bar.child(
             div()
                 .id("new-task")
+                .h(px(28.))
                 .px_3()
-                .py_1()
+                .flex()
+                .items_center()
+                .gap_2()
                 .rounded_md()
                 .bg(color(ACCENT))
                 .text_color(color(TEXT))
+                .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
-                .hover(|s| s.opacity(0.9))
+                .hover(|s| s.bg(color(ACCENT_HOVER)))
                 .child("New task")
+                .child(div().text_xs().text_color(with_alpha(TEXT, 0.7)).child("N"))
                 .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx))),
         )
+    }
+
+    /// Filter, priority chips, grouping and ordering: Linear's Display menu, laid out flat.
+    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let d: Display = self.model.display();
+        let mut chips = div().flex().items_center().gap_1();
+        for p in 1..=4u8 {
+            let on = d.priorities.contains(&p);
+            chips = chips.child(
+                div()
+                    .id(SharedString::from(format!("prio-filter-{p}")))
+                    .h(px(26.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .rounded_md()
+                    .border_1()
+                    .cursor_pointer()
+                    .when(on, |s| {
+                        s.bg(color(SELECTED))
+                            .border_color(color(BORDER_STRONG))
+                            .text_color(color(TEXT))
+                    })
+                    .when(!on, |s| {
+                        s.border_color(color(BORDER))
+                            .text_color(color(TEXT_3))
+                            .hover(|h| h.bg(color(HOVER)))
+                    })
+                    .child(priority_mark(p))
+                    .child(PRIORITY_NAMES[usize::from(p - 1)])
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.toggle_priority(p);
+                        cx.notify();
+                    })),
+            );
+        }
+        let group = |id: &'static str, label: &'static str, g: Grouping| {
+            segment(id, label, d.grouping == g).on_click(cx.listener(move |this, _, _, cx| {
+                this.model.set_grouping(g);
+                cx.notify();
+            }))
+        };
+        let groups = segments()
+            .child(group("group-state", "State", Grouping::State))
+            .child(group("group-priority", "Priority", Grouping::Priority))
+            .child(group("group-none", "None", Grouping::None));
+        let order = |id: &'static str, label: &'static str, o: Ordering| {
+            segment(id, label, d.ordering == o).on_click(cx.listener(move |this, _, _, cx| {
+                this.model.set_ordering(o);
+                cx.notify();
+            }))
+        };
+        let orders = segments()
+            .child(order("order-priority", "Priority", Ordering::Priority))
+            .child(order("order-updated", "Updated", Ordering::Updated))
+            .child(order("order-created", "Created", Ordering::Created));
+        let shown = segment(
+            "show-all",
+            if self.model.show_all { "All" } else { "Active" },
+            self.model.show_all,
+        )
+        .rounded_md()
+        .border_1()
+        .border_color(color(BORDER))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.model.toggle_show_all();
+            cx.notify();
+        }));
+        div()
+            .flex_none()
+            .h(px(44.))
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(color(BORDER))
+            .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
+                this.nav.focus(window, cx);
+                cx.notify();
+            }))
+            .child(div().w(px(220.)).child(Input::new(&self.filter).small()))
+            .child(chips)
+            .child(div().flex_1())
+            .child(toolbar_label("Group"))
+            .child(groups)
+            .child(toolbar_label("Order"))
+            .child(orders)
+            .when(self.model.view != View::Inbox, |t| t.child(shown))
     }
 
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.model.projects.is_empty() {
             return empty(
                 "No livtk projects yet",
-                "Run `livtk init` in a project, then open it here with o, or start `livtk-app DIR`.",
+                "Run `livtk init` in a project, then open it with + Open project, or start `livtk-app DIR`.",
             )
             .into_any_element();
         }
@@ -478,6 +717,8 @@ impl LivtkApp {
         }
     }
 
+    // ---- rendering: lists ---------------------------------------------------------------------
+
     /// The inbox: a short list, so rows can fade and collapse when the human acts on them.
     fn inbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.model.rows.is_empty() && self.model.leaving.is_empty() {
@@ -485,7 +726,7 @@ impl LivtkApp {
                 .size_full()
                 .child(empty(
                     "Nothing waits for you",
-                    "Plans, lessons and decisions to approve appear here.",
+                    "Plans to acknowledge, lessons to ratify and decisions to accept appear here.",
                 ))
                 .into_any_element();
         }
@@ -500,10 +741,9 @@ impl LivtkApp {
             .id("inbox")
             .size_full()
             .overflow_y_scroll()
-            .p_2()
+            .py_1()
             .flex()
-            .flex_col()
-            .gap(px(1.));
+            .flex_col();
         for (r, leaving) in shown {
             list = list.child(self.row(
                 &r,
@@ -516,15 +756,15 @@ impl LivtkApp {
         list.into_any_element()
     }
 
-    /// Tasks, lessons, decisions or findings: a virtualised list grouped by state.
+    /// Tasks, lessons, decisions or findings: a virtualised list in solid group bands.
     fn list(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.model.rows.is_empty() {
+        if self.model.rows.is_empty() && self.model.groups.is_empty() {
             let what = self.model.view.title().to_lowercase();
             return div()
                 .size_full()
                 .child(empty(
                     &format!("No {what} here"),
-                    "h shows what is over too; n creates a task.",
+                    "Clear the filter, press H to show what is over, or N for a new task.",
                 ))
                 .into_any_element();
         }
@@ -538,9 +778,7 @@ impl LivtkApp {
                 let mut out = Vec::with_capacity(range.len());
                 for i in range {
                     match items.get(i) {
-                        Some(Item::Header(kind, state, n)) => {
-                            out.push(group_header(*kind, *state, *n).into_any_element())
-                        }
+                        Some(Item::Band(gi)) => out.push(this.band(*gi, cx)),
                         Some(Item::Row(ri)) => {
                             let r = this.model.rows[*ri].clone();
                             let sel = Some(r.id) == selected;
@@ -554,90 +792,78 @@ impl LivtkApp {
         )
         .track_scroll(&self.list_scroll)
         .size_full()
-        .px_2()
         .into_any_element()
     }
 
-    fn board(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.model.selected().map(|r| r.id);
-        let mut cols = div()
-            .id("board")
-            .size_full()
-            .overflow_x_scroll()
+    /// A group's solid header band: its mark, name and count. Click to collapse; drop a row on
+    /// it to move the row into the group.
+    fn band(&self, gi: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(g) = self.model.groups.get(gi).cloned() else {
+            return div().into_any_element();
+        };
+        let (mark, label) = match g.key {
+            GroupKey::State(s) => (
+                state_mark(g.kind.unwrap_or(Kind::Task), s),
+                title_case(s.as_str()),
+            ),
+            GroupKey::Priority(p) => (
+                priority_mark(p),
+                PRIORITY_NAMES[usize::from(p.clamp(1, 4) - 1)].to_owned(),
+            ),
+            GroupKey::All => (div(), "All".to_owned()),
+        };
+        let key = g.key;
+        div()
+            .id(SharedString::from(format!("band-{gi}")))
+            .w_full()
+            .h(px(ROW))
+            .flex_none()
+            .px_4()
             .flex()
-            .gap_3()
-            .p_3();
-        for (state, rows) in self.model.columns() {
-            let mut col = div()
-                .id(SharedString::from(format!("col-{state}")))
-                .w(px(272.))
-                .flex_none()
-                .h_full()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .overflow_y_scroll()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_1()
-                        .h(px(28.))
-                        .child(state_mark(Kind::Task, state))
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(state_title(state)),
-                        )
-                        .child(
-                            div()
-                                .text_color(color(TEXT_3))
-                                .child(format!("{}", rows.len())),
-                        ),
-                );
-            for r in rows {
-                let id = r.id;
-                let sel = Some(id) == selected;
-                let flash = self.model.flashed.get(&id).copied();
-                let card = div()
-                    .id(SharedString::from(format!("card-{}", r.key)))
-                    .p_3()
-                    .rounded_lg()
-                    .bg(color(if sel { SELECTED } else { RAISED }))
-                    .border_1()
-                    .border_color(color(if sel { ACCENT } else { BORDER }))
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(color(TEXT_3)))
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .when(r.blocked, |d| d.opacity(0.6))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(color(TEXT_3))
-                            .child(r.key.clone())
-                            .child(div().flex_1())
-                            .when(r.blocked, |d| d.child("blocked"))
-                            .child(priority_mark(r.priority)),
-                    )
-                    .child(div().child(r.title.clone()))
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                        this.model.select(id);
-                        if e.click_count() >= 2 {
-                            this.model.open_detail();
-                        }
-                        cx.notify();
-                    }));
-                col = col.child(flashing(card, &r.key, flash));
-            }
-            cols = cols.child(col);
-        }
-        cols
+            .items_center()
+            .gap_2()
+            .bg(color(SURFACE))
+            .border_b_1()
+            .border_color(color(BORDER))
+            .cursor_pointer()
+            .hover(|s| s.bg(color(HOVER)))
+            .child(
+                div()
+                    .w(px(10.))
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child(if g.collapsed { "▸" } else { "▾" }),
+            )
+            .child(mark)
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .text_color(color(TEXT_4))
+                    .child(format!("{}", g.count)),
+            )
+            .drag_over::<Dragged>(move |style, d, _, _| {
+                if d.fits(key) {
+                    style
+                        .bg(with_alpha(ACCENT, 0.18))
+                        .border_color(color(ACCENT))
+                } else {
+                    style
+                }
+            })
+            .on_drop(cx.listener(move |this, d: &Dragged, _, cx| {
+                this.model.drop_on(d.id, key);
+                cx.notify();
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.model.toggle_collapsed(key);
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     fn row(
@@ -650,60 +876,80 @@ impl LivtkApp {
     ) -> AnyElement {
         let id = r.id;
         let flash = self.model.flashed.get(&id).copied();
+        let blocked = r.blocked && !r.state.is_closed();
         let mut row = div()
             .id(SharedString::from(format!("row-{}", r.key)))
             .w_full()
             .h(px(ROW))
             .flex_none()
-            .px_3()
+            .px_4()
             .flex()
             .items_center()
             .gap_3()
-            .rounded_md()
+            .border_b_1()
+            .border_color(color(CONTENT))
             .cursor_pointer()
             .when(selected, |d| d.bg(color(SELECTED)))
             .when(!selected, |d| d.hover(|s| s.bg(color(HOVER))))
-            .when(r.blocked && !r.state.is_closed(), |d| {
-                d.text_color(color(TEXT_2))
-            });
+            .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }));
         if r.kind == Kind::Task {
             row = row.child(priority_mark(r.priority));
         }
         row = row
             .child(
                 div()
-                    .w(px(64.))
+                    .w(px(62.))
                     .flex_none()
-                    .text_color(color(TEXT_3))
+                    .text_color(color(TEXT_4))
                     .child(r.key.clone()),
             )
             .child(state_mark(r.kind, r.state))
-            .child(div().flex_1().min_w_0().truncate().child(r.title.clone()));
-        if r.blocked && !r.state.is_closed() {
-            row = row.child(tag("blocked", TEXT_3));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(color(if blocked { TEXT_3 } else { TEXT }))
+                    .child(r.title.clone()),
+            );
+        if blocked {
+            row = row.child(tag("Blocked", TEXT_4));
         }
         if r.standing {
-            row = row.child(tag("standing rule", GREEN));
+            row = row.child(tag("Standing rule", DONE));
         }
         if inbox {
-            let (label, c) = match r.kind {
-                Kind::Task => ("acknowledge", ACCENT),
-                Kind::Lesson => ("ratify", GREEN),
-                Kind::Decision => ("accept", GREEN),
-                Kind::Finding => ("", TEXT_3),
+            let label = match r.kind {
+                Kind::Task => "Acknowledge",
+                Kind::Lesson => "Ratify",
+                Kind::Decision => "Accept",
+                Kind::Finding => "",
             };
-            row = row.child(tag(label, c));
+            row = row.child(tag(label, ACCENT));
             if selected {
-                row = row.child(div().text_xs().text_color(color(TEXT_3)).child("a"));
+                row = row.child(kbd("A"));
             }
         }
-        let row = row.on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-            this.model.select(id);
-            if e.click_count() >= 2 {
-                this.model.open_detail();
-            }
-            cx.notify();
-        }));
+        row = row.child(
+            div()
+                .w(px(60.))
+                .flex_none()
+                .text_xs()
+                .text_color(color(TEXT_4))
+                .flex()
+                .justify_end()
+                .child(ago(&r.updated)),
+        );
+        let dragged = Dragged::of(r);
+        let row = row
+            .on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()))
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                this.model.select(id);
+                if e.click_count() >= 2 {
+                    this.model.open_detail();
+                }
+                cx.notify();
+            }));
         match leaving {
             Some(at) => {
                 let started = at.elapsed().as_secs_f32() / FADE.as_secs_f32();
@@ -728,56 +974,194 @@ impl LivtkApp {
         }
     }
 
+    fn board(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.model.selected().map(|r| r.id);
+        let mut cols = div()
+            .id("board")
+            .size_full()
+            .overflow_x_scroll()
+            .flex()
+            .gap_2()
+            .p_3();
+        for (state, rows) in self.model.columns() {
+            let key = GroupKey::State(state);
+            let mut col = div()
+                .id(SharedString::from(format!("col-{state}")))
+                .w(px(288.))
+                .flex_none()
+                .h_full()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .rounded_lg()
+                .bg(color(SURFACE))
+                .border_1()
+                .border_color(color(BORDER))
+                .overflow_y_scroll()
+                .drag_over::<Dragged>(move |style, d, _, _| {
+                    if d.fits(key) {
+                        style
+                            .bg(with_alpha(ACCENT, 0.12))
+                            .border_color(color(ACCENT))
+                    } else {
+                        style
+                    }
+                })
+                .on_drop(cx.listener(move |this, d: &Dragged, _, cx| {
+                    this.model.drop_on(d.id, key);
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_1()
+                        .h(px(28.))
+                        .child(state_mark(Kind::Task, state))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(color(TEXT))
+                                .child(title_case(state.as_str())),
+                        )
+                        .child(
+                            div()
+                                .text_color(color(TEXT_4))
+                                .child(format!("{}", rows.len())),
+                        ),
+                );
+            for r in rows {
+                let id = r.id;
+                let sel = Some(id) == selected;
+                let blocked = r.blocked && !r.state.is_closed();
+                let flash = self.model.flashed.get(&id).copied();
+                let card = div()
+                    .id(SharedString::from(format!("card-{}", r.key)))
+                    .p_3()
+                    .rounded_md()
+                    .bg(color(if sel { SELECTED } else { CONTENT }))
+                    .border_1()
+                    .border_color(color(if sel { BORDER_STRONG } else { BORDER }))
+                    .cursor_grab()
+                    .hover(|s| s.border_color(color(BORDER_STRONG)))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child(r.key.clone())
+                            .child(div().flex_1())
+                            .when(blocked, |d| d.child("Blocked")),
+                    )
+                    .child(
+                        div()
+                            .text_color(color(if blocked { TEXT_3 } else { TEXT }))
+                            .child(r.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(priority_mark(r.priority))
+                            .child(state_mark(Kind::Task, r.state)),
+                    )
+                    .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        this.model.select(id);
+                        if e.click_count() >= 2 {
+                            this.model.open_detail();
+                        }
+                        cx.notify();
+                    }));
+                col = col.child(flashing(card, &r.key, flash));
+            }
+            cols = cols.child(col);
+        }
+        cols
+    }
+
+    // ---- rendering: the detail panel ----------------------------------------------------------
+
     fn detail(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let d = self.model.detail.clone()?;
         let n = &d.node;
-        let mut choices = div().flex().flex_wrap().gap_2();
+        let mut choice_row = div().flex().flex_wrap().gap_2();
         for (i, c) in d.choices.iter().enumerate() {
             let c2 = c.clone();
             let primary = c.decides && !matches!(c.to, State::Rejected | State::Retired);
             let hint = match (i, c.always, c.to) {
-                (_, true, _) => " s",
-                (_, _, State::Rejected) => " x",
-                (0, _, _) if primary => " a",
-                _ => "",
+                (_, true, _) => Some("S"),
+                (_, _, State::Rejected) => Some("X"),
+                (0, _, _) if primary => Some("A"),
+                _ => None,
             };
-            choices = choices.child(
+            choice_row = choice_row.child(
                 div()
                     .id(SharedString::from(format!("choice-{i}")))
+                    .h(px(28.))
                     .px_3()
-                    .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(primary, |d| d.bg(color(ACCENT)).text_color(color(TEXT)))
-                    .when(!primary, |d| {
-                        d.bg(color(RAISED))
-                            .border_1()
-                            .border_color(color(BORDER))
-                            .text_color(color(TEXT_2))
+                    .when(primary, |d| {
+                        d.bg(color(ACCENT))
+                            .text_color(color(TEXT))
+                            .hover(|s| s.bg(color(ACCENT_HOVER)))
                     })
-                    .hover(|s| s.opacity(0.85))
-                    .child(format!("{}{hint}", c.label))
+                    .when(!primary, |d| {
+                        d.bg(color(SURFACE))
+                            .border_1()
+                            .border_color(color(BORDER_STRONG))
+                            .text_color(color(TEXT_2))
+                            .hover(|s| s.bg(color(HOVER)))
+                    })
+                    .child(c.label)
+                    .when_some(hint, |d, h| {
+                        d.child(div().text_xs().text_color(with_alpha(TEXT, 0.6)).child(h))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| this.choose(&c2, cx))),
             );
         }
-        let mut meta = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_color(color(TEXT_2))
-            .child(state_mark(n.kind, n.state))
-            .child(n.state.as_str().to_owned());
+        let mut props = div().flex().flex_col().gap_2().child(prop_row(
+            "Status",
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(state_mark(n.kind, n.state))
+                .child(title_case(n.state.as_str())),
+        ));
         if n.kind == Kind::Task {
-            meta = meta
-                .child(priority_mark(n.priority))
-                .child(format!("P{}", n.priority));
+            props = props.child(prop_row(
+                "Priority",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(priority_mark(n.priority))
+                    .child(PRIORITY_NAMES[usize::from(n.priority.clamp(1, 4) - 1)]),
+            ));
         } else {
-            meta = meta.child(tag(n.kind.as_str(), TEXT_3));
+            props = props.child(prop_row("Kind", div().child(title_case(n.kind.as_str()))));
         }
         if n.props.get("scope").and_then(|v| v.as_str()) == Some("always") {
-            meta = meta.child(tag("standing rule", GREEN));
+            props = props.child(prop_row("Scope", tag("Standing rule", DONE)));
         }
-        let mut links = div().flex().flex_col().gap_1();
+        props = props.child(prop_row(
+            "Created",
+            div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
+        ));
+        let mut links = div().flex().flex_col().gap_3();
         for (label, briefs) in [
             ("Waits for", &d.links.depends_on),
             ("Blocks", &d.links.blocks),
@@ -789,23 +1173,23 @@ impl LivtkApp {
                 links = links.child(link_group(label, briefs));
             }
         }
-        let mut timeline = div().flex().flex_col().gap_2();
+        let mut timeline = div().flex().flex_col().gap_3();
         for e in d.history.iter().rev() {
             timeline = timeline.child(event_line(e));
         }
         let panel = div()
             .id(SharedString::from(format!("detail-{}", n.key)))
-            .w(px(460.))
+            .w(px(480.))
             .flex_none()
             .h_full()
-            .bg(color(PANEL))
+            .bg(color(SURFACE))
             .border_l_1()
             .border_color(color(BORDER))
             .flex()
             .flex_col()
             .child(
                 div()
-                    .h(px(44.))
+                    .h(px(46.))
                     .flex_none()
                     .px_4()
                     .flex()
@@ -818,11 +1202,14 @@ impl LivtkApp {
                     .child(
                         div()
                             .id("close-detail")
+                            .h(px(24.))
                             .px_2()
+                            .flex()
+                            .items_center()
                             .rounded_md()
-                            .text_color(color(TEXT_3))
+                            .text_color(color(TEXT_4))
                             .cursor_pointer()
-                            .hover(|s| s.bg(color(HOVER)))
+                            .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
                             .child("Esc")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.model.close_detail();
@@ -835,18 +1222,19 @@ impl LivtkApp {
                     .id("detail-scroll")
                     .flex_1()
                     .overflow_y_scroll()
-                    .p_4()
+                    .p_5()
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_5()
                     .child(
                         div()
-                            .text_lg()
+                            .text_xl()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color(TEXT))
                             .child(n.title.clone()),
                     )
-                    .child(meta)
-                    .child(choices)
+                    .when(!d.choices.is_empty(), |d| d.child(choice_row))
+                    .child(props)
                     .when(!n.body.is_empty(), |d| {
                         d.child(div().text_color(color(TEXT_2)).child(TextView::markdown(
                             SharedString::from(format!("body-{}", n.key)),
@@ -876,6 +1264,45 @@ impl LivtkApp {
         )
     }
 
+    // ---- rendering: overlays ------------------------------------------------------------------
+
+    /// A modal: a dim backdrop that closes it when clicked, around a card sized to its content.
+    fn modal(&self, id: &'static str, card: Div, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id(id)
+            .absolute()
+            .inset_0()
+            .key_context(FORM)
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| this.close_overlays(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &input::Escape, window, cx| this.close_overlays(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Submit, window, cx| this.submit_form(window, cx)))
+            .bg(with_alpha(0x000000, 0.6))
+            .flex()
+            .flex_col()
+            .items_center()
+            .pt(px(110.))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
+            )
+            .child(
+                card.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .rounded_lg()
+                    .bg(color(SURFACE))
+                    .border_1()
+                    .border_color(color(BORDER_STRONG))
+                    .shadow_lg(),
+            )
+            .with_animation(
+                SharedString::from(format!("{id}-in")),
+                Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
+                |el, t| el.opacity(t),
+            )
+            .into_any_element()
+    }
+
     fn form_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.as_ref()?;
         let mut priorities = div().flex().gap_1();
@@ -884,18 +1311,26 @@ impl LivtkApp {
             priorities = priorities.child(
                 div()
                     .id(SharedString::from(format!("prio-{p}")))
+                    .h(px(28.))
                     .px_2()
-                    .py_1()
                     .rounded_md()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap_2()
                     .cursor_pointer()
-                    .bg(color(if on { SELECTED } else { RAISED }))
                     .border_1()
-                    .border_color(color(if on { ACCENT } else { BORDER }))
+                    .when(on, |s| {
+                        s.bg(color(SELECTED))
+                            .border_color(color(BORDER_STRONG))
+                            .text_color(color(TEXT))
+                    })
+                    .when(!on, |s| {
+                        s.border_color(color(BORDER))
+                            .text_color(color(TEXT_3))
+                            .hover(|h| h.bg(color(HOVER)))
+                    })
                     .child(priority_mark(p))
-                    .child(["Urgent", "High", "Medium", "Low"][usize::from(p - 1)])
+                    .child(PRIORITY_NAMES[usize::from(p - 1)])
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(f) = &mut this.form {
                             f.priority = p;
@@ -905,64 +1340,144 @@ impl LivtkApp {
             );
         }
         let card = div()
-            .w(px(600.))
+            .w(px(640.))
             .p_4()
-            .rounded_lg()
-            .bg(color(PANEL))
-            .border_1()
-            .border_color(color(BORDER))
-            .shadow_lg()
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().font_weight(FontWeight::SEMIBOLD).child("New task"))
-            .child(Input::new(&form.title))
-            .child(gpui_kit::component::input::Textarea::new(&form.body))
-            .child(priorities)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .child(
+                        self.model
+                            .project()
+                            .map(|p| p.name.clone())
+                            .unwrap_or_default(),
+                    )
+                    .child("›")
+                    .child("New task"),
+            )
+            .child(Input::new(&form.title).appearance(false).text_lg())
+            .child(Textarea::new(&form.body).appearance(false))
+            .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .text_xs()
-                    .text_color(color(TEXT_3))
-                    .child("Esc to cancel · Ctrl+Enter to create · it starts in the backlog")
+                    .child(priorities)
                     .child(div().flex_1())
                     .child(
                         div()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child("Starts in the backlog"),
+                    )
+                    .child(
+                        div()
                             .id("create-task")
+                            .h(px(28.))
                             .px_3()
-                            .py_1()
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .rounded_md()
                             .bg(color(ACCENT))
                             .text_color(color(TEXT))
-                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
                             .cursor_pointer()
-                            .child("Create")
+                            .hover(|s| s.bg(color(ACCENT_HOVER)))
+                            .child("Create task")
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(with_alpha(TEXT, 0.7))
+                                    .child("Ctrl ↵"),
+                            )
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.submit_form(window, cx)),
                             ),
                     ),
             );
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .key_context(FORM)
-                .on_action(cx.listener(|this, _: &Cancel, window, cx| this.close_form(window, cx)))
-                .on_action(cx.listener(|this, _: &Submit, window, cx| this.submit_form(window, cx)))
-                .bg(with_alpha(0x000000, 0.55))
-                .flex()
-                .justify_center()
-                .pt(px(120.))
-                .child(card)
-                .with_animation(
-                    "form-in",
-                    Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
-                    |el, t| el.opacity(t),
-                )
-                .into_any_element(),
-        )
+        Some(self.modal("new-task-modal", card, cx))
+    }
+
+    fn help_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.help {
+            return None;
+        }
+        let mut sections = div().flex().flex_col().gap_4();
+        let mut current = "";
+        let mut block = div().flex().flex_col();
+        for (section, keys, what) in SHORTCUTS {
+            if *section != current {
+                if !current.is_empty() {
+                    sections = sections.child(block);
+                }
+                block = div().flex().flex_col().child(
+                    div()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child(*section),
+                );
+                current = section;
+            }
+            let mut combo = div().flex().items_center().gap_1();
+            for k in *keys {
+                combo = if matches!(*k, "then" | "or" | "+") {
+                    combo.child(div().text_xs().text_color(color(TEXT_4)).child(*k))
+                } else {
+                    combo.child(kbd(k))
+                };
+            }
+            block = block.child(
+                div()
+                    .h(px(30.))
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(color(BORDER))
+                    .child(div().flex_1().text_color(color(TEXT_2)).child(*what))
+                    .child(combo),
+            );
+        }
+        sections = sections.child(block);
+        let card = div()
+            .w(px(520.))
+            .max_h(px(620.))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(46.))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(color(BORDER))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(color(TEXT))
+                            .child("Keyboard shortcuts"),
+                    )
+                    .child(kbd("Esc")),
+            )
+            .child(
+                div()
+                    .id("shortcuts-scroll")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .p_4()
+                    .child(sections),
+            );
+        Some(self.modal("shortcuts-modal", card, cx))
     }
 
     fn notice(&self) -> Option<AnyElement> {
@@ -975,9 +1490,9 @@ impl LivtkApp {
                 .max_w(px(520.))
                 .p_3()
                 .rounded_lg()
-                .bg(color(RAISED))
+                .bg(color(LIFTED))
                 .border_1()
-                .border_color(with_alpha(RED, 0.6))
+                .border_color(with_alpha(RED, 0.5))
                 .text_color(color(TEXT))
                 .shadow_lg()
                 .child(text)
@@ -988,120 +1503,135 @@ impl LivtkApp {
 
 impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let sidebar = self.sidebar(window, cx).into_any_element();
+        let header = self.header(cx).into_any_element();
+        let toolbar = self.toolbar(cx).into_any_element();
         let content = self.content(window, cx);
         let detail = self.detail(cx);
         let form = self.form_overlay(cx);
+        let help = self.help_overlay(cx);
         let notice = self.notice();
+        let list_area = div()
+            .flex_1()
+            .min_h_0()
+            .key_context(NAV)
+            .track_focus(&self.nav)
+            .on_action(cx.listener(|this, _: &Down, _, cx| {
+                this.model.select_by(1);
+                this.after_move(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Up, _, cx| {
+                this.model.select_by(-1);
+                this.after_move(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Open, _, cx| {
+                this.model.open_detail();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Close, window, cx| {
+                if this.help || this.form.is_some() {
+                    this.close_overlays(window, cx);
+                } else {
+                    this.model.close_detail();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Decide, _, cx| {
+                this.model.decide();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Standing, _, cx| this.choice_where(|c| c.always, cx)))
+            .on_action(cx.listener(|this, _: &Reject, _, cx| {
+                this.choice_where(|c| c.to == State::Rejected, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
+            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+                this.filter.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Note, window, cx| {
+                if this.model.detail.is_none() {
+                    this.model.open_detail();
+                }
+                this.note.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| {
+                if this.model.view == View::Tasks {
+                    this.model.toggle_layout();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleAll, _, cx| {
+                this.model.toggle_show_all();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &GoInbox, w, cx| this.go(View::Inbox, w, cx)))
+            .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
+            .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
+            .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
+            .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
+            .on_action(cx.listener(|this, _: &PrevProject, window, cx| {
+                let i = this.model.current.saturating_sub(1);
+                this.model.select_project(i);
+                this.sync_filter(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NextProject, window, cx| {
+                let i = this.model.current + 1;
+                this.model.select_project(i);
+                this.sync_filter(window, cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Priority1, _, cx| prio(this, 1, cx)))
+            .on_action(cx.listener(|this, _: &Priority2, _, cx| prio(this, 2, cx)))
+            .on_action(cx.listener(|this, _: &Priority3, _, cx| prio(this, 3, cx)))
+            .on_action(cx.listener(|this, _: &Priority4, _, cx| prio(this, 4, cx)))
+            .child(content);
         div()
             .size_full()
             .relative()
             .flex()
-            .bg(color(BG))
-            .text_color(color(TEXT))
+            .bg(color(WINDOW))
+            .text_color(color(TEXT_2))
             .text_sm()
+            .on_action(cx.listener(|this, _: &ToggleHelp, window, cx| {
+                this.help = !this.help;
+                if !this.help {
+                    this.nav.focus(window, cx);
+                }
+                cx.notify();
+            }))
+            .child(sidebar)
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .key_context(NAV)
-                    .track_focus(&self.nav)
-                    .on_action(cx.listener(|this, _: &Down, _, cx| {
-                        this.model.select_by(1);
-                        this.after_move(cx);
-                    }))
-                    .on_action(cx.listener(|this, _: &Up, _, cx| {
-                        this.model.select_by(-1);
-                        this.after_move(cx);
-                    }))
-                    .on_action(cx.listener(|this, _: &Open, _, cx| {
-                        this.model.open_detail();
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &Close, _, cx| {
-                        this.model.close_detail();
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &Decide, _, cx| {
-                        this.model.decide();
-                        cx.notify();
-                    }))
-                    .on_action(
-                        cx.listener(|this, _: &Standing, _, cx| {
-                            this.choice_where(|c| c.always, cx)
-                        }),
-                    )
-                    .on_action(cx.listener(|this, _: &Reject, _, cx| {
-                        this.choice_where(|c| c.to == State::Rejected, cx)
-                    }))
-                    .on_action(
-                        cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)),
-                    )
-                    .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
-                    .on_action(cx.listener(|this, _: &Note, window, cx| {
-                        if this.model.detail.is_none() {
-                            this.model.open_detail();
-                        }
-                        this.note.read(cx).focus_handle(cx).focus(window, cx);
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| {
-                        if this.model.view == View::Tasks {
-                            this.model.toggle_layout();
-                            cx.notify();
-                        }
-                    }))
-                    .on_action(cx.listener(|this, _: &ToggleAll, _, cx| {
-                        this.model.toggle_show_all();
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &GoInbox, _, cx| go(this, View::Inbox, cx)))
-                    .on_action(cx.listener(|this, _: &GoTasks, _, cx| go(this, View::Tasks, cx)))
-                    .on_action(
-                        cx.listener(|this, _: &GoLessons, _, cx| go(this, View::Lessons, cx)),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &GoDecisions, _, cx| go(this, View::Decisions, cx)),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &GoFindings, _, cx| go(this, View::Findings, cx)),
-                    )
-                    .on_action(cx.listener(|this, _: &PrevProject, _, cx| {
-                        let i = this.model.current.saturating_sub(1);
-                        this.model.select_project(i);
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &NextProject, _, cx| {
-                        let i = this.model.current + 1;
-                        this.model.select_project(i);
-                        cx.notify();
-                    }))
-                    .on_action(cx.listener(|this, _: &Priority1, _, cx| prio(this, 1, cx)))
-                    .on_action(cx.listener(|this, _: &Priority2, _, cx| prio(this, 2, cx)))
-                    .on_action(cx.listener(|this, _: &Priority3, _, cx| prio(this, 3, cx)))
-                    .on_action(cx.listener(|this, _: &Priority4, _, cx| prio(this, 4, cx)))
-                    .child(self.sidebar(cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .child(self.header(cx))
-                            .child(div().flex_1().min_h_0().child(content)),
-                    ),
+                div().flex_1().min_w_0().h_full().py_2().pr_2().child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(color(BORDER))
+                        .bg(color(CONTENT))
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .child(header)
+                                .child(toolbar)
+                                .child(list_area),
+                        )
+                        .children(detail),
+                ),
             )
-            .children(detail)
             .children(form)
+            .children(help)
             .children(notice)
     }
-}
-
-fn go(app: &mut LivtkApp, view: View, cx: &mut Context<LivtkApp>) {
-    app.model.set_view(view);
-    cx.notify();
 }
 
 fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
@@ -1110,7 +1640,7 @@ fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
 }
 
 enum Item {
-    Header(Kind, State, usize),
+    Band(usize),
     Row(usize),
 }
 
@@ -1119,44 +1649,72 @@ enum Item {
 fn section_label(text: &str) -> Div {
     div()
         .px_2()
-        .py_1()
+        .h(px(24.))
+        .flex()
+        .items_center()
         .text_xs()
-        .text_color(color(TEXT_3))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color(TEXT_4))
         .child(text.to_owned())
+}
+
+fn toolbar_label(text: &'static str) -> Div {
+    div().text_xs().text_color(color(TEXT_4)).child(text)
 }
 
 fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Stateful<Div> {
     div()
         .id(id)
         .px_2()
-        .py_1()
+        .h(px(28.))
         .rounded_md()
         .flex()
         .items_center()
         .cursor_pointer()
         .when(active, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
         .when(!active, |d| {
-            d.text_color(color(TEXT_2)).hover(|s| s.bg(color(HOVER)))
+            d.text_color(color(TEXT_3))
+                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_2)))
         })
         .child(div().flex_1().truncate().child(label.to_owned()))
         .when(count > 0, |d| {
             d.child(
                 div()
-                    .px(px(6.))
+                    .min_w(px(18.))
+                    .h(px(18.))
+                    .px(px(5.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .rounded_full()
-                    .bg(with_alpha(ACCENT, 0.25))
-                    .text_color(color(ACCENT))
+                    .bg(color(ACCENT))
+                    .text_color(color(TEXT))
                     .text_xs()
                     .child(format!("{count}")),
             )
         })
 }
 
+fn segments() -> Div {
+    div()
+        .flex()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded_md()
+        .bg(color(WINDOW))
+        .border_1()
+        .border_color(color(BORDER))
+}
+
 fn segment(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .px_3()
-        .py(px(3.))
+        .h(px(22.))
+        .px_2()
+        .flex()
+        .items_center()
+        .rounded(px(4.))
+        .text_xs()
         .cursor_pointer()
         .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
         .when(!on, |d| {
@@ -1168,33 +1726,54 @@ fn segment(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
 
 fn tag(label: &str, c: u32) -> Div {
     div()
-        .px(px(6.))
-        .rounded(px(4.))
+        .h(px(20.))
+        .px(px(7.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .rounded_full()
         .text_xs()
+        .bg(color(SURFACE))
         .border_1()
-        .border_color(with_alpha(c, 0.4))
-        .text_color(color(c))
+        .border_color(color(BORDER_STRONG))
+        .text_color(color(TEXT_2))
+        .child(div().size(px(6.)).mr(px(6.)).rounded_full().bg(color(c)))
         .child(label.to_owned())
 }
 
-fn group_header(kind: Kind, state: State, count: usize) -> Div {
+fn kbd(k: &str) -> Div {
     div()
-        .w_full()
-        .h(px(ROW))
-        .flex_none()
-        .px_3()
+        .min_w(px(18.))
+        .h(px(18.))
+        .px(px(5.))
         .flex()
         .items_center()
-        .gap_2()
+        .justify_center()
+        .rounded(px(4.))
+        .bg(color(LIFTED))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
         .text_xs()
-        .text_color(color(TEXT_2))
-        .child(state_mark(kind, state))
-        .child(state_title(state))
-        .child(div().text_color(color(TEXT_3)).child(format!("{count}")))
+        .text_color(color(TEXT_3))
+        .child(k.to_owned())
 }
 
-fn state_title(state: State) -> String {
-    let s = state.as_str();
+fn prop_row(label: &str, value: Div) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_h(px(26.))
+        .child(
+            div()
+                .w(px(96.))
+                .flex_none()
+                .text_color(color(TEXT_4))
+                .child(label.to_owned()),
+        )
+        .child(value.text_color(color(TEXT_2)))
+}
+
+fn title_case(s: &str) -> String {
     let mut c = s.chars();
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
@@ -1213,7 +1792,7 @@ fn empty(title: &str, hint: &str) -> Div {
         .child(
             div()
                 .text_xs()
-                .text_color(color(TEXT_3))
+                .text_color(color(TEXT_4))
                 .child(hint.to_owned()),
         )
 }
@@ -1222,18 +1801,29 @@ fn link_group(label: &str, briefs: &[Brief]) -> Div {
     let mut g = div().flex().flex_col().gap_1().child(
         div()
             .text_xs()
-            .text_color(color(TEXT_3))
+            .text_color(color(TEXT_4))
             .child(label.to_owned()),
     );
     for b in briefs {
         g = g.child(
             div()
+                .h(px(28.))
+                .px_2()
                 .flex()
                 .items_center()
                 .gap_2()
+                .rounded_md()
+                .bg(color(CONTENT))
+                .border_1()
+                .border_color(color(BORDER))
                 .child(state_mark(Kind::Task, b.state))
-                .child(div().text_color(color(TEXT_3)).child(b.key.clone()))
-                .child(div().truncate().child(b.title.clone())),
+                .child(div().text_color(color(TEXT_4)).child(b.key.clone()))
+                .child(
+                    div()
+                        .truncate()
+                        .text_color(color(TEXT_2))
+                        .child(b.title.clone()),
+                ),
         );
     }
     g
@@ -1262,23 +1852,30 @@ fn flashing<E: Styled + IntoElement + 'static>(
     }
 }
 
+fn who(by: &str) -> &str {
+    if by == "human" { "you" } else { by }
+}
+
 fn event_line(e: &Event) -> Div {
     let when = ago(&e.at);
     let what = match &e.op {
-        Op::NodeCreate { data, .. } => format!("created \"{}\"", data.title),
+        Op::NodeCreate { .. } => "created it".to_owned(),
         Op::NodeSet { data, .. } => {
             let mut parts = Vec::new();
             if let Some(s) = data.state {
-                parts.push(format!("moved to {s}"));
+                parts.push(format!("moved it to {}", title_case(s.as_str())));
             }
             if data.title.is_some() {
-                parts.push("renamed".into());
+                parts.push("renamed it".into());
             }
             if data.body.is_some() {
-                parts.push("edited the body".into());
+                parts.push("edited the plan".into());
             }
             if let Some(p) = data.priority {
-                parts.push(format!("set priority P{}", p.get()));
+                parts.push(format!(
+                    "set priority to {}",
+                    PRIORITY_NAMES[usize::from(p.get().clamp(1, 4) - 1)]
+                ));
             }
             if data.props.is_some() {
                 parts.push("changed its scope".into());
@@ -1291,43 +1888,54 @@ fn event_line(e: &Event) -> Div {
     };
     let human = e.by == "human";
     let note = matches!(e.op, Op::NodeNote { .. });
-    div()
+    let head = div()
         .flex()
+        .items_center()
         .gap_2()
         .child(
             div()
-                .mt(px(5.))
-                .size(px(6.))
+                .size(px(18.))
                 .flex_none()
                 .rounded_full()
-                .bg(color(if human { ACCENT } else { TEXT_3 })),
+                .bg(color(if human { ACCENT } else { BORDER_STRONG }))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(10.))
+                .text_color(color(TEXT))
+                .child(if human { "Y" } else { "C" }),
         )
         .child(
             div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(div().text_xs().text_color(color(TEXT_3)).child(format!(
-                    "{} · {when}",
-                    if human { "you" } else { e.by.as_str() }
-                )))
-                .child(
-                    div()
-                        .when(note, |d| {
-                            d.p_2()
-                                .rounded_md()
-                                .bg(color(RAISED))
-                                .border_1()
-                                .border_color(color(BORDER))
-                        })
-                        .text_color(color(if note { TEXT } else { TEXT_2 }))
-                        .child(what),
-                ),
+                .text_color(color(TEXT_2))
+                .font_weight(FontWeight::MEDIUM)
+                .child(who(&e.by).to_owned()),
         )
+        .when(!note, |d| {
+            d.child(div().text_color(color(TEXT_3)).child(what.clone()))
+        })
+        .child(
+            div()
+                .text_xs()
+                .text_color(color(TEXT_4))
+                .child(format!("· {when}")),
+        );
+    div().flex().flex_col().gap_2().child(head).when(note, |d| {
+        d.child(
+            div()
+                .ml(px(26.))
+                .p_3()
+                .rounded_md()
+                .bg(color(CONTENT))
+                .border_1()
+                .border_color(color(BORDER))
+                .text_color(color(TEXT))
+                .child(what),
+        )
+    })
 }
 
-/// "just now", "5m ago", "3h ago", "2d ago", or the date.
+/// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.
 fn ago(at: &str) -> String {
     let Ok(t) = at.parse::<jiff::Timestamp>() else {
         return at.to_owned();
@@ -1335,9 +1943,9 @@ fn ago(at: &str) -> String {
     let secs = jiff::Timestamp::now().as_second() - t.as_second();
     match secs {
         ..60 => "just now".into(),
-        60..3600 => format!("{}m ago", secs / 60),
-        3600..86400 => format!("{}h ago", secs / 3600),
-        86400..604800 => format!("{}d ago", secs / 86400),
+        60..3600 => format!("{}m", secs / 60),
+        3600..86400 => format!("{}h", secs / 3600),
+        86400..604800 => format!("{}d", secs / 86400),
         _ => at.get(..10).unwrap_or(at).to_owned(),
     }
 }

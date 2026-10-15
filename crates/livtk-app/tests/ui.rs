@@ -127,3 +127,87 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
     );
     assert_eq!(last.by, "human");
 }
+
+fn open_app<'a>(
+    cx: &'a mut TestAppContext,
+    dir: &std::path::Path,
+) -> (
+    gpui_kit::Entity<LivtkApp>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        bind_keys(cx);
+    });
+    let path = dir.to_path_buf();
+    let (app, cx) =
+        cx.add_window_view(|window, cx| LivtkApp::new(Model::open(&[path]), window, cx));
+    cx.run_until_parked();
+    (app, cx)
+}
+
+#[gpui_kit::test]
+fn ctrl_slash_shows_the_shortcuts_and_esc_or_ctrl_slash_closes_them(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-/");
+    app.read_with(cx, |a, _| assert!(a.help_open()));
+    cx.simulate_keystrokes("escape");
+    app.read_with(cx, |a, _| assert!(!a.help_open(), "Esc closes it"));
+    cx.simulate_keystrokes("ctrl-/");
+    cx.simulate_keystrokes("ctrl-/");
+    app.read_with(cx, |a, _| {
+        assert!(!a.help_open(), "and so does Ctrl+/ again")
+    });
+}
+
+#[gpui_kit::test]
+fn a_click_outside_the_new_task_modal_closes_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("n");
+    app.read_with(cx, |a, _| assert!(a.form_open()));
+    // Top-left corner: the backdrop, well outside the centred card.
+    cx.simulate_click(
+        gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(8.)),
+        gpui_kit::Modifiers::default(),
+    );
+    app.read_with(cx, |a, _| assert!(!a.form_open(), "the backdrop closed it"));
+    assert_eq!(
+        Workspace::open(dir.path())
+            .unwrap()
+            .tasks(&[])
+            .unwrap()
+            .len(),
+        2,
+        "nothing was created"
+    );
+}
+
+#[gpui_kit::test]
+fn the_filter_narrows_the_list_and_typing_in_it_runs_no_command(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("a sec");
+    cx.run_until_parked();
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Planned,
+        "the `a` typed acknowledged nothing"
+    );
+    app.read_with(cx, |a, _| assert_eq!(a.model().display().filter, "a sec"));
+    cx.simulate_keystrokes("backspace backspace backspace backspace backspace");
+    cx.simulate_input("second");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        let keys: Vec<&str> = a.model().rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["LIV-2"], "only the second plan is left in the inbox");
+    });
+    cx.simulate_keystrokes("enter a");
+    assert_eq!(
+        state_of(dir.path(), "LIV-2"),
+        State::Acked,
+        "Enter went back to the list, where `a` decides"
+    );
+}

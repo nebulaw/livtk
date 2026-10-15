@@ -88,23 +88,11 @@ livtk-app ~/code/project     # open one (and remember it)
 
 The human's control surface: an Inbox of everything waiting for you, tasks as a list or a board,
 lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
-Changes from Claude show up while it is open, and flash once. Keyboard first:
-
-| Keys | |
-|---|---|
-| `j` `k` | move |
-| `Enter` `Esc` | open, close the detail panel |
-| `a` | decide: acknowledge, ratify, accept |
-| `s` | ratify as a standing rule |
-| `x` | reject |
-| `n` | new task |
-| `c` | add a note |
-| `1`-`4` | priority |
-| `g i` `g t` `g l` `g d` `g f` | Inbox, Tasks, Lessons, Decisions, Findings |
-| `b` | list or board |
-| `h` | show what is over too |
-| `[` `]` | previous, next project |
-| `o` | open a project folder |
+Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette.
+The toolbar filters (`/`), narrows by priority, groups by state or priority, and orders by
+priority, last update or creation; groups are solid bands that collapse on a click. Drag a row
+onto another group, or a card onto another board column, to move it; only legal moves light up.
+`Ctrl+/` lists every shortcut.
 
 ## Develop
 

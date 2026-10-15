@@ -1,7 +1,7 @@
 //! The app's state and every action it can take, without any UI. The views render this and
 //! forward input to it, so all behaviour is tested as plain Rust.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -57,6 +57,69 @@ pub enum Layout {
     Board,
 }
 
+/// How a list groups its rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grouping {
+    State,
+    Priority,
+    None,
+}
+
+/// How rows are ordered inside a group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ordering {
+    Priority,
+    Updated,
+    Created,
+}
+
+/// A view's display options, like Linear's Display menu. Kept per view while the app runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Display {
+    /// Shown only when the key or title contains this, ignoring case.
+    pub filter: String,
+    /// Shown only with one of these priorities; empty shows every priority.
+    pub priorities: Vec<u8>,
+    pub grouping: Grouping,
+    pub ordering: Ordering,
+}
+
+impl Display {
+    fn for_view(view: View) -> Display {
+        Display {
+            filter: String::new(),
+            priorities: Vec::new(),
+            grouping: if view == View::Inbox {
+                Grouping::None
+            } else {
+                Grouping::State
+            },
+            ordering: Ordering::Priority,
+        }
+    }
+}
+
+/// What a group gathers: a state, a priority, or everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GroupKey {
+    State(State),
+    Priority(u8),
+    All,
+}
+
+/// One group of the list as shown: its rows are `rows[start..start + shown]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub key: GroupKey,
+    /// The kind its rows are, for the state mark; `None` in the mixed inbox.
+    pub kind: Option<Kind>,
+    /// Rows in the group after filtering, shown or collapsed.
+    pub count: usize,
+    pub collapsed: bool,
+    pub start: usize,
+    pub shown: usize,
+}
+
 /// Something the human can do to a node from where it stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choice {
@@ -95,7 +158,12 @@ pub struct Model {
     pub layout: Layout,
     /// Include what is over: done, canceled, rejected, retired, superseded.
     pub show_all: bool,
+    /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
     pub rows: Vec<Summary>,
+    /// The groups of `rows`, in order.
+    pub groups: Vec<Group>,
+    /// Every row after filtering, collapsed or not: what the board shows.
+    pub filtered: Vec<Summary>,
     pub detail: Option<Detail>,
     /// Rows that changed under the app's feet (Claude, the CLI, a git pull), and when it noticed.
     pub flashed: HashMap<Uuid, Instant>,
@@ -105,6 +173,10 @@ pub struct Model {
     /// The last thing worth telling the human: a refusal, an error.
     pub notice: Option<String>,
     selected: Option<Uuid>,
+    /// Everything the view holds, before display options.
+    all: Vec<Summary>,
+    displays: HashMap<View, Display>,
+    collapsed: HashSet<(View, GroupKey)>,
 }
 
 impl Model {
@@ -144,11 +216,16 @@ impl Model {
             layout: Layout::List,
             show_all: false,
             rows: Vec::new(),
+            groups: Vec::new(),
+            filtered: Vec::new(),
             detail: None,
             flashed: HashMap::new(),
             leaving: Vec::new(),
             notice,
             selected: None,
+            all: Vec::new(),
+            displays: HashMap::new(),
+            collapsed: HashSet::new(),
         };
         model.reload();
         model
@@ -425,6 +502,157 @@ impl Model {
             .retain(|(_, _, at)| now.duration_since(*at) < age);
     }
 
+    // ---- display options -----------------------------------------------------------------------
+
+    pub fn display(&self) -> Display {
+        self.displays
+            .get(&self.view)
+            .cloned()
+            .unwrap_or_else(|| Display::for_view(self.view))
+    }
+
+    fn edit_display(&mut self, edit: impl FnOnce(&mut Display)) {
+        let mut d = self.display();
+        edit(&mut d);
+        self.displays.insert(self.view, d);
+        self.arrange();
+        if self.selected().is_none() {
+            self.selected = self.rows.first().map(|r| r.id);
+        }
+    }
+
+    pub fn set_filter(&mut self, text: &str) {
+        self.edit_display(|d| d.filter = text.to_owned());
+    }
+
+    pub fn toggle_priority(&mut self, priority: u8) {
+        self.edit_display(|d| {
+            if let Some(i) = d.priorities.iter().position(|p| *p == priority) {
+                d.priorities.remove(i);
+            } else {
+                d.priorities.push(priority);
+                d.priorities.sort_unstable();
+            }
+        });
+    }
+
+    pub fn set_grouping(&mut self, grouping: Grouping) {
+        self.edit_display(|d| d.grouping = grouping);
+    }
+
+    pub fn set_ordering(&mut self, ordering: Ordering) {
+        self.edit_display(|d| d.ordering = ordering);
+    }
+
+    pub fn toggle_collapsed(&mut self, key: GroupKey) {
+        if !self.collapsed.remove(&(self.view, key)) {
+            self.collapsed.insert((self.view, key));
+        }
+        self.arrange();
+        if self.selected().is_none() {
+            self.selected = self.rows.first().map(|r| r.id);
+        }
+    }
+
+    /// Apply the view's display options to everything it holds.
+    fn arrange(&mut self) {
+        let d = self.display();
+        let needle = d.filter.trim().to_lowercase();
+        let mut rows: Vec<Summary> = self
+            .all
+            .iter()
+            .filter(|r| {
+                needle.is_empty()
+                    || r.title.to_lowercase().contains(&needle)
+                    || r.key.to_lowercase().contains(&needle)
+            })
+            .filter(|r| {
+                d.priorities.is_empty()
+                    || r.kind != Kind::Task
+                    || d.priorities.contains(&r.priority)
+            })
+            .cloned()
+            .collect();
+        let group_of = |r: &Summary| match d.grouping {
+            Grouping::State => GroupKey::State(r.state),
+            Grouping::Priority => GroupKey::Priority(r.priority),
+            Grouping::None => GroupKey::All,
+        };
+        let group_rank = |k: GroupKey| match k {
+            GroupKey::State(s) => s.rank(),
+            GroupKey::Priority(p) => p,
+            GroupKey::All => 0,
+        };
+        rows.sort_by(|a, b| {
+            group_rank(group_of(a))
+                .cmp(&group_rank(group_of(b)))
+                .then_with(|| match d.ordering {
+                    Ordering::Priority => a.priority.cmp(&b.priority).then(a.id.cmp(&b.id)),
+                    Ordering::Updated => b.updated.cmp(&a.updated).then(b.id.cmp(&a.id)),
+                    Ordering::Created => b.id.cmp(&a.id),
+                })
+        });
+        let mut groups: Vec<Group> = Vec::new();
+        let mut shown: Vec<Summary> = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let key = group_of(r);
+            if groups.last().map(|g| g.key) != Some(key) {
+                let collapsed = self.collapsed.contains(&(self.view, key));
+                groups.push(Group {
+                    key,
+                    kind: self.view.kind(),
+                    count: 0,
+                    collapsed,
+                    start: shown.len(),
+                    shown: 0,
+                });
+            }
+            if let Some(g) = groups.last_mut() {
+                g.count += 1;
+                if !g.collapsed {
+                    g.shown += 1;
+                    shown.push(r.clone());
+                }
+            }
+        }
+        self.filtered = rows;
+        self.rows = shown;
+        self.groups = groups;
+    }
+
+    // ---- drag and drop ------------------------------------------------------------------------
+
+    /// Whether dropping node `id` on `target` is a legal change.
+    pub fn can_drop(&self, id: Uuid, target: GroupKey) -> bool {
+        self.all
+            .iter()
+            .find(|r| r.id == id)
+            .is_some_and(|r| drop_allowed(r.kind, r.state, r.priority, target))
+    }
+
+    /// Drop node `id` on a group or column: move it to that state, or give it that priority.
+    /// A move the rules refuse becomes the notice, with the core's reason.
+    pub fn drop_on(&mut self, id: Uuid, target: GroupKey) {
+        let Some(r) = self.all.iter().find(|r| r.id == id).cloned() else {
+            return;
+        };
+        self.selected = Some(id);
+        let node = id.to_string();
+        let cmd = match target {
+            GroupKey::State(s) if s == r.state => return,
+            GroupKey::State(State::Ratified) => Command::Ratify {
+                node,
+                always: false,
+            },
+            GroupKey::State(to) => Command::Move { node, to },
+            GroupKey::Priority(p) if r.kind == Kind::Task && p != r.priority => {
+                Command::SetPriority { node, priority: p }
+            }
+            _ => return,
+        };
+        self.run(cmd, Some(r));
+    }
+
     /// The task board: one column per state, in working order.
     pub fn columns(&self) -> Vec<(State, Vec<&Summary>)> {
         let mut states = vec![
@@ -442,7 +670,7 @@ impl Model {
         }
         states
             .into_iter()
-            .map(|s| (s, self.rows.iter().filter(|r| r.state == s).collect()))
+            .map(|s| (s, self.filtered.iter().filter(|r| r.state == s).collect()))
             .collect()
     }
 
@@ -470,19 +698,28 @@ impl Model {
             }
         };
         match rows {
-            Ok(rows) => self.rows = rows,
+            Ok(rows) => self.all = rows,
             Err(e) => self.notice = Some(e.to_string()),
         }
+        self.arrange();
         if self.selected().is_none() {
             self.selected = self.rows.first().map(|r| r.id);
         }
-        if let Some(d) = &self.detail {
-            let id = d.node.id;
-            match load_detail(&project.ws, id) {
-                Ok(d) => self.detail = Some(d),
-                Err(_) => self.detail = None,
-            }
+        if let Some(id) = self.detail.as_ref().map(|d| d.node.id)
+            && let Some(project) = self.projects.get(self.current)
+        {
+            self.detail = load_detail(&project.ws, id).ok();
         }
+    }
+}
+
+/// Whether a node of `kind` in `state` with `priority` may be dropped on `target`. One rule for
+/// the model and for the view's drop highlighting.
+pub fn drop_allowed(kind: Kind, state: State, priority: u8, target: GroupKey) -> bool {
+    match target {
+        GroupKey::State(s) => state != s && kind.can_move(state, s),
+        GroupKey::Priority(p) => kind == Kind::Task && priority != p,
+        GroupKey::All => false,
     }
 }
 

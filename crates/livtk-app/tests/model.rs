@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use livtk_app::model::{Layout, Model, View, choices};
+use livtk_app::model::{GroupKey, Grouping, Layout, Model, Ordering, View, choices};
 use livtk_core::{Actor, Command, Kind, Rel, State, Workspace};
 
 const CLAUDE: Actor = Actor::Claude { agent: None };
@@ -316,6 +316,159 @@ fn views_layouts_projects_and_a_bad_folder() {
             State::Parked,
             State::Done
         ]
+    );
+}
+
+/// Tasks across states and priorities: LIV-1 P1 backlog, LIV-2 P3 planned "parser",
+/// LIV-3 P2 planned "renderer", LIV-4 P4 backlog "parser tests".
+fn mixed() -> (tempfile::TempDir, Model) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = project(dir.path());
+    for (title, p, plan) in [
+        ("draw the window", 1, false),
+        ("write the parser", 3, true),
+        ("write the renderer", 2, true),
+        ("parser tests", 4, false),
+    ] {
+        let k = create(&mut ws, Kind::Task, title);
+        ws.execute(
+            Command::SetPriority {
+                node: k.clone(),
+                priority: p,
+            },
+            &CLAUDE,
+        )
+        .ok();
+        if plan {
+            ws.execute(
+                Command::Move {
+                    node: k,
+                    to: State::Planned,
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Tasks);
+    (dir, m)
+}
+
+#[test]
+fn groups_follow_state_order_and_rows_follow_priority() {
+    let (_dir, m) = mixed();
+    let groups: Vec<(GroupKey, usize)> = m.groups.iter().map(|g| (g.key, g.count)).collect();
+    assert_eq!(
+        groups,
+        [
+            (GroupKey::State(State::Planned), 2),
+            (GroupKey::State(State::Backlog), 2)
+        ]
+    );
+    assert_eq!(
+        keys(&m),
+        ["LIV-3", "LIV-2", "LIV-1", "LIV-4"],
+        "P2 before P3, P1 before P4"
+    );
+}
+
+#[test]
+fn a_filter_narrows_by_title_or_key_and_priority_chips_combine() {
+    let (_dir, mut m) = mixed();
+    m.set_filter("PARSER");
+    assert_eq!(keys(&m), ["LIV-2", "LIV-4"]);
+    m.toggle_priority(4);
+    assert_eq!(keys(&m), ["LIV-4"]);
+    m.set_filter("");
+    m.toggle_priority(1);
+    assert_eq!(keys(&m), ["LIV-1", "LIV-4"]);
+    m.set_filter("liv-1");
+    assert_eq!(keys(&m), ["LIV-1"]);
+    m.set_view(View::Inbox);
+    assert_eq!(m.display().filter, "", "display options are per view");
+    m.set_view(View::Tasks);
+    assert_eq!(m.display().filter, "liv-1", "and kept when you come back");
+}
+
+#[test]
+fn grouping_and_ordering_change_the_arrangement() {
+    let (_dir, mut m) = mixed();
+    m.set_grouping(Grouping::Priority);
+    let groups: Vec<GroupKey> = m.groups.iter().map(|g| g.key).collect();
+    assert_eq!(
+        groups,
+        [
+            GroupKey::Priority(1),
+            GroupKey::Priority(2),
+            GroupKey::Priority(3),
+            GroupKey::Priority(4)
+        ]
+    );
+    m.set_grouping(Grouping::None);
+    m.set_ordering(Ordering::Created);
+    assert_eq!(m.groups.len(), 1);
+    assert_eq!(
+        keys(&m),
+        ["LIV-4", "LIV-3", "LIV-2", "LIV-1"],
+        "newest first"
+    );
+    m.set_ordering(Ordering::Priority);
+    assert_eq!(keys(&m), ["LIV-1", "LIV-3", "LIV-2", "LIV-4"]);
+}
+
+#[test]
+fn a_collapsed_group_keeps_its_count_and_drops_out_of_navigation() {
+    let (_dir, mut m) = mixed();
+    m.toggle_collapsed(GroupKey::State(State::Planned));
+    assert_eq!(keys(&m), ["LIV-1", "LIV-4"]);
+    assert_eq!(m.groups[0].count, 2, "still counted");
+    assert!(m.groups[0].collapsed);
+    assert_eq!(
+        m.selected().map(|r| r.key.as_str()),
+        Some("LIV-1"),
+        "the selection leaves the hidden rows"
+    );
+    m.select_by(5);
+    assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-4"));
+    assert_eq!(m.filtered.len(), 4, "the board still shows everything");
+    m.toggle_collapsed(GroupKey::State(State::Planned));
+    assert_eq!(m.rows.len(), 4);
+}
+
+#[test]
+fn dropping_moves_state_or_priority_and_refuses_with_the_reason() {
+    let (dir, mut m) = mixed();
+    let id = |m: &Model, k: &str| m.filtered.iter().find(|r| r.key == k).unwrap().id;
+    let liv1 = id(&m, "LIV-1");
+    assert!(
+        !m.can_drop(liv1, GroupKey::State(State::Doing)),
+        "backlog cannot jump to doing"
+    );
+    assert!(m.can_drop(liv1, GroupKey::State(State::Planned)));
+    m.drop_on(liv1, GroupKey::State(State::Doing));
+    assert!(
+        m.notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("can move to"),
+        "{:?}",
+        m.notice
+    );
+
+    m.drop_on(liv1, GroupKey::State(State::Planned));
+    assert!(m.notice.is_none());
+    let liv2 = id(&m, "LIV-2");
+    m.drop_on(liv2, GroupKey::State(State::Acked));
+    m.drop_on(liv2, GroupKey::Priority(1));
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert_eq!(ws.node("LIV-1").unwrap().state, State::Planned);
+    let n2 = ws.node("LIV-2").unwrap();
+    assert_eq!((n2.state, n2.priority), (State::Acked, 1));
+    assert_eq!(
+        ws.history(Some("LIV-2")).unwrap().last().unwrap().by,
+        "human"
     );
 }
 

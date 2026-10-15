@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use livtk_core::event::{Event, NodePatch, Op};
-use livtk_core::{Actor, Command, Error, Rel, State, Workspace};
+use livtk_core::{Actor, Command, Error, Kind, Rel, State, Workspace};
 use proptest::prelude::*;
 
 const HUMAN: Actor = Actor::Human;
@@ -26,11 +26,15 @@ fn task(ws: &mut Workspace, title: &str) -> String {
 fn task_after(ws: &mut Workspace, title: &str, deps: &[&str]) -> String {
     let events = ws
         .execute(
-            Command::CreateTask {
+            Command::Create {
+                kind: Kind::Task,
                 title: title.into(),
                 body: String::new(),
                 priority: None,
-                depends_on: deps.iter().map(|d| (*d).to_owned()).collect(),
+                links: deps
+                    .iter()
+                    .map(|d| (Rel::DependsOn, (*d).to_owned()))
+                    .collect(),
             },
             &CLAUDE,
         )
@@ -614,11 +618,15 @@ fn drive(ws: &mut Workspace, choices: &[(u8, u8, u8)]) {
             (0, _, _) | (_, None, _) => {
                 let deps: Vec<&str> = Vec::new();
                 ws.execute(
-                    Command::CreateTask {
+                    Command::Create {
+                        kind: Kind::Task,
                         title: format!("task {a} {b}"),
                         body: String::new(),
                         priority: Some(b % 4 + 1),
-                        depends_on: deps.iter().map(|d| (*d).to_owned()).collect(),
+                        links: deps
+                            .iter()
+                            .map(|d| (Rel::DependsOn, (*d).to_owned()))
+                            .collect(),
                     },
                     &CLAUDE,
                 )

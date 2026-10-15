@@ -17,7 +17,7 @@ use crate::log::Mark;
 use crate::model::{Key, Kind, Rel, State};
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE events (
@@ -64,7 +64,27 @@ CREATE TABLE meta (
     k TEXT PRIMARY KEY,
     v TEXT NOT NULL
 ) WITHOUT ROWID;
+
+-- Keyword search over nodes. External content: the text lives in `nodes`; the index is kept in
+-- step by the code that applies events, never by triggers, so a rebuild can clear it at once.
+CREATE VIRTUAL TABLE nodes_fts USING fts5 (
+    title, body, content = 'nodes', content_rowid = 'rowid', tokenize = 'porter unicode61'
+);
+
+-- Embeddings, keyed by node and a hash of the text and model they came from. Derived data that
+-- a rebuild keeps, so rebuilding never re-embeds.
+CREATE TABLE vectors (
+    node  TEXT PRIMARY KEY,
+    hash  TEXT NOT NULL,
+    vec   BLOB NOT NULL
+) WITHOUT ROWID;
 ";
+
+/// The memory recall draws from: ratified lessons that are not already standing rules, accepted
+/// decisions, and findings.
+const RECALLABLE: &str = "((n.kind = 'lesson' AND n.state = 'ratified' \
+    AND coalesce(json_extract(n.props, '$.scope'), '') <> 'always') \
+    OR (n.kind = 'decision' AND n.state = 'accepted') OR n.kind = 'finding')";
 
 /// True when node `n` waits on a dependency that is neither done nor canceled.
 const BLOCKED: &str = "EXISTS (SELECT 1 FROM edges e JOIN nodes d ON d.id = e.dst \
@@ -201,7 +221,8 @@ impl Store {
         let tx = self.conn.transaction()?;
         if reset {
             tx.execute_batch(
-                "DELETE FROM events; DELETE FROM nodes; DELETE FROM edges; \
+                "INSERT INTO nodes_fts (nodes_fts) VALUES ('delete-all'); \
+                 DELETE FROM events; DELETE FROM nodes; DELETE FROM edges; \
                  DELETE FROM counters;",
             )?;
         }
@@ -419,6 +440,101 @@ impl Store {
             .collect()
     }
 
+    // ---- search ---------------------------------------------------------------------------
+
+    /// Keyword matches for an FTS5 query, best first (bm25, title weighted three to one).
+    pub fn keyword(&self, fts_query: &str, recall_only: bool, limit: usize) -> Result<Vec<Uuid>> {
+        let filter = if recall_only { RECALLABLE } else { "1" };
+        let sql = format!(
+            "SELECT n.id FROM nodes_fts JOIN nodes n ON n.rowid = nodes_fts.rowid \
+             WHERE nodes_fts MATCH ?1 AND {filter} \
+             ORDER BY bm25(nodes_fts, 3.0, 1.0), n.id LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let ids: Vec<String> = stmt
+            .query_map(
+                params![fts_query, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |r| r.get(0),
+            )?
+            .collect::<rusqlite::Result<_>>()?;
+        ids.iter().map(|s| parse_uuid(s)).collect()
+    }
+
+    /// Every node search may rank by meaning, with the text it is embedded from.
+    pub fn texts(&self, recall_only: bool) -> Result<Vec<(Uuid, String)>> {
+        let filter = if recall_only { RECALLABLE } else { "1" };
+        let sql = format!("SELECT n.id, n.title, n.body FROM nodes n WHERE {filter} ORDER BY n.id");
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(id, title, body)| Ok((parse_uuid(&id)?, format!("{title}\n{body}"))))
+            .collect()
+    }
+
+    /// Stored embeddings with the hash they were made under.
+    pub fn vectors(
+        &self,
+        recall_only: bool,
+    ) -> Result<std::collections::HashMap<Uuid, (String, Vec<f32>)>> {
+        let filter = if recall_only { RECALLABLE } else { "1" };
+        let sql = format!(
+            "SELECT v.node, v.hash, v.vec FROM vectors v JOIN nodes n ON n.id = v.node WHERE {filter}"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows: Vec<(String, String, Vec<u8>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(id, hash, blob)| {
+                let v = blob
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
+                    .collect();
+                Ok((parse_uuid(&id)?, (hash, v)))
+            })
+            .collect()
+    }
+
+    /// Store embeddings. Derived data: written outside the log's lock, idempotent by hash.
+    pub fn put_vectors(&mut self, items: &[(Uuid, String, Vec<f32>)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO vectors (node, hash, vec) VALUES (?1, ?2, ?3)",
+            )?;
+            for (id, hash, v) in items {
+                let blob: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+                stmt.execute(params![id.to_string(), hash, blob])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Ratified lessons marked as standing rules, oldest first.
+    pub fn always_rules(&self) -> Result<Vec<Brief>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key, title, state FROM nodes WHERE kind = 'lesson' AND state = 'ratified' \
+             AND json_extract(props, '$.scope') = 'always' ORDER BY id",
+        )?;
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(key, title, state)| {
+                Ok(Brief {
+                    key,
+                    title,
+                    state: state.parse()?,
+                })
+            })
+            .collect()
+    }
+
     pub fn snapshot(&self) -> Result<Snapshot> {
         let sql = format!("SELECT {NODE_COLS}, {BLOCKED} FROM nodes n ORDER BY n.id");
         let mut stmt = self.conn.prepare(&sql)?;
@@ -553,15 +669,21 @@ fn create(tx: &Transaction<'_>, e: &Event, node: Uuid, data: &NodeData) -> Resul
         e.at,
         e.by,
     ])?;
+    tx.prepare_cached(
+        "INSERT INTO nodes_fts (rowid, title, body) VALUES (last_insert_rowid(), ?1, ?2)",
+    )?
+    .execute(params![data.title, data.body])?;
     Ok(None)
 }
 
 fn set(tx: &Transaction<'_>, e: &Event, node: Uuid, p: &NodePatch) -> Result<Option<String>> {
-    let props: Option<String> = tx
-        .prepare_cached("SELECT props FROM nodes WHERE id = ?1")?
-        .query_row([node.to_string()], |r| r.get(0))
+    let current: Option<(i64, String, String, String)> = tx
+        .prepare_cached("SELECT rowid, title, body, props FROM nodes WHERE id = ?1")?
+        .query_row([node.to_string()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
         .optional()?;
-    let Some(props) = props else {
+    let Some((rowid, old_title, old_body, props)) = current else {
         return Ok(Some(format!(
             "event {}: set on unknown node {node}, skipped",
             e.id
@@ -596,6 +718,18 @@ fn set(tx: &Transaction<'_>, e: &Event, node: Uuid, p: &NodePatch) -> Result<Opt
         merged,
         e.at,
     ])?;
+    if p.title.is_some() || p.body.is_some() {
+        tx.prepare_cached(
+            "INSERT INTO nodes_fts (nodes_fts, rowid, title, body) VALUES ('delete', ?1, ?2, ?3)",
+        )?
+        .execute(params![rowid, old_title, old_body])?;
+        tx.prepare_cached("INSERT INTO nodes_fts (rowid, title, body) VALUES (?1, ?2, ?3)")?
+            .execute(params![
+                rowid,
+                p.title.as_deref().unwrap_or(&old_title),
+                p.body.as_deref().unwrap_or(&old_body)
+            ])?;
+    }
     Ok(None)
 }
 

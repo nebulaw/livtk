@@ -169,7 +169,7 @@ fn read_at(f: &mut File, offset: u64, n: u64) -> io::Result<Vec<u8>> {
 }
 
 /// FNV-1a, 64 bit: stable across Rust versions, which `std`'s hasher does not promise.
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in bytes {
         h ^= u64::from(b);

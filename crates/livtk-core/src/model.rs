@@ -8,23 +8,65 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// What a node is. Every kind shares the same storage and the same five event operations.
+/// What a node is. Every kind shares the same storage and the same event operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    /// Work to do, planned by Claude and acknowledged by the human.
     Task,
+    /// A rule learned from experience; binding once the human ratifies it.
+    Lesson,
+    /// A choice and its reasons; binding once the human accepts it.
+    Decision,
+    /// Something found out, kept for later; Claude records these freely.
+    Finding,
 }
 
 impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Task, Kind::Lesson, Kind::Decision, Kind::Finding];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Kind::Task => "task",
+            Kind::Lesson => "lesson",
+            Kind::Decision => "decision",
+            Kind::Finding => "finding",
+        }
+    }
+
+    /// The key prefix of this kind. Tasks use the project's own prefix instead.
+    pub const fn fixed_prefix(self) -> Option<&'static str> {
+        match self {
+            Kind::Task => None,
+            Kind::Lesson => Some("LES"),
+            Kind::Decision => Some("DEC"),
+            Kind::Finding => Some("FND"),
+        }
+    }
+
+    /// What recall draws from.
+    pub const fn is_memory(self) -> bool {
+        !matches!(self, Kind::Task)
+    }
+
+    /// Every state a node of this kind can be in.
+    pub const fn states(self) -> &'static [State] {
+        use State::*;
+        match self {
+            Kind::Task => &[
+                Backlog, Planned, Acked, Doing, Review, Done, Parked, Canceled,
+            ],
+            Kind::Lesson => &[Proposed, Ratified, Rejected, Retired],
+            Kind::Decision => &[Proposed, Accepted, Rejected, Superseded],
+            Kind::Finding => &[Recorded],
         }
     }
 
     pub const fn initial_state(self) -> State {
         match self {
             Kind::Task => State::Backlog,
+            Kind::Lesson | Kind::Decision => State::Proposed,
+            Kind::Finding => State::Recorded,
         }
     }
 
@@ -40,6 +82,14 @@ impl Kind {
             (Kind::Task, Done) => &[Doing],
             (Kind::Task, Parked) => &[Backlog, Planned],
             (Kind::Task, Canceled) => &[Backlog],
+            (Kind::Lesson, Proposed) => &[Ratified, Rejected],
+            (Kind::Lesson, Ratified) => &[Retired],
+            (Kind::Lesson, Rejected) => &[Proposed],
+            (Kind::Lesson, Retired) => &[Ratified],
+            (Kind::Decision, Proposed) => &[Accepted, Rejected],
+            (Kind::Decision, Accepted) => &[Superseded],
+            (Kind::Decision, Rejected) => &[Proposed],
+            _ => &[],
         }
     }
 
@@ -47,9 +97,30 @@ impl Kind {
         self.next_states(from).contains(&to)
     }
 
-    /// Whether only a human may make this move. Acknowledging a plan is the human gate.
+    /// Whether only a human may make this move: acknowledging a plan, and deciding what binds
+    /// Claude (ratifying, rejecting and retiring lessons; accepting and rejecting decisions).
     pub const fn human_only(self, from: State, to: State) -> bool {
-        matches!((self, from, to), (Kind::Task, State::Planned, State::Acked))
+        use State::*;
+        matches!(
+            (self, from, to),
+            (Kind::Task, Planned, Acked)
+                | (Kind::Lesson, Proposed, Ratified | Rejected)
+                | (Kind::Lesson, Ratified, Retired)
+                | (Kind::Lesson, Retired, Ratified)
+                | (Kind::Decision, Proposed, Accepted | Rejected)
+        )
+    }
+
+    /// Where a node goes when its text changes while it binds: what the human approved is no
+    /// longer what it says, so it needs approving again.
+    pub const fn on_edit(self, state: State) -> Option<State> {
+        match (self, state) {
+            (Kind::Task, State::Acked) => Some(State::Planned),
+            (Kind::Lesson, State::Ratified) | (Kind::Decision, State::Accepted) => {
+                Some(State::Proposed)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -63,12 +134,15 @@ impl FromStr for Kind {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "task" => Ok(Kind::Task),
-            _ => Err(Error::Invalid(format!(
-                "unknown kind `{s}`; this livtk may be older than the data"
-            ))),
-        }
+        Kind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "unknown kind `{s}`; one of: {}",
+                    Kind::ALL.map(Kind::as_str).join(", ")
+                ))
+            })
     }
 }
 
@@ -84,17 +158,32 @@ pub enum State {
     Done,
     Parked,
     Canceled,
+    Proposed,
+    Ratified,
+    Rejected,
+    Retired,
+    Accepted,
+    Superseded,
+    Recorded,
 }
 
 impl State {
-    pub const ALL: [State; 8] = [
+    /// Every state, in display order: what is in hand first, what is over last.
+    pub const ALL: [State; 15] = [
         State::Doing,
         State::Review,
         State::Acked,
         State::Planned,
+        State::Proposed,
+        State::Ratified,
+        State::Accepted,
+        State::Recorded,
         State::Backlog,
         State::Parked,
         State::Done,
+        State::Superseded,
+        State::Retired,
+        State::Rejected,
         State::Canceled,
     ];
 
@@ -108,26 +197,39 @@ impl State {
             State::Done => "done",
             State::Parked => "parked",
             State::Canceled => "canceled",
+            State::Proposed => "proposed",
+            State::Ratified => "ratified",
+            State::Rejected => "rejected",
+            State::Retired => "retired",
+            State::Accepted => "accepted",
+            State::Superseded => "superseded",
+            State::Recorded => "recorded",
         }
     }
 
-    /// Display order: the work in hand first, the finished last.
+    /// Position in [`State::ALL`].
     pub const fn rank(self) -> u8 {
-        match self {
-            State::Doing => 0,
-            State::Review => 1,
-            State::Acked => 2,
-            State::Planned => 3,
-            State::Backlog => 4,
-            State::Parked => 5,
-            State::Done => 6,
-            State::Canceled => 7,
+        let mut i = 0;
+        while i < State::ALL.len() {
+            if State::ALL[i] as u8 == self as u8 {
+                return i as u8;
+            }
+            i += 1;
         }
+        u8::MAX
     }
 
     /// Finished one way or another. A closed dependency no longer blocks.
     pub const fn is_closed(self) -> bool {
         matches!(self, State::Done | State::Canceled)
+    }
+
+    /// Still part of the picture: shown in lists unless asked for everything.
+    pub const fn is_active(self) -> bool {
+        !matches!(
+            self,
+            State::Done | State::Canceled | State::Rejected | State::Retired | State::Superseded
+        )
     }
 }
 
@@ -242,6 +344,17 @@ pub fn validate_prefix(prefix: &str) -> Result<(), Error> {
     }
 }
 
+/// A prefix a project may choose for its tasks: valid, and not one the other kinds use.
+pub fn validate_project_prefix(prefix: &str) -> Result<(), Error> {
+    validate_prefix(prefix)?;
+    if Kind::ALL.iter().any(|k| k.fixed_prefix() == Some(prefix)) {
+        return Err(Error::Invalid(format!(
+            "prefix `{prefix}` is reserved for lessons, decisions or findings; pick another"
+        )));
+    }
+    Ok(())
+}
+
 /// The default prefix for a project directory: its first three letters or digits, uppercased.
 pub fn default_prefix(project_name: &str) -> String {
     let prefix: String = project_name
@@ -250,7 +363,7 @@ pub fn default_prefix(project_name: &str) -> String {
         .take(3)
         .map(|c| c.to_ascii_uppercase())
         .collect();
-    if validate_prefix(&prefix).is_ok() {
+    if validate_project_prefix(&prefix).is_ok() {
         prefix
     } else {
         "T".to_owned()
@@ -314,30 +427,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_listed_move_is_legal_and_nothing_else() {
-        for from in State::ALL {
-            for to in State::ALL {
-                let listed = Kind::Task.next_states(from).contains(&to);
-                assert_eq!(Kind::Task.can_move(from, to), listed, "{from} -> {to}");
+    fn moves_stay_inside_each_kinds_states() {
+        for kind in Kind::ALL {
+            assert!(kind.states().contains(&kind.initial_state()), "{kind}");
+            for &from in kind.states() {
+                for &to in kind.next_states(from) {
+                    assert!(kind.states().contains(&to), "{kind}: {from} -> {to}");
+                    assert_ne!(from, to, "{kind}: {from} -> itself");
+                }
             }
-            assert!(!Kind::Task.can_move(from, from), "{from} -> itself");
+            for from in State::ALL
+                .into_iter()
+                .filter(|s| !kind.states().contains(s))
+            {
+                assert!(
+                    kind.next_states(from).is_empty(),
+                    "{kind} has no state {from}"
+                );
+            }
         }
     }
 
     #[test]
-    fn only_acknowledging_a_plan_is_human_only() {
-        for from in State::ALL {
-            for to in State::ALL {
-                let expected = from == State::Planned && to == State::Acked;
-                assert_eq!(Kind::Task.human_only(from, to), expected, "{from} -> {to}");
+    fn the_human_gates_are_exactly_these() {
+        use State::*;
+        let gates = [
+            (Kind::Task, Planned, Acked),
+            (Kind::Lesson, Proposed, Ratified),
+            (Kind::Lesson, Proposed, Rejected),
+            (Kind::Lesson, Ratified, Retired),
+            (Kind::Lesson, Retired, Ratified),
+            (Kind::Decision, Proposed, Accepted),
+            (Kind::Decision, Proposed, Rejected),
+        ];
+        for kind in Kind::ALL {
+            for from in State::ALL {
+                for to in State::ALL {
+                    let expected = gates.contains(&(kind, from, to));
+                    assert_eq!(
+                        kind.human_only(from, to),
+                        expected,
+                        "{kind}: {from} -> {to}"
+                    );
+                    if expected {
+                        assert!(
+                            kind.can_move(from, to),
+                            "a gate on a move that cannot happen"
+                        );
+                    }
+                }
             }
         }
     }
 
     #[test]
-    fn every_state_can_reach_every_open_state_again() {
-        // No dead ends: from anywhere, some path leads back to backlog.
-        for start in State::ALL {
+    fn task_states_can_always_return_to_backlog() {
+        for &start in Kind::Task.states() {
             let mut seen = vec![start];
             let mut i = 0;
             while i < seen.len() {
@@ -352,6 +497,25 @@ mod tests {
                 seen.contains(&State::Backlog),
                 "{start} cannot return to backlog"
             );
+        }
+    }
+
+    #[test]
+    fn editing_what_binds_asks_for_approval_again() {
+        assert_eq!(Kind::Task.on_edit(State::Acked), Some(State::Planned));
+        assert_eq!(Kind::Lesson.on_edit(State::Ratified), Some(State::Proposed));
+        assert_eq!(
+            Kind::Decision.on_edit(State::Accepted),
+            Some(State::Proposed)
+        );
+        assert_eq!(Kind::Task.on_edit(State::Doing), None);
+        assert_eq!(Kind::Finding.on_edit(State::Recorded), None);
+    }
+
+    #[test]
+    fn ranks_follow_the_display_order() {
+        for (i, s) in State::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(s.rank()), i, "{s}");
         }
     }
 
@@ -378,6 +542,19 @@ mod tests {
         assert_eq!(default_prefix("livspeil"), "LIV");
         assert_eq!(default_prefix("my-app"), "MYA");
         assert_eq!(default_prefix("9lives"), "T");
+        assert!(
+            validate_project_prefix("LES").is_err(),
+            "reserved for lessons"
+        );
+        assert!(
+            "LES-3".parse::<Key>().is_ok(),
+            "but a lesson key still parses"
+        );
+        assert_eq!(
+            default_prefix("lessons-app"),
+            "T",
+            "never defaults to a reserved prefix"
+        );
         assert_eq!(default_prefix(""), "T");
     }
 

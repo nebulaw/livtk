@@ -13,8 +13,19 @@ use uuid::Uuid;
 
 use crate::event::{EdgeData, Event, NodeData, NodePatch, NoteData, Op};
 use crate::log::{self, Log};
-use crate::model::{Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_prefix};
+use crate::model::{
+    Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
+};
+#[cfg(feature = "embed")]
+use crate::search::Model;
+use crate::search::{
+    CANDIDATES, DEFAULT_MODEL, Embed, Hit, cosine, cosine_bar, fts_query, fuse, matched_terms,
+    models_dir, query_terms, text_hash,
+};
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
+
+/// Recall injects at most this many items into a prompt.
+pub const RECALL_MAX: usize = 3;
 use crate::{Error, Result};
 
 pub const DIR_NAME: &str = ".livtk";
@@ -30,6 +41,30 @@ pub struct Config {
     pub prefix: String,
     #[serde(default, skip_serializing_if = "Hooks::is_default")]
     pub hooks: Hooks,
+    #[serde(default, skip_serializing_if = "Memory::is_default")]
+    pub memory: Memory,
+}
+
+/// Memory settings. Every field is optional.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Memory {
+    /// The model2vec model in the models directory; `none` turns ranking by meaning off.
+    pub model: String,
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Memory {
+            model: DEFAULT_MODEL.to_owned(),
+        }
+    }
+}
+
+impl Memory {
+    fn is_default(&self) -> bool {
+        *self == Memory::default()
+    }
 }
 
 impl Config {
@@ -84,11 +119,14 @@ pub fn find_dir(start: &Path) -> Result<PathBuf> {
 /// a node id.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    CreateTask {
+    /// Create a node of any kind, with links from it to existing nodes.
+    Create {
+        kind: Kind,
         title: String,
         body: String,
+        /// Tasks only; other kinds keep the default.
         priority: Option<u8>,
-        depends_on: Vec<String>,
+        links: Vec<(Rel, String)>,
     },
     Edit {
         node: String,
@@ -118,6 +156,22 @@ pub enum Command {
         node: String,
         text: String,
     },
+    /// Ratify a lesson (human only). `always` makes it a standing rule shown at every session
+    /// start; otherwise it is recalled when relevant. On a ratified lesson, changes only that.
+    Ratify {
+        node: String,
+        always: bool,
+    },
+}
+
+/// What a search draws from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// Every node.
+    All,
+    /// What binds or informs Claude: ratified lessons that are not standing rules, accepted
+    /// decisions, findings.
+    Recall,
 }
 
 /// A node's dependencies in both directions.
@@ -135,6 +189,11 @@ pub struct Workspace {
     log: Log,
     store: Store,
     warnings: Vec<String>,
+    models_dir: Option<PathBuf>,
+    /// The embedding model: not looked for yet (`None`), absent (`Some(None)`), or loaded.
+    model: Option<Option<Box<dyn Embed>>>,
+    /// Texts embedded by this workspace so far; stored vectors are reused, never recounted.
+    embedded: usize,
 }
 
 impl Workspace {
@@ -148,7 +207,7 @@ impl Workspace {
         let prefix = match prefix {
             Some(p) => {
                 let p = p.trim().to_ascii_uppercase();
-                validate_prefix(&p)?;
+                validate_project_prefix(&p)?;
                 p
             }
             None => default_prefix(
@@ -163,6 +222,7 @@ impl Workspace {
             version: CONFIG_VERSION,
             prefix,
             hooks: Hooks::default(),
+            memory: Memory::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -193,6 +253,9 @@ impl Workspace {
             log: Log::new(dir.join("events.jsonl")),
             store,
             warnings: Vec::new(),
+            models_dir: models_dir(),
+            model: None,
+            embedded: 0,
         };
         if !ws.store.has_current_schema()? {
             let _lock = ws.lock()?;
@@ -305,6 +368,11 @@ impl Workspace {
         Ok(Links { depends_on, blocks })
     }
 
+    /// The nodes `reference` links to over `rel`, and the nodes linking to it.
+    pub fn related(&self, reference: &str, rel: Rel) -> Result<(Vec<Brief>, Vec<Brief>)> {
+        self.store.links(self.resolve(reference)?, rel)
+    }
+
     /// The events about one node, or the whole log, oldest first.
     pub fn history(&self, reference: Option<&str>) -> Result<Vec<Event>> {
         match reference {
@@ -315,6 +383,164 @@ impl Workspace {
 
     pub fn snapshot(&self) -> Result<Snapshot> {
         self.store.snapshot()
+    }
+
+    /// Nodes of a kind in the given states, or in every state when `states` is empty.
+    pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
+        self.store.list(kind, states)
+    }
+
+    /// Everything waiting for the human: plans to acknowledge, lessons to ratify, decisions to
+    /// accept.
+    pub fn inbox(&self) -> Result<Vec<Summary>> {
+        let mut out = self.store.list(Kind::Task, &[State::Planned])?;
+        out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
+        out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
+        Ok(out)
+    }
+
+    /// Ratified lessons marked as standing rules.
+    pub fn always_rules(&self) -> Result<Vec<Brief>> {
+        self.store.always_rules()
+    }
+
+    /// Use models from `dir` instead of the default models directory; `None` turns ranking by
+    /// meaning off.
+    pub fn set_models_dir(&mut self, dir: Option<PathBuf>) {
+        self.models_dir = dir;
+        self.model = None;
+    }
+
+    /// The model search ranks meaning with, and whether it is installed and loads.
+    pub fn model_status(&mut self) -> (String, Option<PathBuf>, bool) {
+        let name = self.config.memory.model.clone();
+        let path = self.models_dir.as_ref().map(|d| d.join(&name));
+        let model = self.take_model();
+        let loaded = model.is_some();
+        self.model = Some(model);
+        (name, path, loaded)
+    }
+
+    /// How many texts this workspace has embedded since it was opened. Stored vectors whose text
+    /// is unchanged are reused and not counted.
+    pub fn embedded(&self) -> usize {
+        self.embedded
+    }
+
+    /// Ranked search: keywords and meaning, fused. Embeds any node whose text is new or changed
+    /// since it was last embedded, and keeps the vectors.
+    pub fn search(&mut self, query: &str, scope: Scope, limit: usize) -> Result<Vec<Hit>> {
+        let terms = query_terms(query);
+        let recall_only = scope == Scope::Recall;
+        let keyword = match fts_query(&terms) {
+            Some(q) => self.store.keyword(&q, recall_only, CANDIDATES)?,
+            None => Vec::new(),
+        };
+        let model = self.take_model();
+        let ranked = model
+            .as_deref()
+            .map(|m| self.rank_by_meaning(m, query, recall_only))
+            .transpose();
+        self.model = Some(model);
+        let cosines = ranked?.unwrap_or_default();
+        let dense: Vec<Uuid> = cosines.iter().take(CANDIDATES).map(|(id, _)| *id).collect();
+        let mut hits = Vec::new();
+        for (id, score) in fuse(&[&keyword, &dense]).into_iter().take(limit) {
+            let Some(n) = self.store.node(id)? else {
+                continue;
+            };
+            hits.push(Hit {
+                id,
+                terms: matched_terms(&terms, &format!("{}\n{}", n.title, n.body)),
+                cosine: cosines.iter().find(|(i, _)| *i == id).map(|(_, c)| *c),
+                key: n.key,
+                kind: n.kind,
+                state: n.state,
+                title: n.title,
+                score,
+            });
+        }
+        Ok(hits)
+    }
+
+    /// What binds or informs Claude for this prompt: at most [`RECALL_MAX`] items that pass the
+    /// relevance bar, best first.
+    pub fn recall(&mut self, query: &str) -> Result<Vec<Hit>> {
+        let needed = query_terms(query).len().clamp(1, 2);
+        let bar = cosine_bar(&self.config.memory.model);
+        Ok(self
+            .search(query, Scope::Recall, CANDIDATES)?
+            .into_iter()
+            .filter(|h| h.cosine.is_some_and(|c| c >= bar) || h.terms >= needed)
+            .take(RECALL_MAX)
+            .collect())
+    }
+
+    /// Every candidate's cosine to the query, best first.
+    fn rank_by_meaning(
+        &mut self,
+        model: &dyn Embed,
+        query: &str,
+        recall_only: bool,
+    ) -> Result<Vec<(Uuid, f32)>> {
+        let texts = self.store.texts(recall_only)?;
+        let stored = self.store.vectors(recall_only)?;
+        let mut vectors: Vec<(Uuid, Vec<f32>)> = Vec::with_capacity(texts.len());
+        let mut missing: Vec<(Uuid, String, String)> = Vec::new();
+        for (id, text) in texts {
+            let hash = text_hash(model.name(), &text);
+            match stored.get(&id) {
+                Some((h, v)) if *h == hash => vectors.push((id, v.clone())),
+                _ => missing.push((id, hash, text)),
+            }
+        }
+        if !missing.is_empty() {
+            let fresh = model.embed(&missing.iter().map(|m| m.2.clone()).collect::<Vec<_>>())?;
+            self.embedded += missing.len();
+            let rows: Vec<(Uuid, String, Vec<f32>)> = missing
+                .into_iter()
+                .zip(fresh)
+                .map(|((id, hash, _), v)| (id, hash, v))
+                .collect();
+            self.store.put_vectors(&rows)?;
+            vectors.extend(rows.into_iter().map(|(id, _, v)| (id, v)));
+        }
+        let q = model.embed(&[query.to_owned()])?.pop().unwrap_or_default();
+        let mut cosines: Vec<(Uuid, f32)> =
+            vectors.iter().map(|(id, v)| (*id, cosine(&q, v))).collect();
+        cosines.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(cosines)
+    }
+
+    /// The loaded model, loading it on first use. The caller puts it back in `self.model`.
+    fn take_model(&mut self) -> Option<Box<dyn Embed>> {
+        if let Some(loaded) = self.model.take() {
+            return loaded;
+        }
+        let name = &self.config.memory.model;
+        if name == "none" || name.is_empty() {
+            return None;
+        }
+        let dir = self.models_dir.clone()?;
+        #[cfg(feature = "embed")]
+        {
+            if !dir.join(name).exists() {
+                return None;
+            }
+            match Model::load(&dir, name) {
+                Ok(m) => Some(Box::new(m)),
+                Err(e) => {
+                    self.warnings
+                        .push(format!("{e}; searching by keywords only"));
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "embed"))]
+        {
+            let _ = dir;
+            None
+        }
     }
 
     // ---- internals ------------------------------------------------------------------------
@@ -388,46 +614,49 @@ impl Workspace {
     /// Check a command against the current state and turn it into operations.
     fn lower(&self, cmd: Command, by: &Actor) -> Result<Vec<Op>> {
         match cmd {
-            Command::CreateTask {
+            Command::Create {
+                kind,
                 title,
                 body,
                 priority,
-                depends_on,
+                links,
             } => {
                 let title = clean_title(&title)?;
-                let priority = priority
-                    .map(Priority::new)
-                    .transpose()?
-                    .unwrap_or(Priority::DEFAULT);
-                let mut deps = Vec::new();
-                for r in &depends_on {
-                    let d = self.resolve(r)?;
-                    if !deps.contains(&d) {
-                        deps.push(d);
+                let priority = match (kind, priority) {
+                    (Kind::Task, Some(p)) => Priority::new(p)?,
+                    (_, Some(_)) => {
+                        return Err(Error::Invalid(format!("a {kind} has no priority")));
+                    }
+                    (_, None) => Priority::DEFAULT,
+                };
+                let mut targets: Vec<(Rel, Uuid)> = Vec::new();
+                for (rel, r) in &links {
+                    let d = self.node(r)?;
+                    check_link(kind, *rel, &d)?;
+                    if !targets.contains(&(*rel, d.id)) {
+                        targets.push((*rel, d.id));
                     }
                 }
+                let prefix = kind.fixed_prefix().unwrap_or(&self.config.prefix);
                 let node = Uuid::now_v7();
-                let key = Key::new(
-                    &self.config.prefix,
-                    self.store.next_number(&self.config.prefix)?,
-                );
+                let key = Key::new(prefix, self.store.next_number(prefix)?);
                 let mut ops = vec![Op::NodeCreate {
                     node,
                     data: NodeData {
-                        kind: Kind::Task,
+                        kind,
                         key: key.to_string(),
                         title,
                         body,
-                        state: Kind::Task.initial_state(),
+                        state: kind.initial_state(),
                         priority,
                         props: serde_json::Map::new(),
                     },
                 }];
-                ops.extend(deps.into_iter().map(|dst| Op::EdgeAdd {
+                ops.extend(targets.into_iter().map(|(rel, dst)| Op::EdgeAdd {
                     data: EdgeData {
                         src: node,
                         dst,
-                        rel: Rel::DependsOn,
+                        rel,
                     },
                 }));
                 Ok(ops)
@@ -449,10 +678,8 @@ impl Workspace {
                 if patch.is_empty() {
                     return Ok(Vec::new());
                 }
-                // The acknowledgement covered the plan as it was; a changed plan needs a new one.
-                if n.state == State::Acked {
-                    patch.state = Some(State::Planned);
-                }
+                // The human approved the text as it was; changed text needs approving again.
+                patch.state = n.kind.on_edit(n.state);
                 Ok(vec![Op::NodeSet {
                     node: n.id,
                     data: patch,
@@ -461,13 +688,49 @@ impl Workspace {
             Command::Move { node, to } => {
                 let n = self.node(&node)?;
                 self.check_move(&n, to, by)?;
-                Ok(vec![Op::NodeSet {
-                    node: n.id,
-                    data: NodePatch {
-                        state: Some(to),
-                        ..NodePatch::default()
-                    },
-                }])
+                self.move_ops(&n, to, by)
+            }
+            Command::Ratify { node, always } => {
+                let n = self.node(&node)?;
+                if n.kind != Kind::Lesson {
+                    return Err(Error::Invalid(format!(
+                        "{} is a {}; only lessons are ratified (decisions are accepted)",
+                        n.key, n.kind
+                    )));
+                }
+                let scope = if always {
+                    serde_json::Value::String("always".into())
+                } else {
+                    serde_json::Value::Null
+                };
+                let mut props = serde_json::Map::new();
+                props.insert("scope".into(), scope.clone());
+                if n.state == State::Ratified {
+                    if !by.is_human() {
+                        return Err(Error::Refused(human_only_reason(&n)));
+                    }
+                    let current = n
+                        .props
+                        .get("scope")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    if current == scope {
+                        return Ok(Vec::new());
+                    }
+                    return Ok(vec![Op::NodeSet {
+                        node: n.id,
+                        data: NodePatch {
+                            props: Some(props),
+                            ..NodePatch::default()
+                        },
+                    }]);
+                }
+                self.check_move(&n, State::Ratified, by)?;
+                let mut ops = self.move_ops(&n, State::Ratified, by)?;
+                if let Some(Op::NodeSet { data, .. }) = ops.first_mut() {
+                    data.props = Some(props);
+                }
+                Ok(ops)
             }
             Command::SetPriority { node, priority } => {
                 let n = self.node(&node)?;
@@ -491,9 +754,12 @@ impl Workspace {
                 if self.store.edge_exists(s.id, rel, d.id)? {
                     return Ok(Vec::new());
                 }
-                if rel == Rel::DependsOn && self.store.reaches(d.id, s.id, Rel::DependsOn)? {
+                check_link(s.kind, rel, &d)?;
+                if matches!(rel, Rel::DependsOn | Rel::Supersedes | Rel::Parent)
+                    && self.store.reaches(d.id, s.id, rel)?
+                {
                     return Err(Error::Refused(format!(
-                        "{} already depends on {} (directly or through others); this would make a cycle",
+                        "{} already leads back to {} through `{rel}` links; this would make a cycle",
                         d.key, s.key
                     )));
                 }
@@ -561,10 +827,7 @@ impl Workspace {
             )));
         }
         if n.kind.human_only(from, to) && !by.is_human() {
-            return Err(Error::Refused(format!(
-                "only a human can acknowledge {}; ask the developer to run `livtk ack {}` or to acknowledge it in the app",
-                n.key, n.key
-            )));
+            return Err(Error::Refused(human_only_reason(n)));
         }
         if to == State::Doing {
             let (deps, _) = self.store.links(n.id, Rel::DependsOn)?;
@@ -583,6 +846,69 @@ impl Workspace {
         }
         Ok(())
     }
+
+    /// The operations of a checked move, with what it implies: ratifying a lesson retires the
+    /// ratified lessons it supersedes; accepting a decision supersedes the accepted ones it
+    /// replaces.
+    fn move_ops(&self, n: &Node, to: State, by: &Actor) -> Result<Vec<Op>> {
+        let set = |id: Uuid, state: State| Op::NodeSet {
+            node: id,
+            data: NodePatch {
+                state: Some(state),
+                ..NodePatch::default()
+            },
+        };
+        let mut ops = vec![set(n.id, to)];
+        let replaced = match (n.kind, to) {
+            (Kind::Lesson, State::Ratified) => Some((State::Ratified, State::Retired)),
+            (Kind::Decision, State::Accepted) => Some((State::Accepted, State::Superseded)),
+            _ => None,
+        };
+        if let Some((from, into)) = replaced {
+            let (older, _) = self.store.links(n.id, Rel::Supersedes)?;
+            for b in older.iter().filter(|b| b.state == from) {
+                let old = self.node(&b.key)?;
+                self.check_move(&old, into, by)?;
+                ops.push(set(old.id, into));
+            }
+        }
+        Ok(ops)
+    }
+}
+
+/// Why Claude may not take a step that belongs to the human.
+fn human_only_reason(n: &Node) -> String {
+    match n.kind {
+        Kind::Lesson => format!(
+            "only a human can ratify, reject or retire a lesson; ask the developer to run `livtk ratify {}` (or `reject`) or to decide in the app",
+            n.key
+        ),
+        Kind::Decision => format!(
+            "only a human can accept or reject a decision; ask the developer to run `livtk accept {}` (or `reject`) or to decide in the app",
+            n.key
+        ),
+        _ => format!(
+            "only a human can acknowledge {}; ask the developer to run `livtk ack {}` or to acknowledge it in the app",
+            n.key, n.key
+        ),
+    }
+}
+
+/// Which links a node of `kind` may have to `dst`.
+fn check_link(kind: Kind, rel: Rel, dst: &Node) -> Result<()> {
+    let ok = match rel {
+        Rel::DependsOn | Rel::Parent => kind == Kind::Task && dst.kind == Kind::Task,
+        Rel::Supersedes => matches!(kind, Kind::Lesson | Kind::Decision) && dst.kind == kind,
+        Rel::LearnedFrom | Rel::Relates => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Invalid(format!(
+            "a {kind} cannot have a `{rel}` link to {} (a {})",
+            dst.key, dst.kind
+        )))
+    }
 }
 
 fn load_config(dir: &Path) -> Result<Config> {
@@ -599,7 +925,7 @@ fn load_config(dir: &Path) -> Result<Config> {
             config.version
         )));
     }
-    validate_prefix(&config.prefix).map_err(|e| bad(e.to_string()))?;
+    validate_project_prefix(&config.prefix).map_err(|e| bad(e.to_string()))?;
     Ok(config)
 }
 

@@ -8,11 +8,15 @@ mod error;
 pub mod event;
 mod log;
 pub mod model;
+pub mod search;
 mod store;
 mod workspace;
 
 pub use error::{Error, Result};
 pub use event::{Event, Op};
 pub use model::{Actor, Kind, Rel, State};
+pub use search::Hit;
 pub use store::{Brief, Node, Snapshot, Summary};
-pub use workspace::{Command, Config, DIR_NAME, Hooks, Links, Workspace, find_dir};
+pub use workspace::{
+    Command, Config, DIR_NAME, Hooks, Links, Memory, RECALL_MAX, Scope, Workspace, find_dir,
+};

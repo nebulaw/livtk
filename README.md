@@ -50,6 +50,29 @@ livtk log                           # every event in the project
 
 Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 
+## Memory
+
+Claude proposes what it learns; you decide what binds it.
+
+```
+livtk lesson "Run cargo check before reporting a task done" --why "a broken build was reported done"
+livtk decision "SQLite for local tools" --body "one file, no daemon"
+livtk finding "winit panics on resize under NVIDIA" --body "seen with driver 580"
+livtk inbox                          # everything waiting for you
+livtk ratify LES-1                   # a rule, recalled when relevant (human only)
+livtk ratify LES-1 --always          # a standing rule, shown at every session start
+livtk accept DEC-1                   # human only; reject and retire too
+livtk recall "is the task done?"     # what a prompt would bring back
+livtk search "resize"                # every node, by keywords and meaning
+livtk embed setup                    # once: the local model (128 MB) for ranking by meaning
+```
+
+Lessons, decisions and findings have their own keys (`LES-1`, `DEC-1`, `FND-1`). Editing a
+ratified lesson or an accepted decision sends it back for approval, as with tasks. With the
+plugin, each prompt carries at most three relevant rules, decisions or findings, and a prompt
+that reads like a correction nudges Claude to propose a lesson. Without the model, search and
+recall use keywords only.
+
 States: `backlog → planned → acked → doing → review → done`, plus `parked` and `canceled`.
 Only a human can acknowledge (`planned → acked`); editing an acknowledged plan sends it back to
 `planned`. A command run by Claude Code (which sets `CLAUDECODE=1`) acts as Claude; anything else

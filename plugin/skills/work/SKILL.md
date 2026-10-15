@@ -13,7 +13,8 @@ description: Carry acknowledged livtk tasks through to done, one at a time. Use 
 3. **Do the work.** A self-contained implementation step can go to the `livtk:implementer` agent.
 4. **Verify.** Run the acceptance check yourself and look at the real result.
 5. **Keep the record.** Write what you tried, what failed and what you decided as notes:
-   `livtk note KEY "..."`. Notes never change the plan.
+   `livtk note KEY "..."`. Notes never change the plan. Something that should hold beyond this
+   task becomes a lesson, decision or finding (the `livtk:remember` skill).
 6. **Review.** `livtk move KEY review`, then use the `livtk:review` skill.
 7. **Finish.** If the review upholds every point: `livtk done KEY`, and commit the work together
    with `.livtk/`. If it refutes one: `livtk move KEY doing`, note what failed, fix it, and review

@@ -8,8 +8,8 @@ description: Turn a goal into livtk tasks that the human acknowledges before any
 The human acknowledges every plan before work on it starts. Your job here is a plan worth
 acknowledging, then to stop.
 
-1. **Understand the goal.** Read the code it touches. Ask the human only what the code cannot
-   answer.
+1. **Understand the goal.** Run `livtk recall "<the goal>"` for rules and decisions that apply,
+   and follow them. Read the code it touches. Ask the human only what the code cannot answer.
 2. **Split it into tasks.** Each task is one reviewable change (about one commit) that ends in
    something checkable. Prefer a few clear tasks over many tiny ones.
 3. **Create each task with a plan in its body:**

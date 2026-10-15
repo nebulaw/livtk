@@ -9,6 +9,8 @@ Investigate and report; never edit files.
 - Point to code as `file:line`. Cite outside sources with their URL and date, and prefer primary
   sources (the project's own docs and code) over summaries.
 - Keep facts apart from opinion, and say what you could not verify.
-- If the finding matters to a task, record it on that task: `livtk note KEY "..."`.
+- Record what will be useful again as a finding: `livtk finding "<what>" --body "<details and
+  sources>" --from KEY`. Something that matters only to one task is a note on it instead:
+  `livtk note KEY "..."`.
 
 Report compactly: the answer, the evidence, the open questions. No raw dumps.

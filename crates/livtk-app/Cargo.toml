@@ -1,0 +1,30 @@
+[package]
+name = "livtk-app"
+description = "The livtk desktop app: the human's view of the work, its inbox and its memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "livtk-app"
+path = "src/main.rs"
+
+[dependencies]
+livtk-core.workspace = true
+gpui-kit.workspace = true
+jiff.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The test harness, switched on in the GPUI that gpui-kit 0.7.3 is built on. gpui-kit's own
+# `test-support` also pulls in its alternative gpui-fast stack, whose pinned macOS crates clash
+# with this GPUI, so the feature is enabled underneath instead; Cargo unifies it.
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["test-support"] }
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

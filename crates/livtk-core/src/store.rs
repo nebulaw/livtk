@@ -130,6 +130,8 @@ pub struct Summary {
     pub priority: u8,
     pub updated: String,
     pub blocked: bool,
+    /// A ratified lesson marked as a standing rule.
+    pub standing: bool,
 }
 
 /// A short reference to a node, for lists of links.
@@ -300,7 +302,8 @@ impl Store {
     pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
         let wanted: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
         let sql = format!(
-            "SELECT n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, {BLOCKED} \
+            "SELECT n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, {BLOCKED}, \
+             coalesce(json_extract(n.props, '$.scope'), '') = 'always' \
              FROM nodes n WHERE n.kind = ?1 \
              AND (?2 = '[]' OR n.state IN (SELECT value FROM json_each(?2)))"
         );
@@ -320,6 +323,7 @@ impl Store {
                 priority: row.get(5)?,
                 updated: row.get(6)?,
                 blocked: row.get(7)?,
+                standing: row.get(8)?,
             });
         }
         // Sorting here rather than in SQL keeps SQLite from copying rows through its sorter.

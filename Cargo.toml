@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/livtk-core", "crates/livtk-cli"]
+members = ["crates/livtk-core", "crates/livtk-cli", "crates/livtk-app"]
+# The app pulls in a whole UI stack; plain `cargo build` and `cargo test` leave it out.
+default-members = ["crates/livtk-core", "crates/livtk-cli"]
 
 [workspace.package]
 version = "0.3.0"
@@ -14,6 +16,7 @@ livtk-core = { path = "crates/livtk-core" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 jiff = "0.2.38"
+gpui-kit = "=0.7.3"
 model2vec-rs = { version = "0.3.0", default-features = false, features = ["local-only", "fancy-regex"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -30,6 +33,11 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[profile.dev.package."*"]
+# Dependencies need no debug info: we debug our own code, and debug info is most of the size of
+# the GPUI stack (an 11 GB target directory with it).
+debug = false
 
 [profile.release]
 lto = "thin"

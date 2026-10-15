@@ -78,10 +78,39 @@ Only a human can acknowledge (`planned → acked`); editing an acknowledged plan
 `planned`. A command run by Claude Code (which sets `CLAUDECODE=1`) acts as Claude; anything else
 acts as the human. Refusals by a rule exit with code 3.
 
+## The app
+
+```
+cargo install --locked --path crates/livtk-app
+livtk-app                    # every project `livtk init` registered
+livtk-app ~/code/project     # open one (and remember it)
+```
+
+The human's control surface: an Inbox of everything waiting for you, tasks as a list or a board,
+lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
+Changes from Claude show up while it is open, and flash once. Keyboard first:
+
+| Keys | |
+|---|---|
+| `j` `k` | move |
+| `Enter` `Esc` | open, close the detail panel |
+| `a` | decide: acknowledge, ratify, accept |
+| `s` | ratify as a standing rule |
+| `x` | reject |
+| `n` | new task |
+| `c` | add a note |
+| `1`-`4` | priority |
+| `g i` `g t` `g l` `g d` `g f` | Inbox, Tasks, Lessons, Decisions, Findings |
+| `b` | list or board |
+| `h` | show what is over too |
+| `[` `]` | previous, next project |
+| `o` | open a project folder |
+
 ## Develop
 
 ```
-cargo test                                           # everything
+cargo test                                           # core and CLI
+cargo test -p livtk-app                              # the app, with headless UI tests
 cargo test --release -p livtk-cli -- --ignored       # the speed budget on 10k tasks
 cargo clippy --all-targets && cargo fmt --check
 ```

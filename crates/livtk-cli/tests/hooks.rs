@@ -10,9 +10,14 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 fn hook(event: &str, input: &Value) -> Output {
+    hook_with_models(event, input, Path::new("/nonexistent/livtk-models"))
+}
+
+fn hook_with_models(event: &str, input: &Value, models: &Path) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_livtk"))
         .args(["hook", event])
         .env("CLAUDECODE", "1")
+        .env("LIVTK_MODELS_DIR", models)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -38,7 +43,9 @@ fn answer(event: &str, input: &Value) -> Option<Value> {
 
 fn livtk(dir: &Path, human: bool, args: &[&str]) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_livtk"));
-    cmd.current_dir(dir).args(args);
+    cmd.current_dir(dir)
+        .args(args)
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models");
     if human {
         cmd.env_remove("CLAUDECODE");
     } else {
@@ -317,9 +324,172 @@ fn a_passing_check_lets_the_agent_stop() {
     assert_eq!(answer("subagent-stop", &input), None);
 }
 
+// ---- memory ------------------------------------------------------------------------------------
+
+fn prompt(dir: &Path, text: &str) -> Option<Value> {
+    answer(
+        "user-prompt-submit",
+        &json!({ "hook_event_name": "UserPromptSubmit", "cwd": dir, "prompt": text }),
+    )
+}
+
+#[test]
+fn a_prompt_brings_back_the_rules_that_matter_and_nothing_else() {
+    let dir = project();
+    let d = dir.path();
+    livtk(
+        d,
+        false,
+        &[
+            "lesson",
+            "Run cargo check before reporting a task done",
+            "--why",
+            "x",
+        ],
+    );
+    livtk(d, true, &["ratify", "LES-1"]);
+    livtk(
+        d,
+        false,
+        &[
+            "lesson",
+            "Proposed rules never come back before ratification",
+            "--why",
+            "x",
+        ],
+    );
+
+    let v = prompt(d, "is the task done? did cargo check pass?").unwrap();
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+    let text = context_of(&v);
+    assert!(
+        text.contains("- LES-1 (rule) Run cargo check before reporting a task done"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("LES-2"),
+        "an unratified lesson binds nothing"
+    );
+
+    assert_eq!(
+        prompt(d, "draw a nicer icon for the dock"),
+        None,
+        "unrelated prompts get nothing"
+    );
+    assert_eq!(prompt(d, "   "), None);
+}
+
+#[test]
+fn a_correction_asks_claude_to_propose_a_lesson() {
+    let dir = project();
+    let v = prompt(
+        dir.path(),
+        "No, I told you to run the tests before committing.",
+    )
+    .unwrap();
+    assert!(context_of(&v).contains("livtk lesson"), "{v}");
+    let paste = format!("from now on {}", "x ".repeat(3000));
+    assert_eq!(prompt(dir.path(), &paste), None, "long pastes get no nudge");
+    assert_eq!(prompt(dir.path(), "add a save button"), None);
+}
+
+#[test]
+fn the_brief_carries_standing_rules_and_the_inbox() {
+    let dir = project();
+    let d = dir.path();
+    livtk(
+        d,
+        false,
+        &["lesson", "Never push to the remote", "--why", "x"],
+    );
+    livtk(d, true, &["ratify", "LES-1", "--always"]);
+    livtk(
+        d,
+        false,
+        &["lesson", "Waiting for its ratification", "--why", "x"],
+    );
+    livtk(
+        d,
+        false,
+        &["decision", "Waiting for acceptance", "--body", "x"],
+    );
+    let v = answer("session-start", &json!({ "cwd": d, "source": "startup" })).unwrap();
+    let brief = context_of(&v);
+    assert!(
+        brief.contains(
+            "Standing rules (ratified by the human; follow them):\n- LES-1 Never push to the remote"
+        ),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("1 lesson(s) to ratify, 1 decision(s)"),
+        "{brief}"
+    );
+    let sub = answer(
+        "subagent-start",
+        &json!({ "cwd": d, "agent_type": "livtk:implementer" }),
+    )
+    .unwrap();
+    assert!(
+        context_of(&sub).contains("- LES-1 Never push to the remote"),
+        "subagents follow standing rules too"
+    );
+}
+
+#[test]
+fn the_guard_keeps_ratifying_for_the_human() {
+    for cmd in [
+        "livtk ratify LES-1",
+        "livtk accept DEC-2",
+        "livtk move LES-1 ratified",
+    ] {
+        let v = answer("pre-tool-use", &bash(cmd, None)).unwrap();
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{cmd}"
+        );
+    }
+}
+
+/// `LIVTK_TEST_MODELS=<dir> cargo test --release -p livtk-cli -- --ignored`
+#[test]
+#[ignore = "needs the model: LIVTK_TEST_MODELS=<dir>"]
+fn with_model_a_paraphrase_brings_the_rule_back() {
+    let models = std::path::PathBuf::from(
+        std::env::var("LIVTK_TEST_MODELS").expect("set LIVTK_TEST_MODELS"),
+    );
+    let dir = project();
+    let d = dir.path();
+    livtk(
+        d,
+        false,
+        &[
+            "lesson",
+            "Animations follow macOS timing, slightly faster",
+            "--why",
+            "the developer wants the feel of macOS",
+        ],
+    );
+    livtk(d, true, &["ratify", "LES-1"]);
+    let input = json!({ "cwd": d, "prompt": "make the dock open faster, like on a mac" });
+    let out = hook_with_models("user-prompt-submit", &input, &models);
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(context_of(&v).contains("LES-1 (rule)"), "{v}");
+
+    let start = Instant::now();
+    hook_with_models("user-prompt-submit", &input, &models);
+    let took = start.elapsed();
+    eprintln!("user-prompt-submit with the model: {took:?}");
+    assert!(
+        took < Duration::from_millis(100),
+        "budget 100 ms, took {took:?}"
+    );
+}
+
 // ---- speed --------------------------------------------------------------------------------------
 
-/// `cargo test --release -p livtk-cli -- --ignored`: every hook under 20 ms.
+/// `cargo test --release -p livtk-cli -- --ignored`: every hook under 20 ms, the prompt hook
+/// without a model under 15 ms.
 #[test]
 #[ignore = "a benchmark: run in release with --ignored"]
 fn hooks_stay_under_20ms() {
@@ -332,6 +502,10 @@ fn hooks_stay_under_20ms() {
         (
             "session-start",
             json!({ "cwd": dir.path(), "source": "startup" }),
+        ),
+        (
+            "user-prompt-submit",
+            json!({ "cwd": dir.path(), "prompt": "from now on run task 12 before the others" }),
         ),
         (
             "subagent-start",
@@ -359,6 +533,14 @@ fn hooks_stay_under_20ms() {
             .min()
             .unwrap();
         eprintln!("{event}: {best:?}");
-        assert!(best < Duration::from_millis(20), "{event} took {best:?}");
+        let budget = if event == "user-prompt-submit" {
+            15
+        } else {
+            20
+        };
+        assert!(
+            best < Duration::from_millis(budget),
+            "{event} took {best:?}"
+        );
     }
 }

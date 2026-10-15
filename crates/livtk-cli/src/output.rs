@@ -6,7 +6,7 @@ use std::io::Write as _;
 
 use anyhow::Result;
 use livtk_core::event::{Event, Op};
-use livtk_core::{Node, State, Summary, Workspace};
+use livtk_core::{Hit, Kind, Node, Rel, State, Summary, Workspace};
 use serde::Serialize;
 use serde_json::json;
 
@@ -46,11 +46,30 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
         match &e.op {
             Op::NodeCreate { node, data } => {
                 let key = key_of(ws, *node).unwrap_or_else(|| data.key.clone());
-                println!("{key} created: {}", data.title);
+                let verb = match data.kind {
+                    Kind::Task => "created",
+                    Kind::Lesson | Kind::Decision => "proposed",
+                    Kind::Finding => "recorded",
+                };
+                println!("{key} {verb}: {}", data.title);
+                match data.kind {
+                    Kind::Lesson => println!("  it binds once the human runs `livtk ratify {key}`"),
+                    Kind::Decision => {
+                        println!("  it binds once the human runs `livtk accept {key}`")
+                    }
+                    _ => {}
+                }
             }
             Op::EdgeAdd { data } => {
                 if let Some(dst) = key_of(ws, data.dst) {
-                    println!("  waits for {dst}");
+                    let what = match data.rel {
+                        Rel::DependsOn => "waits for",
+                        Rel::Supersedes => "would replace",
+                        Rel::LearnedFrom => "learned from",
+                        Rel::Relates => "relates to",
+                        Rel::Parent => "is part of",
+                    };
+                    println!("  {what} {dst}");
                 }
             }
             _ => {}
@@ -64,7 +83,9 @@ pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
         return print_json(&tasks);
     }
     if tasks.is_empty() {
-        println!("No tasks here. Create one with `livtk new \"title\"`.");
+        println!(
+            "Nothing here. `livtk list --all` includes what is over; `livtk new \"title\"` adds a task."
+        );
         return Ok(());
     }
     let width = tasks.iter().map(|t| t.key.len()).max().unwrap_or(0);
@@ -84,11 +105,15 @@ pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
         } else {
             ""
         };
-        writeln!(
-            text,
-            "  {:width$}  P{}  {}{flag}",
-            t.key, t.priority, t.title
-        )?;
+        if t.kind == Kind::Task {
+            writeln!(
+                text,
+                "  {:width$}  P{}  {}{flag}",
+                t.key, t.priority, t.title
+            )?;
+        } else {
+            writeln!(text, "  {:width$}  {}", t.key, t.title)?;
+        }
     }
     print_block(&text)
 }
@@ -97,18 +122,40 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     let node = ws.node(key)?;
     let links = ws.links(key)?;
     let history = ws.history(Some(key))?;
+    let (replaces, replaced_by) = ws.related(key, Rel::Supersedes)?;
+    let (learned_from, taught) = ws.related(key, Rel::LearnedFrom)?;
     if json {
-        return print_json(&json!({ "node": node, "links": links, "history": history }));
+        return print_json(&json!({
+            "node": node, "links": links, "history": history,
+            "supersedes": replaces, "superseded_by": replaced_by,
+            "learned_from": learned_from, "taught": taught,
+        }));
     }
     println!("{}  {}", node.key, node.title);
-    let blocked = if node.blocked { "   blocked" } else { "" };
-    println!(
-        "{} · P{} · created {} by {}{blocked}",
-        node.state, node.priority, node.created, node.created_by
-    );
-    for (label, briefs) in [("waits for", &links.depends_on), ("blocks", &links.blocks)] {
+    let mut facts = vec![node.state.to_string()];
+    if node.kind == Kind::Task {
+        facts.push(format!("P{}", node.priority));
+    } else {
+        facts.push(node.kind.to_string());
+    }
+    if node.props.get("scope").and_then(|v| v.as_str()) == Some("always") {
+        facts.push("standing rule".into());
+    }
+    facts.push(format!("created {} by {}", node.created, node.created_by));
+    if node.blocked {
+        facts.push("blocked".into());
+    }
+    println!("{}", facts.join(" · "));
+    for (label, briefs) in [
+        ("waits for", &links.depends_on),
+        ("blocks", &links.blocks),
+        ("replaces", &replaces),
+        ("replaced by", &replaced_by),
+        ("from", &learned_from),
+        ("taught", &taught),
+    ] {
         for b in briefs {
-            println!("{label:>9}  {} ({}) {}", b.key, b.state, b.title);
+            println!("{label:>11}  {} ({}) {}", b.key, b.state, b.title);
         }
     }
     if !node.body.is_empty() {
@@ -141,18 +188,91 @@ pub fn edited(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Re
     }
     let after = ws.node(&before.key)?;
     println!("{} updated", after.key);
-    if before.state == State::Acked && after.state == State::Planned {
-        println!("  the plan changed, so it is planned again and needs a new acknowledgement");
+    if before.kind.on_edit(before.state) == Some(after.state) {
+        println!(
+            "  the text changed, so it is {} again and needs the human's approval",
+            after.state
+        );
     }
     Ok(())
 }
 
-pub fn moved(before: &Node, to: State, events: &[Event], json: bool) -> Result<()> {
+pub fn moved(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Result<()> {
     if json {
         return print_json(&events);
     }
-    println!("{}: {} -> {to}", before.key, before.state);
+    for e in events {
+        let Op::NodeSet { node, data } = &e.op else {
+            continue;
+        };
+        let key = key_of(ws, *node).unwrap_or_else(|| "?".into());
+        match data.state {
+            Some(to) if *node == before.id => println!("{key}: {} -> {to}", before.state),
+            Some(to) => println!("{key} -> {to} (replaced by {})", before.key),
+            None => {}
+        }
+        if let Some(props) = &data.props
+            && let Some(scope) = props.get("scope")
+        {
+            if scope.as_str() == Some("always") {
+                println!("{key}: a standing rule, shown at every session start");
+            } else {
+                println!("{key}: recalled when relevant");
+            }
+        }
+    }
+    if events.is_empty() {
+        println!("{}: nothing changed", before.key);
+    }
     Ok(())
+}
+
+pub fn inbox(items: &[Summary], json: bool) -> Result<()> {
+    if json {
+        return print_json(&items);
+    }
+    if items.is_empty() {
+        println!("Nothing waits for you.");
+        return Ok(());
+    }
+    let width = items.iter().map(|t| t.key.len()).max().unwrap_or(0);
+    let mut text = String::new();
+    for t in items {
+        let action = match t.kind {
+            Kind::Task => "ack",
+            Kind::Lesson => "ratify or reject",
+            Kind::Decision => "accept or reject",
+            Kind::Finding => "",
+        };
+        writeln!(text, "  {:width$}  {:<16}  {}", t.key, action, t.title)?;
+    }
+    print_block(&text)
+}
+
+pub fn hits(hits: &[Hit], json: bool) -> Result<()> {
+    if json {
+        return print_json(&hits);
+    }
+    if hits.is_empty() {
+        println!("Nothing found.");
+        return Ok(());
+    }
+    let width = hits.iter().map(|h| h.key.len()).max().unwrap_or(0);
+    let mut text = String::new();
+    for h in hits {
+        let meaning = h
+            .cosine
+            .map(|c| format!("  meaning {c:.2}"))
+            .unwrap_or_default();
+        writeln!(
+            text,
+            "  {:width$}  {:<9}  {}{meaning}",
+            h.key,
+            h.state.as_str(),
+            h.title
+        )?;
+    }
+    print_block(&text)
 }
 
 pub fn linked(

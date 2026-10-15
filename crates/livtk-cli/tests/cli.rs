@@ -22,7 +22,10 @@ fn livtk(dir: &Path, who: As, args: &[&str]) -> Output {
 
 fn livtk_with_stdin(dir: &Path, who: As, args: &[&str], stdin: Option<&str>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_livtk"));
-    cmd.current_dir(dir).args(args);
+    // Never the developer's own models: keyword search only, unless a test says otherwise.
+    cmd.current_dir(dir)
+        .args(args)
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models");
     match who {
         As::Human => cmd.env_remove("CLAUDECODE"),
         As::Claude => cmd.env("CLAUDECODE", "1"),
@@ -229,6 +232,106 @@ fn eight_processes_at_once_lose_nothing() {
     assert_eq!(keys.len(), 200, "every key is unique");
     let log = std::fs::read_to_string(dir.path().join(".livtk/events.jsonl")).unwrap();
     assert_eq!(log.lines().count(), 200);
+}
+
+#[test]
+fn memory_from_proposal_to_rule() {
+    let dir = project();
+    let d = dir.path();
+    let out = ok(
+        d,
+        As::Claude,
+        &[
+            "lesson",
+            "Run cargo check before reporting a task done",
+            "--why",
+            "a broken build was reported done",
+        ],
+    );
+    assert_eq!(
+        out,
+        "LES-1 proposed: Run cargo check before reporting a task done\n  it binds once the human runs `livtk ratify LES-1`\n"
+    );
+    let refused = livtk(d, As::Claude, &["ratify", "LES-1"]);
+    assert_eq!(refused.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("only a human can ratify"));
+
+    let inbox = json(d, &["inbox"]);
+    assert_eq!(inbox[0]["key"], "LES-1");
+    assert_eq!(
+        ok(d, As::Human, &["ratify", "LES-1", "--always"]),
+        "LES-1: proposed -> ratified\nLES-1: a standing rule, shown at every session start\n"
+    );
+    assert!(ok(d, As::Claude, &["show", "LES-1"]).contains("ratified · lesson · standing rule"));
+    assert_eq!(ok(d, As::Claude, &["inbox"]), "Nothing waits for you.\n");
+
+    ok(
+        d,
+        As::Claude,
+        &[
+            "lesson",
+            "Run cargo clippy too before reporting done",
+            "--supersedes",
+            "LES-1",
+        ],
+    );
+    assert_eq!(
+        ok(d, As::Human, &["ratify", "LES-2"]),
+        "LES-2: proposed -> ratified\nLES-2: recalled when relevant\nLES-1 -> retired (replaced by LES-2)\n"
+    );
+    let active = json(d, &["list", "--kind", "lesson"]);
+    assert_eq!(
+        active.as_array().unwrap().len(),
+        1,
+        "the retired rule is over"
+    );
+
+    ok(
+        d,
+        As::Claude,
+        &[
+            "decision",
+            "SQLite for the store",
+            "--body",
+            "one file, no daemon",
+        ],
+    );
+    ok(
+        d,
+        As::Claude,
+        &[
+            "finding",
+            "winit panics on resize under NVIDIA",
+            "--from",
+            "LES-2",
+        ],
+    );
+    assert_eq!(
+        json(
+            d,
+            &[
+                "recall",
+                "should the clippy check run before reporting done"
+            ]
+        )[0]["key"],
+        "LES-2"
+    );
+    let hits = json(d, &["search", "sqlite"]);
+    assert_eq!(hits[0]["key"], "DEC-1");
+    assert_eq!(
+        hits[0]["cosine"],
+        Value::Null,
+        "keywords only without a model"
+    );
+}
+
+#[test]
+fn embed_status_without_a_model() {
+    let dir = project();
+    let status = json(dir.path(), &["embed", "status"]);
+    assert_eq!(status["model"], "potion-retrieval-32M");
+    assert_eq!(status["installed"], false);
+    assert!(ok(dir.path(), As::Claude, &["embed", "status"]).contains("search uses keywords only"));
 }
 
 /// `cargo test --release -p livtk-cli -- --ignored`: the speed budget from the plan.

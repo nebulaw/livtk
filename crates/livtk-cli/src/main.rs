@@ -1,5 +1,6 @@
 //! `livtk`: the command line over livtk-core. Thin by design: parse, call the workspace, print.
 
+mod embed;
 mod guard;
 mod hook;
 mod output;
@@ -10,7 +11,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use livtk_core::{Actor, Command, Error, Rel, State, Workspace};
+use livtk_core::{Actor, Command, Error, Kind, Rel, Scope, State, Workspace};
 
 #[derive(Parser)]
 #[command(
@@ -56,18 +57,85 @@ enum Cmd {
         #[arg(long, value_name = "KEY")]
         after: Vec<String>,
     },
-    /// List tasks grouped by state; open ones unless told otherwise.
+    /// Propose a lesson: a rule learned from experience. It binds once the human ratifies it.
+    Lesson {
+        /// The rule, in one sentence.
+        rule: String,
+        /// Why: what happened, the evidence. `-` reads it from stdin.
+        #[arg(long)]
+        why: Option<String>,
+        /// What it was learned from (a task, a finding). Repeatable.
+        #[arg(long, value_name = "KEY")]
+        from: Vec<String>,
+        /// The lesson this one replaces once ratified.
+        #[arg(long, value_name = "KEY")]
+        supersedes: Option<String>,
+    },
+    /// Propose a decision: a choice and its reasons. It binds once the human accepts it.
+    Decision {
+        title: String,
+        /// The context, the options and the reasons. `-` reads it from stdin.
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long, value_name = "KEY")]
+        from: Vec<String>,
+        /// The decision this one replaces once accepted.
+        #[arg(long, value_name = "KEY")]
+        supersedes: Option<String>,
+    },
+    /// Record a finding: something found out, kept for later.
+    Finding {
+        title: String,
+        /// What was found, with sources. `-` reads it from stdin.
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long, value_name = "KEY")]
+        from: Vec<String>,
+    },
+    /// Ratify a proposed lesson, making it a rule. Human only.
+    Ratify {
+        key: String,
+        /// A standing rule: shown at every session start, not only when relevant.
+        #[arg(long)]
+        always: bool,
+    },
+    /// Reject a proposed lesson or decision. Human only.
+    Reject { key: String },
+    /// Retire a ratified lesson. Human only.
+    Retire { key: String },
+    /// Accept a proposed decision. Human only.
+    Accept { key: String },
+    /// Everything waiting for the human: plans, lessons, decisions.
+    Inbox,
+    /// List nodes of a kind grouped by state; the active ones unless told otherwise.
     #[command(visible_alias = "ls", visible_alias = "board")]
     List {
+        /// task (default), lesson, decision or finding.
+        #[arg(long, short, default_value = "task")]
+        kind: Kind,
         /// Only these states. Repeatable.
         #[arg(long, short)]
         state: Vec<State>,
-        /// Include done and canceled tasks.
+        /// Include what is over: done, canceled, rejected, retired, superseded.
         #[arg(long, short)]
         all: bool,
     },
-    /// Show a task with its links and history.
+    /// Show a node with its links, notes and history.
     Show { key: String },
+    /// Search every node, by keywords and by meaning.
+    Search {
+        query: String,
+        #[arg(long, short = 'n', default_value_t = 10)]
+        limit: usize,
+    },
+    /// What memory would be recalled for this text: rules, decisions and findings that pass the
+    /// relevance bar.
+    Recall { query: String },
+    /// The local embedding model that ranks search by meaning.
+    Embed {
+        #[command(subcommand)]
+        action: EmbedAction,
+    },
     /// Change a task's title, body or priority. An acknowledged task returns to planned.
     Edit {
         key: String,
@@ -107,6 +175,18 @@ enum Cmd {
     /// Answer a Claude Code hook: reads its JSON on stdin. Used by the livtk plugin.
     #[command(hide = true)]
     Hook { event: String },
+}
+
+#[derive(Subcommand)]
+enum EmbedAction {
+    /// Download the model (once) with the system curl.
+    Setup {
+        /// potion-retrieval-32M (default, 128 MB) or potion-base-8M (30 MB).
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Whether the model is installed and loads.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -165,6 +245,9 @@ fn run(cli: Cli) -> Result<()> {
         let ws = Workspace::init(&cwd, prefix.as_deref())?;
         return output::initialised(&ws, cli.json);
     }
+    if let Cmd::Embed { action } = &cli.command {
+        return embed::run(action, &cwd, cli.json);
+    }
     let by = actor(cli.agent)?;
     let mut ws = Workspace::open(&cwd)?;
     let result = dispatch(&mut ws, cli.command, &by, cli.json);
@@ -176,34 +259,75 @@ fn run(cli: Cli) -> Result<()> {
 
 fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> {
     match cmd {
-        Cmd::Init { .. } | Cmd::Hook { .. } => unreachable!("handled before opening a workspace"),
+        Cmd::Init { .. } | Cmd::Hook { .. } | Cmd::Embed { .. } => {
+            unreachable!("handled before opening a workspace")
+        }
         Cmd::New {
             title,
             body,
             priority,
             after,
         } => {
+            let links = after.into_iter().map(|k| (Rel::DependsOn, k)).collect();
+            let body = read_body(body)?.unwrap_or_default();
+            create(ws, Kind::Task, title, body, priority, links, by, json)
+        }
+        Cmd::Lesson {
+            rule,
+            why,
+            from,
+            supersedes,
+        } => {
+            let links = memory_links(from, supersedes);
+            let body = read_body(why)?.unwrap_or_default();
+            create(ws, Kind::Lesson, rule, body, None, links, by, json)
+        }
+        Cmd::Decision {
+            title,
+            body,
+            from,
+            supersedes,
+        } => {
+            let links = memory_links(from, supersedes);
+            let body = read_body(body)?.unwrap_or_default();
+            create(ws, Kind::Decision, title, body, None, links, by, json)
+        }
+        Cmd::Finding { title, body, from } => {
+            let links = memory_links(from, None);
+            let body = read_body(body)?.unwrap_or_default();
+            create(ws, Kind::Finding, title, body, None, links, by, json)
+        }
+        Cmd::Ratify { key, always } => {
+            let before = ws.node(&key)?;
             let events = ws.execute(
-                Command::CreateTask {
-                    title,
-                    body: read_body(body)?.unwrap_or_default(),
-                    priority,
-                    depends_on: after,
+                Command::Ratify {
+                    node: key.clone(),
+                    always,
                 },
                 by,
             )?;
-            output::created(ws, &events, json)
+            output::moved(ws, &before, &events, json)
         }
-        Cmd::List { state, all } => {
+        Cmd::Reject { key } => moved(ws, &key, State::Rejected, by, json),
+        Cmd::Retire { key } => moved(ws, &key, State::Retired, by, json),
+        Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
+        Cmd::Inbox => output::inbox(&ws.inbox()?, json),
+        Cmd::List { kind, state, all } => {
             let states: Vec<State> = if !state.is_empty() {
                 state
             } else if all {
                 Vec::new()
             } else {
-                State::ALL.into_iter().filter(|s| !s.is_closed()).collect()
+                kind.states()
+                    .iter()
+                    .copied()
+                    .filter(|s| s.is_active())
+                    .collect()
             };
-            output::list(&ws.tasks(&states)?, json)
+            output::list(&ws.list(kind, &states)?, json)
         }
+        Cmd::Search { query, limit } => output::hits(&ws.search(&query, Scope::All, limit)?, json),
+        Cmd::Recall { query } => output::hits(&ws.recall(&query)?, json),
         Cmd::Show { key } => output::show(ws, &key, json),
         Cmd::Edit {
             key,
@@ -290,7 +414,38 @@ fn moved(ws: &mut Workspace, key: &str, to: State, by: &Actor, json: bool) -> Re
         },
         by,
     )?;
-    output::moved(&before, to, &events, json)
+    output::moved(ws, &before, &events, json)
+}
+
+#[allow(clippy::too_many_arguments)] // one call site per kind; a struct would only rename them
+fn create(
+    ws: &mut Workspace,
+    kind: Kind,
+    title: String,
+    body: String,
+    priority: Option<u8>,
+    links: Vec<(Rel, String)>,
+    by: &Actor,
+    json: bool,
+) -> Result<()> {
+    let events = ws.execute(
+        Command::Create {
+            kind,
+            title,
+            body,
+            priority,
+            links,
+        },
+        by,
+    )?;
+    output::created(ws, &events, json)
+}
+
+fn memory_links(from: Vec<String>, supersedes: Option<String>) -> Vec<(Rel, String)> {
+    from.into_iter()
+        .map(|k| (Rel::LearnedFrom, k))
+        .chain(supersedes.map(|k| (Rel::Supersedes, k)))
+        .collect()
 }
 
 /// `--body -` reads the body from stdin, so long plans need no shell quoting.

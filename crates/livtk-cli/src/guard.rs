@@ -7,9 +7,9 @@
 use std::path::Path;
 
 /// Subcommands only a human may run.
-const HUMAN_VERBS: [&str; 1] = ["ack"];
-/// States only a human may move a task into.
-const HUMAN_STATES: [&str; 1] = ["acked"];
+const HUMAN_VERBS: [&str; 5] = ["ack", "ratify", "reject", "retire", "accept"];
+/// States only a human may move a node into.
+const HUMAN_STATES: [&str; 5] = ["acked", "ratified", "rejected", "retired", "accepted"];
 
 /// Characters that end a simple command in a shell line.
 const SEPARATORS: [char; 6] = [';', '&', '|', '\n', ')', '`'];
@@ -84,9 +84,10 @@ pub fn refuse_bash(cmd: &str) -> Option<String> {
             && inv.args.iter().any(|a| HUMAN_STATES.contains(&a.as_str()));
         if human_verb || human_move {
             return Some(
-                "Only the human acknowledges a plan. Ask them to run `livtk ack KEY` or to \
-                 acknowledge it in the app. (If you were only searching for this text, use the \
-                 Grep tool.)"
+                "Only the human acknowledges plans and decides what binds: acknowledging, \
+                 ratifying, rejecting, retiring and accepting are theirs. Ask them to run the \
+                 livtk command or to decide in the app. (If you were only searching for this \
+                 text, use the Grep tool.)"
                     .into(),
             );
         }
@@ -237,6 +238,13 @@ mod tests {
             "env -u CLAUDECODE livtk list",
             "CLAUDECODE= livtk move 1 acked",
             "unset CLAUDECODE; livtk ack 1",
+            "livtk ratify LES-1",
+            "livtk ratify LES-1 --always",
+            "livtk reject DEC-2",
+            "livtk retire LES-3",
+            "livtk accept DEC-1",
+            "livtk move LES-1 ratified",
+            "livtk --json move DEC-1 accepted",
         ] {
             assert!(refuse_bash(cmd).is_some(), "{cmd}");
         }
@@ -248,6 +256,9 @@ mod tests {
             "livtk list",
             "livtk list --state acked",
             "livtk move 2 planned",
+            "livtk lesson \"never ratify by habit\" --why -",
+            "livtk list --kind lesson --state ratified",
+            "livtk recall \"accept the decision\"",
             "livtk show 2 | grep acked",
             "livtk new \"ack the review\"",
             "git add .livtk && git commit -m 'livtk: tasks'",

@@ -301,6 +301,26 @@ fn reopening_shows_the_same_state() {
 }
 
 #[test]
+fn a_reader_sees_changes_another_writer_already_applied() {
+    // The app and the CLI share one store: the CLI applies its own writes, so the app's refresh
+    // must still report them.
+    let dir = tempfile::tempdir().unwrap();
+    let mut writer = init(dir.path());
+    let mut reader = Workspace::open(dir.path()).unwrap();
+    assert!(!reader.refresh().unwrap(), "nothing new yet");
+    task(&mut writer, "from elsewhere");
+    assert!(
+        reader.refresh().unwrap(),
+        "the writer's change is news to the reader"
+    );
+    assert!(!reader.refresh().unwrap(), "and only once");
+    assert_eq!(reader.tasks(&[]).unwrap().len(), 1);
+    task(&mut reader, "its own");
+    assert!(!reader.refresh().unwrap(), "its own writes count as seen");
+    assert!(writer.refresh().unwrap(), "but are news to the other");
+}
+
+#[test]
 fn rebuild_matches_incremental_apply() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = init(dir.path());

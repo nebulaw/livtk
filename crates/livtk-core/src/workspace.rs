@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::event::{EdgeData, Event, NodeData, NodePatch, NoteData, Op};
-use crate::log::{self, Log};
+use crate::log::{self, Log, Mark};
 use crate::model::{
     Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
 };
@@ -194,6 +194,10 @@ pub struct Workspace {
     model: Option<Option<Box<dyn Embed>>>,
     /// Texts embedded by this workspace so far; stored vectors are reused, never recounted.
     embedded: usize,
+    /// The log position this workspace last showed its reader. Another process applies its own
+    /// writes to the shared store, so "the store had to catch up" says nothing about whether this
+    /// reader has seen them; this does.
+    seen: Mark,
 }
 
 impl Workspace {
@@ -256,6 +260,7 @@ impl Workspace {
             models_dir: models_dir(),
             model: None,
             embedded: 0,
+            seen: Mark::default(),
         };
         if !ws.store.has_current_schema()? {
             let _lock = ws.lock()?;
@@ -276,18 +281,22 @@ impl Workspace {
         &self.config
     }
 
-    /// Bring the store up to date with the log. Cheap when nothing changed (one stat and two
-    /// small reads). Returns whether anything changed. Long-lived readers such as the app call
-    /// this when the log file changes.
+    /// Bring the store up to date with the log, and say whether anything changed since this
+    /// workspace last looked, whoever changed it: another process (which applies its own writes
+    /// to the shared store), a git pull, or a rebuild. Its own writes count as seen. Cheap when
+    /// nothing changed (a stat, two small reads and one small query), so long-lived readers such
+    /// as the app call it on a timer.
     pub fn refresh(&mut self) -> Result<bool> {
         let applied = self.store.applied()?;
         let len = self.log.len()?;
-        if len == applied.mark.len && self.log.mark(len)? == applied.mark {
-            return Ok(false);
+        if len != applied.mark.len || self.log.mark(len)? != applied.mark {
+            let _lock = self.lock()?;
+            self.catch_up()?;
         }
-        let _lock = self.lock()?;
-        self.catch_up()?;
-        Ok(true)
+        let now = self.store.applied()?.mark;
+        let changed = now != self.seen;
+        self.seen = now;
+        Ok(changed)
     }
 
     /// Rebuild the store from the log.
@@ -329,6 +338,7 @@ impl Workspace {
         };
         let warnings = self.store.apply(&events, applied, false)?;
         self.warnings.extend(warnings);
+        self.seen = applied.mark;
         Ok(events)
     }
 

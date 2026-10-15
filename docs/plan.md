@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 and 2 done; milestone 3 (memory) in progress.
+Status: milestones 1 to 3 built; milestone 3 waits for its check in a real session.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -525,6 +525,17 @@ older livtk skips them with an "update livtk" warning; every existing event keep
 **Decisions (developer, 2026-10-16):** keys per kind (`LES`, `DEC`, `FND`); `potion-retrieval-32M`
 by default with `potion-base-8M` as the option; download with the system `curl`; only the human
 marks a lesson `--always`.
+
+**What measuring changed.** Exploring recall with the real model on a fixture of 12 rules showed
+that a fixed bar of 0.45 recalls almost nothing: with `potion-retrieval-32M` true matches score
+0.19 to 0.48 and unrelated prompts at most 0.17, while `potion-base-8M` lets unrelated prompts
+reach 0.29. The bar is therefore per model (0.25 and 0.30, `search::cosine_bar`). The model ranks
+the right rule first for about 9 prompts in 12 and is confidently wrong on the rest, whatever
+text is embedded (rule alone or rule and reasons), so the tests assert that rate and that
+unrelated prompts recall nothing, not a perfect mapping. Of the prompt hook's 92 ms, the model
+load is 80: reading the 128 MB matrix (27 ms), parsing the tokenizer (28 ms) and converting the
+matrix (25 ms); embedding the prompt takes 0.05 ms. Reading only the rows a prompt needs would
+bring the hook to about 35 ms (a possible follow-up).
 
 **Done when** in a real session: a correction leads Claude to propose a lesson; you ratify it;
 a later, differently worded prompt brings that rule back into context.

@@ -1,7 +1,7 @@
 {
   "name": "livtk",
   "displayName": "livtk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Durable tasks for Claude Code: plans the human acknowledges, an event log in git, hooks that keep the gates. Needs the livtk binary: cargo install --locked --path crates/livtk-cli",
   "author": { "name": "Karl" },
   "repository": "https://github.com/nebulaw/tasks",

@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 and 2 done; milestone 3 (memory) waits for the developer's go.
+Status: milestones 1 and 2 done; milestone 3 (memory) in progress.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -440,3 +440,91 @@ logs keep their exact bytes and an older livtk skips a note with an "update livt
 **Done when** the plugin is installed from the local marketplace, `livspeil` has a `.livtk/`,
 and in a real session: the brief appears, Claude plans tasks and stops for your ack, Claude
 cannot ack, and a subagent's events carry its name.
+
+## 15. Milestone 3 in detail: memory
+
+**Goal.** Claude learns from corrections and keeps decisions, but only what the human ratifies
+binds it, and each prompt carries only the few rules that matter to it.
+
+**Three new kinds**
+
+| Kind | Key | States | Human only |
+|---|---|---|---|
+| lesson | `LES-n` | proposed → ratified / rejected; ratified → retired; rejected → proposed | every move out of proposed, and retiring |
+| decision | `DEC-n` | proposed → accepted / rejected; accepted → superseded | accepting, rejecting |
+| finding | `FND-n` | recorded | nothing: research Claude may keep freely |
+
+- A lesson's title is the rule in one sentence; its body says why, with the evidence.
+- Editing a ratified lesson or an accepted decision returns it to proposed, like an acknowledged
+  plan.
+- `--supersedes KEY` links a new lesson or decision to the one it replaces; ratifying or
+  accepting the new one retires or supersedes the old one in the same step.
+- A ratified lesson is `recall` by default (shown when relevant). `livtk ratify KEY --always`
+  makes it a standing rule shown at every session start. Only the human sets either.
+
+**Commands**
+
+| Command | Does |
+|---|---|
+| `livtk lesson "rule" --why .. [--from KEY] [--supersedes KEY]` | Propose a lesson |
+| `livtk decision "title" --body .. [--from KEY] [--supersedes KEY]` | Propose a decision |
+| `livtk finding "title" --body .. [--from KEY]` | Record a finding |
+| `livtk ratify KEY [--always]`, `reject`, `retire`, `accept` | Human only |
+| `livtk inbox` | Everything waiting for the human: plans, lessons, decisions |
+| `livtk list --kind lesson` (task, lesson, decision, finding) | Lists by kind |
+| `livtk search "query"` | Ranked search over every node, for people and the app |
+| `livtk recall "query"` | What the prompt hook injects: ratified recall lessons, accepted decisions and findings that pass the relevance bar, within a fixed budget |
+| `livtk embed setup` / `status` | Download the embedding model once; show whether it is in use |
+
+**Search.** Two rankings fused with reciprocal rank fusion (k = 60):
+
+1. **Keywords**: SQLite FTS5 over title and body (porter stemming, title weighted higher),
+   kept in step with the store as events apply.
+2. **Meaning**: model2vec `potion-retrieval-32M` embeddings (512 dimensions), stored as blobs beside
+   the nodes, compared by cosine in Rust. Computed lazily for new or changed nodes (keyed by a
+   hash of their text), kept across rebuilds, so a rebuild never re-embeds.
+
+Without the model, search is keywords only; nothing else changes. Measured on this machine in a
+fresh process: `potion-retrieval-32M` (the default, tuned for retrieval, 128 MB) loads in 80 ms
+and embeds a prompt in 0.5 ms and 1,000 documents in 9 ms; `potion-base-8M` (30 MB) loads in
+29 ms and can be chosen in the config (`[memory] model`).
+
+**The model download.** `livtk embed setup` fetches three files (128 MB) with the system `curl`
+into `~/.cache/livtk/models/`, so livtk itself carries no network code
+(`model2vec-rs` with `local-only` and the pure-Rust tokenizer; both MIT or Apache-2.0).
+
+**Hooks**
+
+| Hook | Adds |
+|---|---|
+| UserPromptSubmit (new) | Recall for the prompt: at most 3 items that pass the relevance bar, about 400 tokens, as `KEY rule` lines. When the prompt reads as a correction or a standing rule ("from now on", "never do", "I told you"), a nudge to propose a lesson. Pastes over 4,000 characters get no nudge |
+| SessionStart | The always rules, and a count of what waits in the inbox |
+| PreToolUse (Bash) | `ratify`, `reject`, `retire`, `accept`, and moves into those states, join `ack` as human only |
+
+**Skills.** New `remember`: when and how to propose a lesson, decision or finding. `plan` starts
+with `livtk recall` on the goal.
+
+**Store.** Schema version 2 (FTS and vectors), so existing stores rebuild by themselves on the
+next open. Events that create a new kind or move into a new state carry format version 3, so an
+older livtk skips them with an "update livtk" warning; every existing event keeps its bytes.
+
+**Tests**
+
+1. Transition tables and human gates for each new kind; supersede on ratify and accept; editing
+   a ratified lesson returns it to proposed.
+2. Keyword search: stemming, title before body, ranking stability.
+3. Recall on a fixture of about 30 rules: each question finds its rule; unrelated prompts inject
+   nothing. Run with the model when it is present, keywords only otherwise; both must pass.
+4. Vectors: kept across rebuild; a changed lesson re-embeds; a missing model degrades cleanly.
+5. Hooks: recall injects the right rule and stays silent otherwise; the correction nudge fires on
+   corrections and not on ordinary requests; the brief lists always rules and the inbox.
+6. Guard: the new human verbs and states are refused.
+7. Speed: the prompt hook under 100 ms with the model and under 15 ms without; search on 10k
+   nodes under 50 ms once vectors exist.
+
+**Decisions (developer, 2026-10-16):** keys per kind (`LES`, `DEC`, `FND`); `potion-retrieval-32M`
+by default with `potion-base-8M` as the option; download with the system `curl`; only the human
+marks a lesson `--always`.
+
+**Done when** in a real session: a correction leads Claude to propose a lesson; you ratify it;
+a later, differently worded prompt brings that rule back into context.

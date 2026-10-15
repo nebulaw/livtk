@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 to 3 done; milestone 4 (the app) in progress.
+Status: milestones 1 to 4 done; milestone 5 (graph, search, palette, activity) waits for the developer's go.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -603,6 +603,16 @@ Inbox fades away, the selection glides, new events from Claude flash once.
 
 **Decisions (developer, 2026-10-16):** a separate `livtk-app` binary; polling every 200 ms;
 `livtk init` registers projects; Linear's calm density with visual cues and transitions, no glass.
+
+**What building it found.** The app's model tests caught a core bug before any UI existed:
+`refresh` reported changes only when it had to catch the store up, but the CLI applies its own
+writes to the shared store, so the app would never have seen Claude's work (fixed in the core:
+each workspace remembers the log position it last showed). `gpui-kit`'s own `test-support` drags
+in a GPUI build whose pinned macOS crates clash with ours, so the tests enable `test-support` on
+`gpui-pre` directly. Dependency debug info is off in the dev profile: it was most of an 11 GB
+target directory. Measured: opening a 10,000-task project and listing it 14.6 ms, an idle refresh
+28 µs. From the app, the developer ratified, acknowledged and accepted the demo's inbox; each event
+reads `human`.
 
 **Done when** you run your day's acknowledging and ratifying from the app, and Claude's changes
 show up in it while it is open.

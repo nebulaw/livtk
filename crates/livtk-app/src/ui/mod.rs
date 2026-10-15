@@ -657,10 +657,14 @@ impl LivtkApp {
                 cx.notify();
             }))
         };
+        let board = self.model.view == View::Tasks && self.model.layout == Layout::Board;
         let groups = segments()
             .child(group("group-state", "State", Grouping::State))
             .child(group("group-priority", "Priority", Grouping::Priority))
-            .child(group("group-none", "None", Grouping::None));
+            // A board needs columns: as in Linear, it is never ungrouped.
+            .when(!board, |s| {
+                s.child(group("group-none", "None", Grouping::None))
+            });
         let order = |id: &'static str, label: &'static str, o: Ordering| {
             segment(id, label, d.ordering == o).on_click(cx.listener(move |this, _, _, cx| {
                 this.model.set_ordering(o);
@@ -809,17 +813,7 @@ impl LivtkApp {
         let Some(g) = self.model.groups.get(gi).cloned() else {
             return div().into_any_element();
         };
-        let (mark, label) = match g.key {
-            GroupKey::State(s) => (
-                state_mark(g.kind.unwrap_or(Kind::Task), s),
-                title_case(s.as_str()),
-            ),
-            GroupKey::Priority(p) => (
-                priority_mark(p),
-                PRIORITY_NAMES[usize::from(p.clamp(1, 4) - 1)].to_owned(),
-            ),
-            GroupKey::All => (div(), "All".to_owned()),
-        };
+        let (mark, label) = group_label(g.key, g.kind.unwrap_or(Kind::Task));
         let key = g.key;
         div()
             .id(SharedString::from(format!("band-{gi}")))
@@ -991,10 +985,10 @@ impl LivtkApp {
             .flex()
             .gap_2()
             .p_3();
-        for (state, rows) in self.model.columns() {
-            let key = GroupKey::State(state);
+        for (key, rows) in self.model.columns() {
+            let (mark, label) = group_label(key, Kind::Task);
             let mut col = div()
-                .id(SharedString::from(format!("col-{state}")))
+                .id(SharedString::from(format!("col-{key:?}")))
                 .w(px(288.))
                 .flex_none()
                 .h_full()
@@ -1027,12 +1021,12 @@ impl LivtkApp {
                         .gap_2()
                         .px_1()
                         .h(px(28.))
-                        .child(state_mark(Kind::Task, state))
+                        .child(mark)
                         .child(
                             div()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(color(TEXT))
-                                .child(title_case(state.as_str())),
+                                .child(label),
                         )
                         .child(
                             div()
@@ -1779,6 +1773,18 @@ fn prop_row(label: &str, value: Div) -> Div {
                 .child(label.to_owned()),
         )
         .child(value.text_color(color(TEXT_2)))
+}
+
+/// A group's mark and name, for list bands and board columns alike.
+fn group_label(key: GroupKey, kind: Kind) -> (Div, String) {
+    match key {
+        GroupKey::State(s) => (state_mark(kind, s), title_case(s.as_str())),
+        GroupKey::Priority(p) => (
+            priority_mark(p),
+            PRIORITY_NAMES[usize::from(p.clamp(1, 4) - 1)].to_owned(),
+        ),
+        GroupKey::All => (div(), "All".to_owned()),
+    }
 }
 
 fn title_case(s: &str) -> String {

@@ -303,8 +303,8 @@ fn views_layouts_projects_and_a_bad_folder() {
     assert_eq!(keys(&m), ["OTH-1"]);
     m.toggle_layout();
     assert_eq!(m.layout, Layout::Board);
-    let cols: Vec<(State, usize)> = m.columns().into_iter().map(|(s, r)| (s, r.len())).collect();
-    assert_eq!(cols[1], (State::Planned, 1));
+    let cols: Vec<(GroupKey, usize)> = m.columns().into_iter().map(|(s, r)| (s, r.len())).collect();
+    assert_eq!(cols[1], (GroupKey::State(State::Planned), 1));
     assert_eq!(
         cols.iter().map(|c| c.0).collect::<Vec<_>>(),
         [
@@ -316,6 +316,7 @@ fn views_layouts_projects_and_a_bad_folder() {
             State::Parked,
             State::Done
         ]
+        .map(GroupKey::State)
     );
 }
 
@@ -507,12 +508,16 @@ fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
     drop(ws);
     let mut m = Model::open(&[dir.path().to_path_buf()]);
     m.set_view(View::Tasks);
-    assert_eq!(keys(&m), std::slice::from_ref(&k), "done shows; canceled does not");
+    assert_eq!(
+        keys(&m),
+        std::slice::from_ref(&k),
+        "done shows; canceled does not"
+    );
     assert_eq!(m.groups[0].key, GroupKey::State(State::Done));
     let done_col = m
         .columns()
         .into_iter()
-        .find(|(s, _)| *s == State::Done)
+        .find(|(s, _)| *s == GroupKey::State(State::Done))
         .unwrap();
     assert_eq!(done_col.1.len(), 1, "the board's Done column holds it");
 
@@ -527,6 +532,57 @@ fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
 
     m.toggle_show_all();
     assert_eq!(m.rows.len(), 2, "h brings back what was dismissed");
+}
+
+#[test]
+fn board_columns_follow_the_grouping_and_a_drop_sets_that_property() {
+    let (dir, mut m) = mixed();
+    m.set_grouping(Grouping::None);
+    m.toggle_layout();
+    assert_eq!(m.layout, Layout::Board);
+    assert_eq!(
+        m.display().grouping,
+        Grouping::State,
+        "a board is never ungrouped"
+    );
+    m.set_grouping(Grouping::None);
+    assert_eq!(m.display().grouping, Grouping::State, "not even when asked");
+
+    m.set_grouping(Grouping::Priority);
+    let cols: Vec<(GroupKey, Vec<String>)> = m
+        .columns()
+        .into_iter()
+        .map(|(k, rows)| (k, rows.into_iter().map(|r| r.key.clone()).collect()))
+        .collect();
+    assert_eq!(
+        cols,
+        [
+            (GroupKey::Priority(1), vec!["LIV-1".to_owned()]),
+            (GroupKey::Priority(2), vec!["LIV-3".to_owned()]),
+            (GroupKey::Priority(3), vec!["LIV-2".to_owned()]),
+            (GroupKey::Priority(4), vec!["LIV-4".to_owned()]),
+        ]
+    );
+    let liv4 = m.filtered.iter().find(|r| r.key == "LIV-4").unwrap().id;
+    m.drop_on(liv4, GroupKey::Priority(1));
+    let urgent: Vec<&str> = m.columns()[0].1.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(urgent, ["LIV-1", "LIV-4"], "dropped into Urgent");
+    assert_eq!(
+        Workspace::open(dir.path())
+            .unwrap()
+            .node("LIV-4")
+            .unwrap()
+            .priority,
+        1
+    );
+
+    m.set_ordering(Ordering::Created);
+    let urgent: Vec<&str> = m.columns()[0].1.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(
+        urgent,
+        ["LIV-4", "LIV-1"],
+        "the ordering applies inside a column"
+    );
 }
 
 /// `cargo test --release -p livtk-app --test model -- --ignored --nocapture`: the app's budgets

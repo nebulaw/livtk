@@ -281,6 +281,10 @@ impl Model {
             Layout::List => Layout::Board,
             Layout::Board => Layout::List,
         };
+        // A board needs columns: as in Linear, it is never ungrouped.
+        if self.layout == Layout::Board && self.display().grouping == Grouping::None {
+            self.set_grouping(Grouping::State);
+        }
     }
 
     pub fn toggle_show_all(&mut self) {
@@ -538,6 +542,9 @@ impl Model {
     }
 
     pub fn set_grouping(&mut self, grouping: Grouping) {
+        if self.layout == Layout::Board && grouping == Grouping::None {
+            return;
+        }
         self.edit_display(|d| d.grouping = grouping);
     }
 
@@ -654,8 +661,17 @@ impl Model {
         self.run(cmd, Some(r));
     }
 
-    /// The task board: one column per state, in working order.
-    pub fn columns(&self) -> Vec<(State, Vec<&Summary>)> {
+    /// The task board: one column per group, as the grouping says (states in working order,
+    /// or priorities from urgent to low), each in the chosen order.
+    pub fn columns(&self) -> Vec<(GroupKey, Vec<&Summary>)> {
+        if self.display().grouping == Grouping::Priority {
+            return (1..=4u8)
+                .map(|p| {
+                    let rows = self.filtered.iter().filter(|r| r.priority == p).collect();
+                    (GroupKey::Priority(p), rows)
+                })
+                .collect();
+        }
         let mut states = vec![
             State::Backlog,
             State::Planned,
@@ -671,7 +687,10 @@ impl Model {
         }
         states
             .into_iter()
-            .map(|s| (s, self.filtered.iter().filter(|r| r.state == s).collect()))
+            .map(|s| {
+                let rows = self.filtered.iter().filter(|r| r.state == s).collect();
+                (GroupKey::State(s), rows)
+            })
             .collect()
     }
 

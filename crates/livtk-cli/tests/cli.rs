@@ -25,7 +25,11 @@ fn livtk_with_stdin(dir: &Path, who: As, args: &[&str], stdin: Option<&str>) -> 
     // Never the developer's own models: keyword search only, unless a test says otherwise.
     cmd.current_dir(dir)
         .args(args)
-        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models");
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models")
+        .env(
+            "LIVTK_CONFIG_DIR",
+            std::env::temp_dir().join("livtk-test-config"),
+        );
     match who {
         As::Human => cmd.env_remove("CLAUDECODE"),
         As::Claude => cmd.env("CLAUDECODE", "1"),

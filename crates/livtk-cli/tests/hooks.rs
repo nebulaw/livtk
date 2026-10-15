@@ -45,7 +45,11 @@ fn livtk(dir: &Path, human: bool, args: &[&str]) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_livtk"));
     cmd.current_dir(dir)
         .args(args)
-        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models");
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models")
+        .env(
+            "LIVTK_CONFIG_DIR",
+            std::env::temp_dir().join("livtk-test-config"),
+        );
     if human {
         cmd.env_remove("CLAUDECODE");
     } else {

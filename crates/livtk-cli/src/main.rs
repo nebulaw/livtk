@@ -243,6 +243,12 @@ fn run(cli: Cli) -> Result<()> {
     };
     if let Cmd::Init { prefix } = &cli.command {
         let ws = Workspace::init(&cwd, prefix.as_deref())?;
+        // So the app lists it. A failure here costs a convenience, never the project.
+        if let Some(config) = livtk_core::registry::config_dir()
+            && let Err(e) = livtk_core::registry::add(&config, &cwd)
+        {
+            eprintln!("livtk: warning: could not add the project to the app's list: {e}");
+        }
         return output::initialised(&ws, cli.json);
     }
     if let Cmd::Embed { action } = &cli.command {

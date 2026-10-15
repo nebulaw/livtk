@@ -1,0 +1,14 @@
+{
+  "name": "livtk",
+  "description": "livtk: durable tasks and memory for Claude Code.",
+  "owner": {
+    "name": "Karl"
+  },
+  "plugins": [
+    {
+      "name": "livtk",
+      "source": "./plugin",
+      "description": "Durable tasks for Claude Code: plans the human acknowledges, an event log in git, hooks that keep the gates."
+    }
+  ]
+}

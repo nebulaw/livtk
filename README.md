@@ -11,8 +11,23 @@ The design is in [docs/plan.md](docs/plan.md).
 
 ## Install
 
+The binary, then the Claude Code plugin (hooks, skills, agents) from this repository:
+
 ```
 cargo install --locked --path crates/livtk-cli
+claude plugin marketplace add /path/to/this/repo     # or: /plugin marketplace add nebulaw/tasks
+claude plugin install livtk@livtk                    # or: /plugin install livtk --marketplace nebulaw/tasks
+```
+
+The plugin is silent in any project without a `.livtk/` directory, so it can stay enabled
+everywhere. Optional per-project hook settings live in `.livtk/config.toml`:
+
+```toml
+[hooks]
+format = ["rustfmt", "--edition", "2024", "{file}"]   # after Claude edits a matching file
+format_extensions = ["rs"]
+check = ["cargo", "check", "--quiet"]                 # before the implementer agent may stop
+check_agents = ["livtk:implementer"]
 ```
 
 ## Use
@@ -28,7 +43,8 @@ livtk next                          # the best task to start now
 livtk start 1                       # refused while a dependency is open
 livtk move 1 review
 livtk done 1
-livtk show 1                        # links, body, history
+livtk note 1 "winit panics on resize; trying the drm path"
+livtk show 1                        # links, body, notes, history
 livtk log                           # every event in the project
 ```
 

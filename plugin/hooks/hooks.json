@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "livtk", "args": ["hook", "session-start"], "timeout": 10 }] }
+    ],
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "livtk", "args": ["hook", "subagent-start"], "timeout": 10 }] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "livtk", "args": ["hook", "pre-tool-use"], "timeout": 10 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "livtk", "args": ["hook", "post-tool-use"], "timeout": 120 }]
+      }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "livtk", "args": ["hook", "subagent-stop"], "timeout": 600 }] }
+    ]
+  }
+}

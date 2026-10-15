@@ -359,6 +359,14 @@ fn a_prompt_brings_back_the_rules_that_matter_and_nothing_else() {
         ],
     );
 
+    let long_rule = "Run cargo clippy with warnings denied before reporting a task done, because a lint that slips in now is a refactor later";
+    livtk(d, false, &["lesson", long_rule, "--why", "x"]);
+    livtk(d, true, &["ratify", "LES-3"]);
+    let v = prompt(d, "is the task done? did cargo clippy pass?").unwrap();
+    assert!(
+        context_of(&v).contains(long_rule),
+        "rules are injected whole: {v}"
+    );
     let v = prompt(d, "is the task done? did cargo check pass?").unwrap();
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
     let text = context_of(&v);

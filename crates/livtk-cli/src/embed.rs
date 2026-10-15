@@ -2,6 +2,7 @@
 //! `curl`, so livtk itself carries no network code.
 
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
 
@@ -50,8 +51,14 @@ fn setup(name: &str) -> Result<()> {
         let part = dir.join(format!("{file}.part"));
         let url = format!("https://huggingface.co/minishlab/{name}/resolve/main/{file}");
         eprintln!("livtk: fetching {url}");
+        // A progress bar on a terminal; quiet (errors only) when output is captured.
+        let progress = if std::io::stderr().is_terminal() {
+            "--progress-bar"
+        } else {
+            "-sS"
+        };
         let ok = Command::new("curl")
-            .args(["-fL", "--retry", "2", "--progress-bar", "-o"])
+            .args(["-fL", "--retry", "2", progress, "-o"])
             .arg(&part)
             .arg(&url)
             .status()

@@ -105,7 +105,8 @@ fn user_prompt_submit(input: &Value) -> Option<Value> {
                 Kind::Decision => "decision",
                 _ => "finding",
             };
-            let _ = writeln!(text, "- {} ({what}) {}", h.key, short(&h.title));
+            // Whole: a rule cut short can lose the very instruction. Titles are at most 200 characters.
+            let _ = writeln!(text, "- {} ({what}) {}", h.key, h.title);
         }
     }
     if prompt.len() <= PROMPT_MAX && reads_as_correction(prompt) {
@@ -307,7 +308,7 @@ fn standing_rules(b: &mut String, rules: &[livtk_core::Brief]) {
     }
     let mut block = String::from("Standing rules (ratified by the human; follow them):\n");
     for r in rules {
-        let line = format!("- {} {}\n", r.key, short(&r.title));
+        let line = format!("- {} {}\n", r.key, r.title);
         if block.len() + line.len() > RULES_MAX {
             block.push_str("- and more: `livtk list --kind lesson`\n");
             break;

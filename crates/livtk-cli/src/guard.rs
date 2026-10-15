@@ -19,8 +19,10 @@ const SEPARATORS: [char; 6] = [';', '&', '|', '\n', ')', '`'];
 pub struct Invocation {
     /// Byte offset where the program word starts (its path, if it has one).
     pub start: usize,
-    /// The program word is what the shell runs here, so an environment assignment placed in
-    /// front of it applies to it.
+    /// Byte offset just after the program word, where livtk's own flags begin.
+    pub end: usize,
+    /// The program word is what the shell runs here, so the words after it are livtk's own
+    /// arguments.
     pub runs: bool,
     /// The livtk subcommand, with global flags skipped.
     pub verb: Option<String>,
@@ -56,6 +58,7 @@ pub fn invocations(cmd: &str) -> Vec<Invocation> {
         let (verb, args) = split_verb(&tokens);
         out.push(Invocation {
             start,
+            end: at + word,
             runs: runs_at(&cmd[..start]),
             verb,
             args,
@@ -104,18 +107,21 @@ pub fn refuse_path(path: &str) -> Option<String> {
 }
 
 /// `cmd` with every livtk it runs signed by `agent`, or `None` if it runs none.
+///
+/// The signature is livtk's own `--agent` flag, placed right after the program word, so the
+/// command still starts with `livtk` and the user's permission rules for it still match.
 pub fn sign(cmd: &str, agent: &str) -> Option<String> {
     let spots: Vec<usize> = invocations(cmd)
         .into_iter()
-        .filter(|i| i.runs)
-        .map(|i| i.start)
+        .filter(|i| i.runs && i.verb.is_some())
+        .map(|i| i.end)
         .collect();
     if spots.is_empty() {
         return None;
     }
     let mut out = cmd.to_owned();
     for &p in spots.iter().rev() {
-        out.insert_str(p, &format!("LIVTK_AGENT={agent} "));
+        out.insert_str(p, &format!(" --agent {agent}"));
     }
     Some(out)
 }
@@ -146,8 +152,13 @@ fn split_verb(tokens: &[String]) -> (Option<String>, Vec<String>) {
     while let Some(t) = tokens.get(i) {
         match t.as_str() {
             "--" | "--json" => i += 1,
-            "-C" | "--dir" => i += 2,
-            t if t.starts_with("--dir=") || (t.starts_with("-C") && t.len() > 2) => i += 1,
+            "-C" | "--dir" | "--agent" => i += 2,
+            t if t.starts_with("--dir=")
+                || t.starts_with("--agent=")
+                || (t.starts_with("-C") && t.len() > 2) =>
+            {
+                i += 1
+            }
             _ => break,
         }
     }
@@ -262,28 +273,40 @@ mod tests {
     }
 
     #[test]
-    fn signs_each_run_in_front_of_the_program() {
+    fn signs_each_run_right_after_the_program_word() {
         assert_eq!(
             sign("livtk list", "refuter").as_deref(),
-            Some("LIVTK_AGENT=refuter livtk list")
+            Some("livtk --agent refuter list")
         );
         assert_eq!(
-            sign("cd x && livtk note 1 hi; ~/.cargo/bin/livtk next", "a").as_deref(),
-            Some("cd x && LIVTK_AGENT=a livtk note 1 hi; LIVTK_AGENT=a ~/.cargo/bin/livtk next")
+            sign(
+                "cd x && livtk note 1 hi; ~/.cargo/bin/livtk --json next",
+                "a"
+            )
+            .as_deref(),
+            Some("cd x && livtk --agent a note 1 hi; ~/.cargo/bin/livtk --agent a --json next")
         );
         assert_eq!(
             sign("FOO=1 livtk list", "a").as_deref(),
-            Some("FOO=1 LIVTK_AGENT=a livtk list")
+            Some("FOO=1 livtk --agent a list")
         );
         assert_eq!(
             sign("env livtk list", "a").as_deref(),
-            Some("env LIVTK_AGENT=a livtk list")
+            Some("env livtk --agent a list")
         );
-        // Where an assignment would not reach livtk, leave the command alone.
-        assert_eq!(sign("echo livtk", "a"), None);
+        // Where the words after it are not livtk's own arguments, leave the command alone.
+        assert_eq!(sign("echo livtk list", "a"), None);
         assert_eq!(sign("nohup livtk list", "a"), None);
-        assert_eq!(sign("cargo build -p livtk-cli", "a"), None);
+        assert_eq!(sign("cargo run --bin livtk -- list", "a"), None);
+        assert_eq!(sign("cd livtk", "a"), None);
         assert_eq!(sign("git status", "a"), None);
+    }
+
+    #[test]
+    fn a_signed_human_step_is_still_refused() {
+        let signed = sign("livtk ack 1", "refuter").unwrap();
+        assert!(refuse_bash(&signed).is_some());
+        assert!(refuse_bash("livtk --agent=x move 1 acked").is_some());
     }
 
     #[test]

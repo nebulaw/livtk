@@ -115,16 +115,17 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
         println!("\n{}", node.body);
     }
     println!("\nhistory");
+    let w = history.iter().map(|e| e.by.len()).max().unwrap_or(0);
     for e in &history {
         match &e.op {
             // Notes are the working record, so `show` prints them whole.
             Op::NodeNote { data, .. } => {
-                println!("  {}  {:<8}  note:", e.at, e.by);
+                println!("  {}  {:<w$}  note:", e.at, e.by);
                 for line in data.text.lines() {
                     println!("      {line}");
                 }
             }
-            _ => println!("  {}  {:<8}  {}", e.at, e.by, describe(ws, e)),
+            _ => println!("  {}  {:<w$}  {}", e.at, e.by, describe(ws, e)),
         }
     }
     Ok(())
@@ -200,11 +201,19 @@ pub fn log(ws: &Workspace, key: Option<&str>, json: bool) -> Result<()> {
     if json {
         return print_json(&events);
     }
+    let by_width = events.iter().map(|e| e.by.len()).max().unwrap_or(0);
     let mut text = String::new();
     for e in &events {
         let (subject, _) = e.op.subjects();
         let k = key_of(ws, subject).unwrap_or_else(|| "?".into());
-        writeln!(text, "{}  {:<8}  {:<8}  {}", e.at, e.by, k, describe(ws, e))?;
+        writeln!(
+            text,
+            "{}  {:<by_width$}  {:<8}  {}",
+            e.at,
+            e.by,
+            k,
+            describe(ws, e)
+        )?;
     }
     print_block(&text)
 }

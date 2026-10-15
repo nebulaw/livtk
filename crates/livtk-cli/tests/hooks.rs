@@ -205,10 +205,7 @@ fn a_subagents_livtk_commands_are_signed_and_nothing_else_changes() {
     )
     .unwrap();
     let updated = &v["hookSpecificOutput"]["updatedInput"];
-    assert_eq!(
-        updated["command"],
-        "LIVTK_AGENT=refuter livtk note 3 found it"
-    );
+    assert_eq!(updated["command"], "livtk --agent refuter note 3 found it");
     assert_eq!(updated["description"], "keep me");
     assert_eq!(updated["timeout"], 120000);
     assert!(

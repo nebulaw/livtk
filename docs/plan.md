@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 and 2 built; milestone 2 waits for its check in a real session.
+Status: milestones 1 and 2 done; milestone 3 (memory) waits for the developer's go.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -114,8 +114,8 @@ fields, JSON), `created`, `updated`, `created_by`.
 - A `depends_on` edge that would close a cycle is refused.
 
 **Actor.** The app is always `human`. The CLI is `claude` when `CLAUDECODE=1` is set (Claude Code
-sets it in every shell it runs), otherwise `human`. Subagents can name themselves
-(`claude:refuter`). This is a guard rail, not security: milestone 2 adds a hook that blocks
+sets it in every shell it runs), otherwise `human`. The plugin names subagents
+(`claude:refuter`) with a hidden `--agent` flag, which a human-run command refuses. This is a guard rail, not security: milestone 2 adds a hook that blocks
 Claude from running human-only commands or stripping the variable. The human is the root of
 trust.
 
@@ -388,7 +388,7 @@ An internal error never blocks a session: it exits 0 and stays silent.
 |---|---|
 | SessionStart (startup, resume, clear, compact) | The brief, under 1,500 characters: work in progress with its last event, tasks waiting for the human's ack, the next task, and how to drive livtk. After compaction this restores the thread, so no PreCompact hook is needed |
 | SubagentStart | A shorter brief for the subagent: the task in progress and the rules it must follow |
-| PreToolUse (Bash) | Denies a command that runs a human-only livtk step (`ack`, `move .. acked`) or touches `CLAUDECODE`. When a subagent runs `livtk`, rewrites the command to sign its events: `LIVTK_AGENT=<agent>` goes right in front of each `livtk` the shell runs, and no permission decision is returned, so normal permission rules still apply |
+| PreToolUse (Bash) | Denies a command that runs a human-only livtk step (`ack`, `move .. acked`) or touches `CLAUDECODE`. When a subagent runs `livtk`, rewrites the command to sign its events: livtk's own hidden `--agent <name>` flag goes right after each `livtk` the shell runs, so the command still starts with `livtk`, the user's permission rules still match it, and no permission decision is returned. (A first version put `LIVTK_AGENT=<name>` in front; the live check showed that breaks `livtk *` allow rules, and subagent shells carry no variable naming the agent, so the hook must pass it.) |
 | PreToolUse (Edit, Write) | Denies hand edits to anything inside `.livtk/`: the log changes only through livtk |
 | PostToolUse (Edit, Write) | Runs the project's format command on the edited file, if configured |
 | SubagentStop | Runs the project's check command before a configured agent (by default the implementer) may stop; blocks with the failing output, once (no loop: `stop_hook_active`) |

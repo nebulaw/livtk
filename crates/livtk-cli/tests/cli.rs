@@ -22,7 +22,7 @@ fn livtk(dir: &Path, who: As, args: &[&str]) -> Output {
 
 fn livtk_with_stdin(dir: &Path, who: As, args: &[&str], stdin: Option<&str>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_livtk"));
-    cmd.current_dir(dir).args(args).env_remove("LIVTK_AGENT");
+    cmd.current_dir(dir).args(args);
     match who {
         As::Human => cmd.env_remove("CLAUDECODE"),
         As::Claude => cmd.env("CLAUDECODE", "1"),
@@ -120,18 +120,25 @@ fn a_task_from_idea_to_done() {
 }
 
 #[test]
-fn a_subagent_signs_its_events() {
+fn a_subagent_signs_its_events_and_a_human_needs_no_label() {
     let dir = project();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_livtk"));
-    let out = cmd
-        .current_dir(dir.path())
-        .args(["new", "from a subagent"])
-        .env("CLAUDECODE", "1")
-        .env("LIVTK_AGENT", "refuter")
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    assert_eq!(json(dir.path(), &["log"])[0]["by"], "claude:refuter");
+    ok(
+        dir.path(),
+        As::Claude,
+        &["--agent", "refuter", "new", "from a subagent"],
+    );
+    ok(dir.path(), As::Claude, &["new", "from the main session"]);
+    let by: Vec<Value> = json(dir.path(), &["log"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["by"].clone())
+        .collect();
+    assert_eq!(by, ["claude:refuter", "claude"]);
+
+    let out = livtk(dir.path(), As::Human, &["--agent", "refuter", "list"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("need no label"));
 }
 
 #[test]

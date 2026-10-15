@@ -27,6 +27,10 @@ struct Cli {
     #[arg(short = 'C', long, global = true, value_name = "DIR")]
     dir: Option<PathBuf>,
 
+    /// The Claude Code subagent running this command. The plugin adds it; people never need it.
+    #[arg(long, global = true, hide = true, value_name = "NAME")]
+    agent: Option<String>,
+
     #[command(subcommand)]
     command: Cmd,
 }
@@ -137,14 +141,18 @@ fn main() -> ExitCode {
     }
 }
 
-/// Claude Code sets CLAUDECODE=1 in every shell it runs. Subagents may name themselves.
-fn actor() -> Actor {
-    if std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1") {
-        Actor::Claude {
-            agent: std::env::var("LIVTK_AGENT").ok().filter(|a| !a.is_empty()),
+/// Claude Code sets CLAUDECODE=1 in every shell it runs; its plugin hook names subagents with
+/// `--agent`.
+fn actor(agent: Option<String>) -> Result<Actor> {
+    let claude = std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1");
+    match (claude, agent) {
+        (true, agent) => Ok(Actor::Claude {
+            agent: agent.filter(|a| !a.is_empty()),
+        }),
+        (false, None) => Ok(Actor::Human),
+        (false, Some(_)) => {
+            anyhow::bail!("--agent names a Claude Code subagent; commands you run need no label")
         }
-    } else {
-        Actor::Human
     }
 }
 
@@ -157,8 +165,8 @@ fn run(cli: Cli) -> Result<()> {
         let ws = Workspace::init(&cwd, prefix.as_deref())?;
         return output::initialised(&ws, cli.json);
     }
+    let by = actor(cli.agent)?;
     let mut ws = Workspace::open(&cwd)?;
-    let by = actor();
     let result = dispatch(&mut ws, cli.command, &by, cli.json);
     for w in ws.take_warnings() {
         eprintln!("livtk: warning: {w}");

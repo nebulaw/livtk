@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestone 1 built (core and CLI); waiting for the developer to try it before milestone 2.
+Status: milestones 1 and 2 built; milestone 2 waits for its check in a real session.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -361,3 +361,82 @@ Every command takes `--json`. Errors print one line saying what is wrong and how
 
 Lint clean (`fmt`, `clippy -D warnings`). One commit for the scaffold, then one per working
 slice, all local.
+
+## 14. Milestone 2 in detail: the Claude Code plugin
+
+**Layout.** The plugin lives in `plugin/`, so installing it never copies the Rust sources or
+`target/`. The repo root carries the marketplace that points at it.
+
+```
+tasks/
+├── .claude-plugin/marketplace.json     one plugin, source ./plugin
+└── plugin/
+    ├── .claude-plugin/plugin.json
+    ├── hooks/hooks.json                every hook is `livtk hook <event>`, exec form
+    ├── skills/plan/  skills/work/  skills/review/
+    └── agents/implementer.md  refuter.md  researcher.md
+```
+
+No `bin/` wrapper: hooks and Claude call the `livtk` installed by `cargo install`. If it is
+missing, Claude Code shows a hook error that names it, and nothing else breaks.
+
+**`livtk hook <event>`.** Reads the hook JSON on stdin and answers in the documented shapes.
+Outside a livtk project it prints nothing and exits 0, so the plugin can be enabled everywhere.
+An internal error never blocks a session: it exits 0 and stays silent.
+
+| Hook | Does |
+|---|---|
+| SessionStart (startup, resume, clear, compact) | The brief, under 1,500 characters: work in progress with its last event, tasks waiting for the human's ack, the next task, and how to drive livtk. After compaction this restores the thread, so no PreCompact hook is needed |
+| SubagentStart | A shorter brief for the subagent: the task in progress and the rules it must follow |
+| PreToolUse (Bash) | Denies a command that runs a human-only livtk step (`ack`, `move .. acked`) or touches `CLAUDECODE`. When a subagent runs `livtk`, rewrites the command to sign its events: `LIVTK_AGENT=<agent>` goes right in front of each `livtk` the shell runs, and no permission decision is returned, so normal permission rules still apply |
+| PreToolUse (Edit, Write) | Denies hand edits to anything inside `.livtk/`: the log changes only through livtk |
+| PostToolUse (Edit, Write) | Runs the project's format command on the edited file, if configured |
+| SubagentStop | Runs the project's check command before a configured agent (by default the implementer) may stop; blocks with the failing output, once (no loop: `stop_hook_active`) |
+
+The Bash guard matches text, so it is a guard rail, not security: a command that merely mentions
+`livtk ack` in quotes is also denied, and Claude is told to use the Grep tool instead. The human
+stays the root of trust.
+
+**Project settings**, all optional, in `.livtk/config.toml`:
+
+```toml
+[hooks]
+format = ["rustfmt", "--edition", "2024", "{file}"]
+format_extensions = ["rs"]
+check = ["cargo", "check", "--quiet"]
+check_agents = ["livtk:implementer"]
+```
+
+**Skills** (namespaced `livtk:`)
+
+| Skill | What Claude does |
+|---|---|
+| `plan` | Reads the code, writes tasks with a body of Goal, Approach, Files, Acceptance check; adds dependencies; moves them to planned; then stops and asks the human to acknowledge |
+| `work` | `livtk next` → `start` → do the work → verify against the acceptance check → `move review` → hand to the refuter → `done`, or back to `doing` with a note on what failed |
+| `review` | Runs the refuter on a task in review and records its verdict |
+
+**Agents**: `implementer` (writes code within one task), `refuter` (read-only; sees the diff
+and the acceptance check, tries to prove the task is not done), `researcher` (read-only).
+
+**One addition to the event format: notes.** Work needs a place to say "tried X, failed because
+Y" without editing the plan (which would send it back for acknowledgement). A sixth operation,
+`node.note {node, text}`, records a note in the history; it changes no state. `livtk note KEY
+"text"` writes one; `show` and the app's timeline display them. Each event now carries the
+format version its operation needs (`node.note` is version 2, everything else stays 1), so older
+logs keep their exact bytes and an older livtk skips a note with an "update livtk" warning.
+
+**Tests**
+
+1. Each hook as a process: JSON in, JSON and exit code out, for every row of the table.
+2. The guard denies `livtk ack 1`, `cd x && livtk --json move 2 acked`, `env -u CLAUDECODE
+   livtk list`, a nested `sh -c "livtk ack 1"`, and an Edit of `.livtk/events.jsonl`; it allows
+   `livtk list`, `git add .livtk`, and edits elsewhere.
+3. SubagentStop blocks on a failing check, not when `stop_hook_active` is set, and never for an
+   agent outside `check_agents`.
+4. Outside a project every hook is silent.
+5. Each hook under 20 ms.
+6. `claude plugin validate` passes.
+
+**Done when** the plugin is installed from the local marketplace, `livspeil` has a `.livtk/`,
+and in a real session: the brief appears, Claude plans tasks and stops for your ack, Claude
+cannot ack, and a subagent's events carry its name.

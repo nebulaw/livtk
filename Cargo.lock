@@ -3939,7 +3939,7 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
 name = "livtk-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "gpui-kit",
  "gpui-pre",
@@ -3953,7 +3953,7 @@ dependencies = [
 
 [[package]]
 name = "livtk-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3966,7 +3966,7 @@ dependencies = [
 
 [[package]]
 name = "livtk-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "jiff",
  "model2vec-rs",

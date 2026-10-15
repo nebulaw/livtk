@@ -1,6 +1,6 @@
 # livtk: plan
 
-Status: milestones 1 to 3 built; milestone 3 waits for its check in a real session.
+Status: milestones 1 to 3 done; milestone 4 (the app) waits for the developer's go.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:

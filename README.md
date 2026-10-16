@@ -1,5 +1,7 @@
 # livtk
 
+![The livtk app: the graph of a project's work, with a task open in the detail panel](screenshot.png)
+
 Durable tasks and memory for Claude Code and its human. Local only: no API, no server, no keys.
 
 Claude plans work and moves it along; the human acknowledges each plan before it starts. Every

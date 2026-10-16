@@ -2268,6 +2268,115 @@ fn a_checkout_is_caught_up_in_the_background_and_shown(cx: &mut TestAppContext) 
     );
 }
 
+fn move_to(cx: &mut gpui_kit::VisualTestContext, x: f32, y: f32) {
+    cx.simulate_event(gpui_kit::MouseMoveEvent {
+        position: gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y)),
+        modifiers: gpui_kit::Modifiers::default(),
+        pressed_button: None,
+    });
+    redraw(cx);
+}
+
+fn centre(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) -> (f32, f32) {
+    let c = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    (f32::from(c.x), f32::from(c.y))
+}
+
+#[gpui_kit::test]
+fn each_edge_sits_in_the_middle_of_its_gutter(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 900.);
+    open_detail(cx);
+    let content = cx.debug_bounds("content-box").unwrap();
+    let (left, _) = centre(cx, "sidebar-edge");
+    let (right, _) = centre(cx, "panel-edge");
+    assert!(
+        near(left, f32::from(content.left()) - 4.),
+        "the sidebar's 4 px left of the content: {left} by {content:?}"
+    );
+    assert!(
+        near(right, f32::from(content.right()) + 4.),
+        "the panel's 4 px right of it: {right} by {content:?}"
+    );
+
+    resize(cx, 800., 700.);
+    settle(cx);
+    let float = cx.debug_bounds("panel-float").unwrap();
+    let (x, _) = centre(cx, "panel-edge");
+    assert!(
+        near(x, f32::from(float.left())),
+        "a floating panel's on its border: {x} by {float:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_glow_with_its_handle_follows_the_pointer_along_an_edge(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    assert!(cx.debug_bounds("edge-glow").is_none(), "nothing at rest");
+    let (x, _) = centre(cx, "sidebar-edge");
+    move_to(cx, x, 300.);
+    let (hx, hy) = centre(cx, "edge-handle");
+    assert!(near(hx, x) && near(hy, 300.), "at the pointer: {hx}, {hy}");
+    assert!(
+        cx.debug_bounds("icon-move-horizontal").is_some(),
+        "with its arrows"
+    );
+    move_to(cx, x, 500.);
+    assert!(near(centre(cx, "edge-handle").1, 500.), "following it");
+    move_to(cx, x, 10.);
+    let glow = cx.debug_bounds("edge-glow").unwrap();
+    assert!(
+        near(f32::from(glow.top()), 0.),
+        "near the top it stops at the window's edge: {glow:?}"
+    );
+    move_to(cx, 700., 300.);
+    assert!(
+        cx.debug_bounds("edge-glow").is_none(),
+        "gone when the pointer leaves"
+    );
+
+    // Dragged, it stays lit wherever the pointer goes, and goes when let go away from the edge.
+    move_to(cx, x, 400.);
+    cx.simulate_event(gpui_kit::MouseDownEvent {
+        position: gpui_kit::point(gpui_kit::px(x), gpui_kit::px(400.)),
+        modifiers: gpui_kit::Modifiers::default(),
+        button: gpui_kit::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    redraw(cx);
+    cx.simulate_event(gpui_kit::MouseMoveEvent {
+        position: gpui_kit::point(gpui_kit::px(320.), gpui_kit::px(450.)),
+        modifiers: gpui_kit::Modifiers::default(),
+        pressed_button: Some(gpui_kit::MouseButton::Left),
+    });
+    redraw(cx);
+    let (hx, hy) = centre(cx, "edge-handle");
+    assert!(
+        near(hx, 316.) && near(hy, 450.),
+        "lit mid-drag, with the edge and the pointer: {hx}, {hy}"
+    );
+    cx.simulate_event(gpui_kit::MouseUpEvent {
+        position: gpui_kit::point(gpui_kit::px(320.), gpui_kit::px(450.)),
+        modifiers: gpui_kit::Modifiers::default(),
+        button: gpui_kit::MouseButton::Left,
+        click_count: 1,
+    });
+    redraw(cx);
+    move_to(cx, 700., 450.);
+    drag_to(cx, "sidebar-edge", 300.);
+    assert!(
+        cx.debug_bounds("edge-glow").is_none(),
+        "let go away from the edge, it goes"
+    );
+}
+
 #[gpui_kit::test]
 fn ctrl_enter_in_the_new_tasks_body_creates_it(cx: &mut TestAppContext) {
     let dir = project();

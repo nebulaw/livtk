@@ -60,6 +60,8 @@ icons! {
     DockRight => "dock-right-arrow",
     /// Collapsing the sidebar to its rail.
     DockLeft => "dock-left-arrow",
+    /// The handle on an edge that resizes the sidebar or the panel.
+    Resize => "move-horizontal",
     Link => "link",
     Unlink => "unlink",
     Notes => "message-circle-dots-2",

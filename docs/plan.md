@@ -926,6 +926,21 @@ Asked for while trying the app, and built in one batch:
   secondary Enter, after putting in the newline Enter does. The form now listens for that, as
   the detail panel's editor already did, and trims the newline. A test types a two-line plan and
   creates the task with Ctrl+Enter, and fails without the fix.
+- **The resize edges, redesigned by the developer.**
+  - **Placement.** Each edge spans the 8 px gutter beside the content box, so its middle is 4 px
+    from the box on either side. Before, the sidebar's sat 3 px from the box and the panel's
+    11 px. A floating panel's edge sits across its border.
+  - **At rest:** nothing. **On hover:** a glow along the edge follows the pointer up and down,
+    clamped to the window, and fades in over 140 ms. It is a lens of light, accent and
+    thickest at the middle, thinning and fading to nothing at both ends. It is built from
+    elements, not drawn: three pills 1, 2 and 4 px wide and 120, 79 and 48 px long, each half a
+    linear gradient to transparent. In the middle is a 20 px accent badge, ringed in the
+    window's black, holding Boxicons' `move-horizontal` (⟷).
+  - **The icon.** The developer chose it over the carets already in the app and over `code`
+    (`<>`). Boxicons v3 is not on npm as `boxicons`, so it came from their own `@boxicons/js`
+    package, whose shapes match the site's files (its `arrow-down-up` is ours point for point).
+  - **Dragging:** brighter, with the pointer, wherever it goes. Let go away from the edge, the
+    glow goes. No scaling anywhere, by the developer's rule.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

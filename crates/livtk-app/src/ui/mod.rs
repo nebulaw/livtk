@@ -362,6 +362,11 @@ pub struct LivtkApp {
     panel_width: f32,
     /// The edge being dragged, if any.
     resizing: Option<Edge>,
+    /// The edge under the pointer (or being dragged), where along it, and since which arrival.
+    edge_hover: Option<EdgeHover>,
+    edge_epoch: usize,
+    /// The edge the pointer is over, dragging or not.
+    edge_inside: Option<Edge>,
     /// Where `app.toml` is, when the app remembers between runs (tests leave it out), and what
     /// was last written there, so it is written only when something changed.
     saved_path: Option<PathBuf>,
@@ -437,6 +442,9 @@ impl LivtkApp {
             sidebar_peek: false,
             panel_width: PANEL_WIDTH,
             resizing: None,
+            edge_hover: None,
+            edge_epoch: 0,
+            edge_inside: None,
             saved_path: None,
             last_saved: Saved::default(),
             filter,
@@ -1199,40 +1207,52 @@ impl LivtkApp {
                         cx.notify();
                     })),
             )
-            .child(self.edge(Edge::Sidebar, cx))
+            .child(self.edge(Edge::Sidebar, window, cx).right_0())
             .into_any_element()
     }
 
-    /// A draggable edge: the sidebar's right, the panel's left. Nothing shows at rest, a thin line
-    /// on hover (the cursor stays, by the developer's rule), the accent while dragging; a
-    /// double-click puts the width back to its default.
-    fn edge(&self, edge: Edge, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// A draggable edge: the sidebar's right, the panel's left, spanning the gutter beside the
+    /// content box, so its middle is 4 px from the box on either side. Nothing shows at rest. On
+    /// hover a glow follows the pointer along it, the handle at its middle (the cursor stays, by
+    /// the developer's rule); dragging brightens it. A double-click puts the width back to its
+    /// default. The caller places it: `right_0` beside the sidebar and the content, or across
+    /// a floating panel's border.
+    fn edge(&self, edge: Edge, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let id = match edge {
             Edge::Sidebar => "sidebar-edge",
             Edge::Panel => "panel-edge",
         };
         let dragging = self.resizing == Some(edge);
+        let glow = self
+            .edge_hover
+            .filter(|h| h.edge == edge)
+            .map(|h| edge_glow(h, dragging, f32::from(window.viewport_size().height)));
         div()
             .id(id)
             .debug_selector(move || id.into())
-            .group(id)
             .absolute()
             .top_0()
             .bottom_0()
-            .when(edge == Edge::Sidebar, |d| d.right_0())
-            .when(edge == Edge::Panel, |d| d.left_0())
-            .w(px(6.))
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .w(px(if dragging { 2. } else { 1. }))
-                    .h_full()
-                    .when(dragging, |l| l.bg(color(ACCENT)))
-                    .when(!dragging, |l| {
-                        l.group_hover(id, |s| s.bg(color(BORDER_STRONG)))
-                    }),
-            )
+            .w(px(EDGE_W))
+            .children(glow)
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.edge_inside = Some(edge);
+                    return;
+                }
+                if this.edge_inside == Some(edge) {
+                    this.edge_inside = None;
+                }
+                // Dragging keeps it lit wherever the pointer goes.
+                if this.resizing != Some(edge) && this.edge_hover.is_some_and(|h| h.edge == edge) {
+                    this.edge_hover = None;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
+                this.hover_edge(edge, f32::from(e.position.y));
+                cx.notify();
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -1249,6 +1269,18 @@ impl LivtkApp {
                     cx.notify();
                 }),
             )
+    }
+
+    /// The pointer over `edge` at height `y`: the glow follows it, fading in when it arrives.
+    fn hover_edge(&mut self, edge: Edge, y: f32) {
+        let epoch = match self.edge_hover {
+            Some(h) if h.edge == edge => h.epoch,
+            _ => {
+                self.edge_epoch += 1;
+                self.edge_epoch
+            }
+        };
+        self.edge_hover = Some(EdgeHover { edge, y, epoch });
     }
 
     /// The pointer at `x` while dragging `edge` in a window `window_w` wide. The sidebar's width
@@ -3623,11 +3655,9 @@ impl LivtkApp {
             .w(px(width))
             .flex_none()
             .h_full()
-            .relative()
             // The window's black shows through, as behind the sidebar.
             .flex()
             .flex_col()
-            .child(self.edge(Edge::Panel, cx))
             .child(
                 div()
                     .h(px(46.))
@@ -4161,6 +4191,14 @@ impl Render for LivtkApp {
         let panel_w = self.panel_px(window);
         let floats = self.panel_floats(window);
         // A narrow window has no room for the panel beside the content: it floats over it.
+        // The panel's edge, while it is open (not while it slides away): in the gutter right of
+        // the content box, or across the border of a panel floating over it.
+        let mut panel_edge = self
+            .model
+            .detail
+            .is_some()
+            .then(|| self.edge(Edge::Panel, window, cx));
+        let float_edge = if floats { panel_edge.take() } else { None };
         let detail = self.detail(panel_w, cx).map(|d| {
             if floats {
                 div()
@@ -4175,6 +4213,8 @@ impl Render for LivtkApp {
                     .border_color(color(BORDER_STRONG))
                     .shadow_lg()
                     .child(d)
+                    // Centred on the 1 px border, which positions count from inside of.
+                    .children(float_edge.map(|e| e.left(px(-EDGE_W / 2. - 0.5))))
                     .into_any_element()
             } else {
                 d
@@ -4198,6 +4238,7 @@ impl Render for LivtkApp {
                         let _ = moved.update(cx, |app, cx| {
                             if held {
                                 app.drag_edge(edge, f32::from(e.position.x), w);
+                                app.hover_edge(edge, f32::from(e.position.y));
                             } else {
                                 app.resizing = None;
                             }
@@ -4210,6 +4251,10 @@ impl Render for LivtkApp {
                             return;
                         }
                         let _ = released.update(cx, |app, cx| {
+                            // Let go away from the edge, its glow goes; over it, it stays.
+                            if app.edge_inside != app.resizing {
+                                app.edge_hover = None;
+                            }
                             app.resizing = None;
                             cx.notify();
                         });
@@ -4331,40 +4376,48 @@ impl Render for LivtkApp {
             }))
             .child(sidebar)
             .child(
-                div().flex_1().min_w_0().h_full().py_2().pr_2().child(
-                    div()
-                        .debug_selector(|| "content-box".into())
-                        .size_full()
-                        .flex()
-                        .rounded_xl()
-                        .border_1()
-                        .border_color(color(BORDER))
-                        .bg(color(CONTENT))
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .relative()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .child(header)
-                                .child(list_area)
-                                // Floating over the content's bottom, centred on it; it moves
-                                // with the content as the detail panel opens beside it.
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .right_0()
-                                        .bottom(px(DOCK_GAP))
-                                        .flex()
-                                        .justify_center()
-                                        .child(dock),
-                                ),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .py_2()
+                    .pr_2()
+                    .relative()
+                    .children(panel_edge.map(|e| e.right_0()))
+                    .child(
+                        div()
+                            .debug_selector(|| "content-box".into())
+                            .size_full()
+                            .flex()
+                            .rounded_xl()
+                            .border_1()
+                            .border_color(color(BORDER))
+                            .bg(color(CONTENT))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .child(header)
+                                    .child(list_area)
+                                    // Floating over the content's bottom, centred on it; it moves
+                                    // with the content as the detail panel opens beside it.
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom(px(DOCK_GAP))
+                                            .flex()
+                                            .justify_center()
+                                            .child(dock),
+                                    ),
+                            ),
+                    ),
             )
             // Beside the content box, on the window's own black, as the sidebar is: the content
             // stands alone in the middle.
@@ -4435,6 +4488,90 @@ fn glide_highlight(from: f32, to: f32, epoch: usize) -> AnyElement {
 enum Edge {
     Sidebar,
     Panel,
+}
+
+/// The pointer on an edge: which, how far down the window, and which arrival (each fades in).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EdgeHover {
+    edge: Edge,
+    y: f32,
+    epoch: usize,
+}
+
+/// An edge spans the gutter between the content box and the pane beside it.
+const EDGE_W: f32 = 8.;
+/// The glow along a hovered edge, and the handle at its middle.
+const GLOW_LEN: f32 = 120.;
+const HANDLE: f32 = 20.;
+/// The glow fading in as the pointer arrives.
+const GLOW_IN: Duration = Duration::from_millis(140);
+
+/// The glow on an edge at the pointer: a lens of light, accent at its middle and thickest
+/// there, thinning and fading to nothing at both ends, and the handle on it. Three pills of
+/// light make the lens, each shorter and wider than the last; where they overlap the light is
+/// strongest. Drawn last (deferred), so it lies over the panes on either side; it takes no
+/// pointer events. While dragging it is brighter.
+fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32) -> AnyElement {
+    let half = GLOW_LEN / 2.;
+    let y = h.y.clamp(half, (window_h - half).max(half));
+    let strength = if dragging { 1. } else { 0.75 };
+    let pill = |w: f32, len: f32, alpha: f32| {
+        let lit = with_alpha(ACCENT, alpha * strength);
+        let clear = with_alpha(ACCENT, 0.);
+        div()
+            .absolute()
+            .top(px((GLOW_LEN - len) / 2.))
+            .left(px((HANDLE - w) / 2.))
+            .w(px(w))
+            .h(px(len))
+            .flex()
+            .flex_col()
+            .child(div().flex_1().rounded_t_full().bg(linear_gradient(
+                180.,
+                linear_color_stop(clear, 0.),
+                linear_color_stop(lit, 1.),
+            )))
+            .child(div().flex_1().rounded_b_full().bg(linear_gradient(
+                180.,
+                linear_color_stop(lit, 0.),
+                linear_color_stop(clear, 1.),
+            )))
+    };
+    deferred(
+        div()
+            .debug_selector(|| "edge-glow".into())
+            .absolute()
+            .top(px(y - half))
+            .left(px((EDGE_W - HANDLE) / 2.))
+            .w(px(HANDLE))
+            .h(px(GLOW_LEN))
+            .child(pill(1., GLOW_LEN, 0.9))
+            .child(pill(2., GLOW_LEN * 0.66, 0.7))
+            .child(pill(4., GLOW_LEN * 0.4, 0.6))
+            .child(
+                div()
+                    .debug_selector(|| "edge-handle".into())
+                    .absolute()
+                    .top(px((GLOW_LEN - HANDLE) / 2.))
+                    .left_0()
+                    .size(px(HANDLE))
+                    .rounded_full()
+                    // A ring of the window's own black sets it off the content box's border.
+                    .border_2()
+                    .border_color(color(WINDOW))
+                    .bg(color(if dragging { ACCENT_HOVER } else { ACCENT }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(Icon::Resize, 12., TEXT)),
+            )
+            .with_animation(
+                SharedString::from(format!("edge-glow-{}", h.epoch)),
+                Animation::new(GLOW_IN).with_easing(ease_out_cubic),
+                |el, t| el.opacity(t),
+            ),
+    )
+    .into_any_element()
 }
 
 const GROUPINGS: &[(&str, &str, Grouping)] = &[

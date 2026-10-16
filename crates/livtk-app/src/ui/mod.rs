@@ -87,6 +87,8 @@ const SLIDE_OUT: Duration = Duration::from_millis(200);
 const DETAIL_WIDTH: f32 = 480.;
 /// How much `+` and `-` zoom the graph.
 const ZOOM_STEP: f32 = 1.25;
+/// A list row's leading slot: a task's priority, or another kind's icon.
+const LEAD: f32 = 22.;
 /// An arrowhead on screen: its tip, and the way it points.
 type Arrowhead = ((f32, f32), (f32, f32));
 
@@ -1520,6 +1522,8 @@ impl LivtkApp {
             .items_center()
             .gap_2()
             .rounded_lg()
+            // Alone, the mark fills the rows' leading slot exactly, as non-tasks' kind icons do.
+            .when(!name, |b| b.w(px(LEAD)).justify_center())
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
             .child(priority_mark(current))
@@ -2638,12 +2642,18 @@ impl LivtkApp {
             .when(selected, |d| d.bg(color(SELECTED)))
             .when(!selected, |d| d.hover(|s| s.bg(color(HOVER))))
             .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }));
-        if r.kind == Kind::Task {
-            row = row.child(self.priority_button(Menu::RowPriority(id), id, r.priority, false, cx));
-        }
+        // Every row leads with the same slot, so keys, states and titles line up whatever the
+        // kind: a task's priority, else the kind's icon.
+        row = if r.kind == Kind::Task {
+            row.child(self.priority_button(Menu::RowPriority(id), id, r.priority, false, cx))
+        } else {
+            row.child(kind_slot(r.kind))
+        };
+        let key = r.key.clone();
         row = row
             .child(
                 div()
+                    .debug_selector(move || format!("key-{key}"))
                     .w(px(62.))
                     .flex_none()
                     .text_color(color(TEXT_4))
@@ -3093,13 +3103,19 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .items_center()
-            .pt(px(110.))
+            // On a short window the gap above gives way first, then the card, whose content
+            // scrolls inside it: a modal never runs past the window's bottom edge.
+            .pb(px(16.))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
             )
+            .child(div().h(px(110.)).min_h(px(16.)).flex_shrink(20.))
             .child(
                 card.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .min_h_0()
+                    .flex_shrink(1.)
+                    .overflow_hidden()
                     .rounded_xl()
                     .bg(color(SURFACE))
                     .border_1()
@@ -3205,6 +3221,9 @@ impl LivtkApp {
             .id("palette-results")
             .track_scroll(&self.palette_scroll)
             .max_h(px(400.))
+            // On a short window the results give way and scroll, so the card fits.
+            .min_h_0()
+            .flex_shrink(1.)
             .overflow_y_scroll()
             .p_1()
             .flex()
@@ -3455,6 +3474,7 @@ impl LivtkApp {
         }
         sections = sections.child(block);
         let card = div()
+            .debug_selector(|| "shortcuts-card".into())
             .w(px(520.))
             .max_h(px(620.))
             .flex()
@@ -3479,7 +3499,9 @@ impl LivtkApp {
             .child(
                 div()
                     .id("shortcuts-scroll")
+                    .debug_selector(|| "shortcuts-scroll".into())
                     .flex_1()
+                    .min_h_0()
                     .overflow_y_scroll()
                     .p_4()
                     .child(sections),
@@ -3731,6 +3753,24 @@ fn section_label(text: &str) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(TEXT_4))
         .child(text.to_owned())
+}
+
+/// A non-task row's leading slot: its kind's icon, as wide as a task's priority button.
+fn kind_slot(kind: Kind) -> Div {
+    let glyph = match kind {
+        Kind::Task => Icon::Tasks,
+        Kind::Lesson => Icon::Lessons,
+        Kind::Decision => Icon::Decisions,
+        Kind::Finding => Icon::Findings,
+    };
+    div()
+        .w(px(LEAD))
+        .h(px(22.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .child(icon(glyph, 14., TEXT_4).debug_selector(|| "kind-icon".into()))
 }
 
 /// A view's icon, as the sidebar and the palette show it.

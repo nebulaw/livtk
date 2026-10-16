@@ -1509,3 +1509,71 @@ fn the_palette_has_a_search_icon_and_an_icon_on_every_action(cx: &mut TestAppCon
         "the footer's enter"
     );
 }
+
+#[gpui_kit::test]
+fn rows_of_every_kind_line_up_in_the_inbox(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    // The inbox: two plans and a lesson, which has no priority.
+    let task = cx.debug_bounds("key-LIV-1").expect("a task's key");
+    let lesson = cx.debug_bounds("key-LES-1").expect("a lesson's key");
+    assert_eq!(task.left(), lesson.left(), "keys start in one column");
+    let slot = cx
+        .debug_bounds("kind-icon")
+        .expect("the lesson's kind icon");
+    let prio = cx
+        .debug_bounds(named(format!("priority-of-{}", id_of(dir.path(), "LIV-1"))))
+        .unwrap();
+    assert_eq!(
+        prio.size.width,
+        gpui_kit::px(22.),
+        "the priority button's width"
+    );
+    assert!(
+        slot.right() <= lesson.left(),
+        "the kind icon leads the lesson's row"
+    );
+    let states: Vec<_> = ["LIV-1", "LES-1"]
+        .iter()
+        .map(|k| {
+            cx.debug_bounds(named(format!("state-of-{}", id_of(dir.path(), k))))
+                .unwrap()
+                .left()
+        })
+        .collect();
+    assert_eq!(states[0], states[1], "state icons in one column too");
+}
+
+#[gpui_kit::test]
+fn modals_fit_a_short_window_and_scroll_inside(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    let short = gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(420.));
+    cx.simulate_resize(short);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-?");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let card = cx
+        .debug_bounds("shortcuts-card")
+        .expect("the shortcuts are open");
+    assert!(card.top() >= gpui_kit::px(0.), "{card:?}");
+    assert!(
+        card.bottom() <= short.height,
+        "the card {card:?} ends inside a window {} tall",
+        short.height
+    );
+    let scroll = cx.debug_bounds("shortcuts-scroll").unwrap();
+    assert!(
+        scroll.size.height > gpui_kit::px(100.),
+        "the list keeps room to scroll in: {scroll:?}"
+    );
+    cx.simulate_keystrokes("escape ctrl-k");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let palette = cx.debug_bounds("palette").expect("the palette is open");
+    assert!(
+        palette.bottom() <= short.height,
+        "the palette fits too: {palette:?}"
+    );
+}

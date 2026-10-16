@@ -1,4 +1,7 @@
 //! The window with real key events, headless: what the keys do, and what they must not do.
+//!
+//! These tests find elements by debug selectors, which GPUI records only in debug builds: run
+//! them without `--release`. Only the ignored benchmark is meant for release.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
 use gpui_kit::TestAppContext;

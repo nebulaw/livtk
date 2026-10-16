@@ -125,7 +125,8 @@ shortcut; the ones used most:
 
 ```
 cargo test                                           # core and CLI
-cargo test -p livtk-app                              # the app, with headless UI tests
+cargo test -p livtk-app                              # the app, with headless UI tests (debug only)
+cargo test --release -p livtk-app -- --ignored       # the app's layout and drawing budgets
 cargo test --release -p livtk-cli -- --ignored       # the speed budget on 10k tasks
 cargo clippy --all-targets && cargo fmt --check
 ```

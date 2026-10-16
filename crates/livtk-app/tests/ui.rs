@@ -1412,3 +1412,100 @@ fn the_flows_arrows_sit_between_the_states_they_join(cx: &mut TestAppContext) {
         assert!(arrow.size.width >= gpui_kit::px(10.), "visible: {arrow:?}");
     }
 }
+
+/// An icon's drawn bounds, by its file name.
+fn icon_at(cx: &mut gpui_kit::VisualTestContext, file: &str) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+    cx.debug_bounds(named(format!("icon-{file}")))
+        .unwrap_or_else(|| panic!("icon {file} is drawn"))
+}
+
+fn inside(
+    inner: gpui_kit::Bounds<gpui_kit::Pixels>,
+    outer: gpui_kit::Bounds<gpui_kit::Pixels>,
+) -> bool {
+    inner.left() >= outer.left()
+        && inner.right() <= outer.right()
+        && inner.top() >= outer.top()
+        && inner.bottom() <= outer.bottom()
+}
+
+#[gpui_kit::test]
+fn each_view_has_its_icon_in_the_sidebar_at_16_px(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    for file in [
+        "inbox",
+        "bolt-alt",
+        "task",
+        "cognition",
+        "route",
+        "medical-flask",
+        "circuit-board",
+        "folder",
+        "folder-plus",
+        "help-circle",
+    ] {
+        let b = icon_at(cx, file);
+        assert_eq!(
+            (b.size.width, b.size.height),
+            (gpui_kit::px(16.), gpui_kit::px(16.)),
+            "{file}"
+        );
+        assert!(
+            b.right() < gpui_kit::px(240.),
+            "{file} is in the sidebar: {b:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn toolbar_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    let filter = cx.debug_bounds("filter-button").unwrap();
+    let display = cx.debug_bounds("display-button").unwrap();
+    assert!(inside(icon_at(cx, "menu-filter"), filter));
+    assert!(inside(icon_at(cx, "slider-alt"), display));
+    assert_eq!(
+        filter.size.height,
+        gpui_kit::px(28.),
+        "the button kept its height"
+    );
+    assert!(icon_at(cx, "list-ul").size.width == gpui_kit::px(14.));
+    assert!(icon_at(cx, "columns-4").size.width == gpui_kit::px(14.));
+
+    open_detail(cx);
+    let close = cx.debug_bounds("close-detail").unwrap();
+    assert!(
+        inside(icon_at(cx, "dock-right-arrow"), close),
+        "the close icon fits its button"
+    );
+    let add = cx.debug_bounds("add-link").unwrap();
+    assert!(inside(icon_at(cx, "link"), add));
+}
+
+#[gpui_kit::test]
+fn the_palette_has_a_search_icon_and_an_icon_on_every_action(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    let field = cx.debug_bounds("palette-field").unwrap();
+    assert!(inside(icon_at(cx, "search"), field));
+    cx.simulate_input("go to graph");
+    cx.run_until_parked();
+    let row = cx.debug_bounds("palette-item-0").unwrap();
+    assert_eq!(row.size.height, gpui_kit::px(36.), "rows keep their height");
+    // The graph's icon now shows twice: in the sidebar and on this row.
+    let rows_icon = cx.debug_bounds("icon-circuit-board").expect("drawn");
+    assert!(
+        inside(rows_icon, row) || rows_icon.right() < gpui_kit::px(240.),
+        "{rows_icon:?}"
+    );
+    assert!(
+        inside(icon_at(cx, "enter"), cx.debug_bounds("palette").unwrap()),
+        "the footer's enter"
+    );
+}

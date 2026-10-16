@@ -806,6 +806,13 @@ Asked for while trying the app, and built in one batch:
   transition table, so they never offer a move it would refuse. Changing a state from a row
   leaves the selection where it is, and the row that leaves a view fades from its own place
   (it used to take the selected row's).
+- Icons: Boxicons v3, filled, chosen by the developer (87 kept in `crates/livtk-app/assets/icons`
+  under CC BY 4.0, only the ones named in `ui/icons.rs` compiled in). Each view, button, menu,
+  tag, avatar, empty state, notice and palette action has one; state and priority keep their own
+  marks, key caps their letters. GPUI draws an SVG only in a colour of its own, so each icon
+  gets one and follows its row's hover through a group.
+- No cursor changes on hover and nothing grows on hover, by the developer's rule; the cursor
+  changes only while dragging the graph. A test checks the UI's source for it.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

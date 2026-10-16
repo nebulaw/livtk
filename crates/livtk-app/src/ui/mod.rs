@@ -5,6 +5,7 @@
 //! Keys are bound only on the list area. Text fields (the filter, notes, the new-task form) live
 //! outside it, so typing never triggers a command.
 
+pub mod icons;
 mod theme;
 
 use std::cell::Cell;
@@ -23,10 +24,11 @@ use uuid::Uuid;
 
 use crate::model::{
     Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Step, View, arrows,
-    choices, describe, drop_allowed, has_flow, link_choices, link_curve, state_name, state_short,
-    steps, visible_runs,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Step, View,
+    arrows, choices, describe, drop_allowed, has_flow, link_choices, link_curve, state_name,
+    state_short, steps, visible_runs,
 };
+use icons::{Icon, icon, icon_hover};
 use theme::*;
 
 actions!(
@@ -787,7 +789,6 @@ impl LivtkApp {
             .px(px(8.))
             .py(px(2.))
             .rounded_xl()
-            .cursor_text()
             .hover(|s| s.bg(color(HOVER)))
             .line_height(px(TITLE_LINE))
             .text_xl()
@@ -838,7 +839,6 @@ impl LivtkApp {
             .mx(px(-8.))
             .p(px(8.))
             .rounded_xl()
-            .cursor_text()
             .hover(|s| s.bg(color(HOVER)))
             .text_color(color(TEXT_2))
             .when(empty, |d| {
@@ -933,6 +933,7 @@ impl LivtkApp {
             side = side.child(
                 nav_item(
                     SharedString::from(format!("project-{i}")),
+                    Icon::Project,
                     &p.name,
                     current,
                     p.inbox,
@@ -947,15 +948,17 @@ impl LivtkApp {
         side = side.child(
             div()
                 .id("open-folder")
+                .group("nav")
                 .px_2()
                 .h(px(28.))
                 .flex()
                 .items_center()
+                .gap_2()
                 .rounded_lg()
                 .text_color(color(TEXT_4))
-                .cursor_pointer()
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                .child("+ Open project")
+                .child(icon_hover(Icon::OpenProject, 16., TEXT_4, "nav", TEXT_3))
+                .child("Open project")
                 .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
         );
         side = side.child(div().h(px(14.))).child(section_label("Views"));
@@ -970,6 +973,7 @@ impl LivtkApp {
             side = side.child(
                 nav_item(
                     SharedString::from(format!("view-{}", view.title())),
+                    view_icon(view),
                     view.title(),
                     view == self.model.view,
                     count,
@@ -980,19 +984,19 @@ impl LivtkApp {
         side.child(div().flex_1()).child(
             div()
                 .id("shortcuts")
+                .group("nav")
                 .px_2()
                 .h(px(28.))
                 .flex()
                 .items_center()
                 .gap_2()
                 .rounded_lg()
-                .text_xs()
                 .text_color(color(TEXT_4))
-                .cursor_pointer()
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
+                .child(icon_hover(Icon::Shortcuts, 16., TEXT_4, "nav", TEXT_3))
+                .child(div().flex_1().child("Shortcuts"))
                 .child(kbd("Ctrl"))
                 .child(kbd("?"))
-                .child("Shortcuts")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.help = !this.help;
                     cx.notify();
@@ -1042,16 +1046,16 @@ impl LivtkApp {
             let board = m.layout == Layout::Board;
             bar = bar.child(
                 segments()
-                    .child(segment("layout-list", "List", !board).on_click(cx.listener(
-                        |this, _, _, cx| {
+                    .child(segment("layout-list", Icon::List, "List", !board).on_click(
+                        cx.listener(|this, _, _, cx| {
                             if this.model.layout == Layout::Board {
                                 this.model.toggle_layout();
                                 cx.notify();
                             }
-                        },
-                    )))
+                        }),
+                    ))
                     .child(
-                        segment("layout-board", "Board", board).on_click(cx.listener(
+                        segment("layout-board", Icon::Board, "Board", board).on_click(cx.listener(
                             |this, _, _, cx| {
                                 if this.model.layout == Layout::List {
                                     this.model.toggle_layout();
@@ -1074,8 +1078,8 @@ impl LivtkApp {
                 .bg(color(ACCENT))
                 .text_color(color(TEXT))
                 .font_weight(FontWeight::MEDIUM)
-                .cursor_pointer()
                 .hover(|s| s.bg(color(ACCENT_HOVER)))
+                .child(icon(Icon::NewTask, 16., TEXT))
                 .child("New task")
                 .child(div().text_xs().text_color(with_alpha(TEXT, 0.7)).child("N"))
                 .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx))),
@@ -1205,7 +1209,6 @@ impl LivtkApp {
             .gap_2()
             .rounded_lg()
             .border_1()
-            .cursor_pointer()
             .text_color(color(TEXT_2))
             .when(open, |b| {
                 b.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
@@ -1215,7 +1218,8 @@ impl LivtkApp {
                     .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
             })
             .child(current)
-            .child(div().text_xs().text_color(color(TEXT_4)).child("▾"))
+            // Small, as Linear keeps its chevrons: the filled caret is heavy at text size.
+            .child(icon(Icon::CaretDown, 10., TEXT_4))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
@@ -1296,9 +1300,15 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let open = self.menu == Some(menu);
+        let glyph = if menu == Menu::Filter {
+            Icon::Filter
+        } else {
+            Icon::Display
+        };
         let button = div()
             .id(id)
             .debug_selector(move || id.into())
+            .group("menu-button")
             .h(px(28.))
             .px_3()
             .flex()
@@ -1306,7 +1316,6 @@ impl LivtkApp {
             .gap_2()
             .rounded_lg()
             .border_1()
-            .cursor_pointer()
             .when(open || active, |b| {
                 b.bg(color(SELECTED))
                     .border_color(color(BORDER_STRONG))
@@ -1317,11 +1326,11 @@ impl LivtkApp {
                     .text_color(color(TEXT_3))
                     .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT_2)))
             })
-            .child(
-                div()
-                    .text_xs()
-                    .child(if menu == Menu::Filter { "≡" } else { "⚙" }),
-            )
+            .child(if open || active {
+                icon(glyph, 14., TEXT)
+            } else {
+                icon_hover(glyph, 14., TEXT_3, "menu-button", TEXT_2)
+            })
             .child(label)
             .on_mouse_down(
                 MouseButton::Left,
@@ -1346,9 +1355,17 @@ impl LivtkApp {
             .child(
                 div()
                     .h(px(32.))
+                    .pl(px(6.))
                     .flex()
                     .items_center()
-                    .child(Input::new(&self.filter).appearance(false).small()),
+                    .gap_1()
+                    .child(icon(Icon::Search, 14., TEXT_4))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.filter).appearance(false).small()),
+                    ),
             )
             .child(menu_divider())
             .child(menu_heading("Priority"));
@@ -1397,6 +1414,7 @@ impl LivtkApp {
         let mut panel = menu_panel(272.)
             .debug_selector(|| "display-menu".into())
             .child(display_field(
+                Icon::Grouping,
                 "Grouping",
                 self.select(
                     Menu::Grouping,
@@ -1407,6 +1425,7 @@ impl LivtkApp {
                 ),
             ))
             .child(display_field(
+                Icon::Ordering,
                 "Ordering",
                 self.select(
                     Menu::Ordering,
@@ -1421,6 +1440,7 @@ impl LivtkApp {
             panel = panel.child(menu_divider()).child(
                 option_row("show-dismissed".into())
                     .debug_selector(|| "show-dismissed".into())
+                    .child(icon(if on { Icon::Show } else { Icon::Hide }, 14., TEXT_4))
                     .child(div().flex_1().child("Show dismissed"))
                     .child(switch(on))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1500,7 +1520,6 @@ impl LivtkApp {
             .items_center()
             .gap_2()
             .rounded_lg()
-            .cursor_pointer()
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
             .child(priority_mark(current))
@@ -1553,7 +1572,6 @@ impl LivtkApp {
             .items_center()
             .justify_center()
             .rounded_lg()
-            .cursor_pointer()
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
             .child(state_mark(kind, state))
@@ -1627,7 +1645,6 @@ impl LivtkApp {
             .child(check(s.current && !standing));
         match to {
             Some(choice) => row
-                .cursor_pointer()
                 .text_color(color(if decides { ACCENT_HOVER } else { TEXT_2 }))
                 .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1690,12 +1707,10 @@ impl LivtkApp {
             Look::Decision => el
                 .border_dashed()
                 .border_color(color(ACCENT_HOVER))
-                .cursor_pointer()
                 .hover(|h| h.bg(with_alpha(ACCENT, 0.16))),
             Look::Move => el
                 .bg(color(SURFACE))
                 .border_color(color(TEXT_3))
-                .cursor_pointer()
                 .hover(|h| h.bg(color(HOVER)).border_color(color(TEXT))),
             Look::Out => el.border_color(color(BORDER)).opacity(0.3),
         }
@@ -1837,19 +1852,25 @@ impl LivtkApp {
         let button = div()
             .id("add-link")
             .debug_selector(|| "add-link".into())
+            .group("add-link")
             .h(px(24.))
             .px_2()
             .flex()
             .items_center()
+            .gap(px(6.))
             .rounded_lg()
             .text_xs()
-            .cursor_pointer()
             .text_color(color(if open { TEXT } else { TEXT_3 }))
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| {
                 b.hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
             })
-            .child("+ Add link")
+            .child(if open {
+                icon(Icon::Link, 14., TEXT)
+            } else {
+                icon_hover(Icon::Link, 14., TEXT_3, "add-link", TEXT)
+            })
+            .child("Add link")
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.toggle_menu(Menu::AddLink, window, cx)),
@@ -1914,16 +1935,19 @@ impl LivtkApp {
                         div()
                             .id(SharedString::from(unlink.clone()))
                             .debug_selector(move || unlink.clone())
+                            .group("unlink")
                             .size(px(20.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded_lg()
-                            .text_color(color(TEXT_4))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-                            .child("×")
+                            .hover(|s| s.bg(color(HOVER)))
+                            .child(icon_hover(Icon::Unlink, 14., TEXT_4, "unlink", TEXT))
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Remove the link")
+                                    .build(window, cx)
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.model.unlink(rel, outgoing, &key);
                                 cx.notify();
@@ -1960,8 +1984,9 @@ impl LivtkApp {
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.model.projects.is_empty() {
             return empty(
+                Icon::OpenProject,
                 "No livtk projects yet",
-                "Run `livtk init` in a project, then open it with + Open project, or start `livtk-app DIR`.",
+                "Run `livtk init` in a project, then open it with Open project, or start `livtk-app DIR`.",
             )
             .into_any_element();
         }
@@ -1999,6 +2024,7 @@ impl LivtkApp {
             return div()
                 .size_full()
                 .child(empty(
+                    Icon::Graph,
                     "Nothing to draw yet",
                     "Tasks, lessons, decisions and findings show here with the links between them.",
                 ))
@@ -2227,12 +2253,14 @@ impl LivtkApp {
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 graph_control("zoom-out")
-                    .child("−")
+                    .child(icon_hover(Icon::ZoomOut, 14., TEXT_3, "zoom-out", TEXT))
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx))),
             )
             .child(
                 graph_control("zoom-fit")
-                    .min_w(px(52.))
+                    .min_w(px(64.))
+                    .gap(px(5.))
+                    .child(icon_hover(Icon::Fit, 13., TEXT_3, "zoom-fit", TEXT))
                     .child(format!("{:.0}%", z * 100.))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.graph_fit();
@@ -2241,10 +2269,10 @@ impl LivtkApp {
             )
             .child(
                 graph_control("zoom-in")
-                    .child("+")
+                    .child(icon_hover(Icon::ZoomIn, 14., TEXT_3, "zoom-in", TEXT))
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(ZOOM_STEP, cx))),
             );
-        let hovering = self.model.graph.hovered.is_some();
+        // The cursor stays as it is, except while dragging the graph around.
         let dragging = matches!(self.graph_press, Some((_, true)));
         div()
             .id("graph")
@@ -2252,13 +2280,7 @@ impl LivtkApp {
             .size_full()
             .relative()
             .overflow_hidden()
-            .cursor(if dragging {
-                CursorStyle::ClosedHand
-            } else if hovering {
-                CursorStyle::PointingHand
-            } else {
-                CursorStyle::OpenHand
-            })
+            .when(dragging, |d| d.cursor(CursorStyle::ClosedHand))
             .child(edges)
             .children(unlinked)
             .children(cards)
@@ -2277,14 +2299,9 @@ impl LivtkApp {
                         this.graph_press = Some((e.position, true));
                         cx.notify();
                     }
-                    _ => {
-                        // A release outside the graph ends a drag without a click.
-                        this.graph_press = None;
-                        let (x, y) = this.graph_point(e.position);
-                        if this.model.graph_hover(x, y) {
-                            cx.notify();
-                        }
-                    }
+                    // A release outside the graph ends a drag without a click. Nothing follows
+                    // the pointer otherwise: cards have no hover look.
+                    _ => this.graph_press = None,
                 }
             }))
             .on_mouse_up(
@@ -2320,6 +2337,7 @@ impl LivtkApp {
             return div()
                 .size_full()
                 .child(empty(
+                    Icon::Activity,
                     "No activity yet",
                     "What Claude and you do in this project shows up here, newest first.",
                 ))
@@ -2352,12 +2370,20 @@ impl LivtkApp {
                             .debug_selector(|| "show-older".into())
                             .w_full()
                             .h(px(ROW))
+                            .group("show-older")
                             .px_4()
                             .flex()
                             .items_center()
+                            .gap_2()
                             .text_color(color(TEXT_4))
-                            .cursor_pointer()
                             .hover(|s| s.text_color(color(TEXT_2)))
+                            .child(icon_hover(
+                                Icon::CaretDown,
+                                10.,
+                                TEXT_4,
+                                "show-older",
+                                TEXT_2,
+                            ))
                             .child("Show older")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.model.activity_older();
@@ -2397,7 +2423,6 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
-            .cursor_pointer()
             .when(on, |d| d.bg(color(SELECTED)))
             .when(!on, |d| d.hover(|s| s.bg(color(HOVER))))
             .child(
@@ -2407,19 +2432,7 @@ impl LivtkApp {
                     .rounded_full()
                     .when(new, |d| d.bg(color(ACCENT))),
             )
-            .child(
-                div()
-                    .size(px(18.))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(color(if human { ACCENT } else { BORDER_STRONG }))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(10.))
-                    .text_color(color(TEXT))
-                    .child(if human { "Y" } else { "C" }),
-            )
+            .child(avatar(human))
             .child(
                 div()
                     .flex_none()
@@ -2466,6 +2479,7 @@ impl LivtkApp {
             return div()
                 .size_full()
                 .child(empty(
+                    Icon::Inbox,
                     "Nothing waits for you",
                     "Plans to acknowledge, lessons to ratify and decisions to accept appear here.",
                 ))
@@ -2504,6 +2518,7 @@ impl LivtkApp {
             return div()
                 .size_full()
                 .child(empty(
+                    view_icon(self.model.view),
                     &format!("No {what} here"),
                     "Clear the filter, press H to show dismissed work, or N for a new task.",
                 ))
@@ -2556,15 +2571,16 @@ impl LivtkApp {
             .bg(color(SURFACE))
             .border_b_1()
             .border_color(color(BORDER))
-            .cursor_pointer()
             .hover(|s| s.bg(color(HOVER)))
-            .child(
-                div()
-                    .w(px(10.))
-                    .text_xs()
-                    .text_color(color(TEXT_4))
-                    .child(if g.collapsed { "▸" } else { "▾" }),
-            )
+            .child(icon(
+                if g.collapsed {
+                    Icon::CaretRight
+                } else {
+                    Icon::CaretDown
+                },
+                10.,
+                TEXT_4,
+            ))
             .child(mark)
             .child(
                 div()
@@ -2619,7 +2635,6 @@ impl LivtkApp {
             .gap_3()
             .border_b_1()
             .border_color(color(CONTENT))
-            .cursor_pointer()
             .when(selected, |d| d.bg(color(SELECTED)))
             .when(!selected, |d| d.hover(|s| s.bg(color(HOVER))))
             .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }));
@@ -2644,10 +2659,10 @@ impl LivtkApp {
                     .child(r.title.clone()),
             );
         if blocked {
-            row = row.child(tag("Blocked", TEXT_4));
+            row = row.child(icon_tag(Icon::Blocked, "Blocked", TEXT_3));
         }
         if r.standing {
-            row = row.child(tag("Standing rule", DONE));
+            row = row.child(icon_tag(Icon::Standing, "Standing rule", DONE));
         }
         if inbox {
             let label = match r.kind {
@@ -2787,7 +2802,6 @@ impl LivtkApp {
                     .bg(color(if sel { SELECTED } else { CONTENT }))
                     .border_1()
                     .border_color(color(if sel { BORDER_STRONG } else { BORDER }))
-                    .cursor_grab()
                     .hover(|s| s.border_color(color(BORDER_STRONG)))
                     .flex()
                     .flex_col()
@@ -2801,7 +2815,9 @@ impl LivtkApp {
                             .text_color(color(TEXT_4))
                             .child(r.key.clone())
                             .child(div().flex_1())
-                            .when(blocked, |d| d.child("Blocked")),
+                            .when(blocked, |d| {
+                                d.child(icon(Icon::Blocked, 12., TEXT_4)).child("Blocked")
+                            }),
                     )
                     .child(
                         div()
@@ -2950,7 +2966,10 @@ impl LivtkApp {
             props = props.child(prop_row("Kind", div().child(title_case(n.kind.as_str()))));
         }
         if n.props.get("scope").and_then(|v| v.as_str()) == Some("always") {
-            props = props.child(prop_row("Scope", tag("Standing rule", DONE)));
+            props = props.child(prop_row(
+                "Scope",
+                icon_tag(Icon::Standing, "Standing rule", DONE),
+            ));
         }
         props = props.child(prop_row(
             "Created",
@@ -3007,15 +3026,24 @@ impl LivtkApp {
                         div()
                             .id("close-detail")
                             .debug_selector(|| "close-detail".into())
-                            .h(px(24.))
-                            .px_2()
+                            .group("close-detail")
+                            .size(px(26.))
                             .flex()
                             .items_center()
+                            .justify_center()
                             .rounded_lg()
-                            .text_color(color(TEXT_4))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                            .child("Esc")
+                            .hover(|s| s.bg(color(HOVER)))
+                            .child(icon_hover(
+                                Icon::ClosePanel,
+                                16.,
+                                TEXT_4,
+                                "close-detail",
+                                TEXT_2,
+                            ))
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Close · Esc")
+                                    .build(window, cx)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.model.close_detail();
                                 cx.notify();
@@ -3045,7 +3073,7 @@ impl LivtkApp {
                     .p_3()
                     .border_t_1()
                     .border_color(color(BORDER))
-                    .child(Input::new(&self.note)),
+                    .child(Input::new(&self.note).prefix(icon(Icon::Notes, 14., TEXT_4))),
             )
     }
 
@@ -3113,7 +3141,6 @@ impl LivtkApp {
             .bg(color(ACCENT))
             .text_color(color(TEXT))
             .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
             .hover(|s| s.bg(color(ACCENT_HOVER)))
             .child("Create task")
             .child(
@@ -3236,6 +3263,7 @@ impl LivtkApp {
                     .flex()
                     .items_center()
                     .gap_3()
+                    .child(icon(Icon::Search, 18., TEXT_4))
                     .child(
                         div()
                             .debug_selector(|| "palette-input".into())
@@ -3280,13 +3308,47 @@ impl LivtkApp {
                     .child(kbd("↓"))
                     .child("to move")
                     .child(div().w(px(8.)))
-                    .child(kbd("↵"))
+                    .child(kbd_icon(Icon::Enter))
                     .child("to run")
                     .child(div().w(px(8.)))
                     .child(kbd("Esc"))
                     .child("to close"),
             );
         Some(self.modal("palette-modal", card, cx))
+    }
+
+    /// An action's icon in the palette, so every row has one: a move shows the state it goes
+    /// to, a priority its mark, the rest the icon of where that action lives in the app.
+    fn action_icon(&self, run: &Run) -> Div {
+        let slot = div()
+            .size(px(16.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center();
+        let glyph = match run {
+            Run::Choose(c) => {
+                let kind = self.model.acted_on().map_or(Kind::Task, |r| r.kind);
+                return slot.child(state_mark(kind, c.to));
+            }
+            Run::Priority(p) => return slot.child(priority_mark(*p)),
+            Run::Go(view) => view_icon(*view),
+            Run::Project(_) => Icon::Project,
+            Run::ToggleLayout if self.model.layout == Layout::List => Icon::Board,
+            Run::ToggleLayout => Icon::List,
+            Run::Group(_) => Icon::Grouping,
+            Run::Order(_) => Icon::Ordering,
+            Run::ToggleDismissed if self.model.show_all => Icon::Hide,
+            Run::ToggleDismissed => Icon::Show,
+            Run::FitGraph => Icon::Fit,
+            Run::PickLink(_) | Run::Ask(Ask::PickLink) => Icon::Link,
+            Run::Ask(Ask::NewTask) => Icon::NewTask,
+            Run::Ask(Ask::AddNote) => Icon::Notes,
+            Run::Ask(Ask::EditTitle | Ask::EditBody) => Icon::Edit,
+            Run::Ask(Ask::OpenFolder) => Icon::OpenProject,
+            Run::Ask(Ask::Help) => Icon::Shortcuts,
+        };
+        slot.child(icon(glyph, 16., TEXT_3))
     }
 
     fn palette_row(
@@ -3306,7 +3368,6 @@ impl LivtkApp {
             .items_center()
             .gap_3()
             .rounded_lg()
-            .cursor_pointer()
             .when(on, |r| r.bg(color(SELECTED)).text_color(color(TEXT)))
             .when(!on, |r| r.text_color(color(TEXT_2)))
             .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -3324,7 +3385,8 @@ impl LivtkApp {
                 for k in a.shortcut.unwrap_or_default().split_whitespace() {
                     keys = keys.child(kbd(k));
                 }
-                row.child(div().truncate().child(a.label.clone()))
+                row.child(self.action_icon(&a.run))
+                    .child(div().truncate().child(a.label.clone()))
                     .when_some(a.context.clone(), |r, c| {
                         r.child(div().flex_none().text_color(color(TEXT_4)).child(c))
                     })
@@ -3440,7 +3502,11 @@ impl LivtkApp {
                 .border_color(with_alpha(RED, 0.5))
                 .text_color(color(TEXT))
                 .shadow_lg()
-                .child(text)
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(icon(Icon::Error, 16., RED))
+                .child(div().flex_1().child(text))
                 .into_any_element(),
         )
     }
@@ -3667,19 +3733,44 @@ fn section_label(text: &str) -> Div {
         .child(text.to_owned())
 }
 
-fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Stateful<Div> {
+/// A view's icon, as the sidebar and the palette show it.
+fn view_icon(view: View) -> Icon {
+    match view {
+        View::Inbox => Icon::Inbox,
+        View::Activity => Icon::Activity,
+        View::Tasks => Icon::Tasks,
+        View::Lessons => Icon::Lessons,
+        View::Decisions => Icon::Decisions,
+        View::Findings => Icon::Findings,
+        View::Graph => Icon::Graph,
+    }
+}
+
+fn nav_item(
+    id: SharedString,
+    glyph: Icon,
+    label: &str,
+    active: bool,
+    count: usize,
+) -> Stateful<Div> {
     div()
         .id(id)
+        .group("nav")
         .px_2()
         .h(px(28.))
         .rounded_lg()
         .flex()
         .items_center()
-        .cursor_pointer()
+        .gap_2()
         .when(active, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
         .when(!active, |d| {
             d.text_color(color(TEXT_3))
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_2)))
+        })
+        .child(if active {
+            icon(glyph, 16., TEXT)
+        } else {
+            icon_hover(glyph, 16., TEXT_4, "nav", TEXT_3)
         })
         .child(div().flex_1().truncate().child(label.to_owned()))
         .when(count > 0, |d| {
@@ -3792,6 +3883,23 @@ fn flow_arrow(gap: usize, arrow: Arrow) -> Div {
     }
 }
 
+/// Who did something, in the feed and the timeline: you, or Claude (sparkles, as AI is drawn).
+fn avatar(human: bool) -> Div {
+    div()
+        .size(px(20.))
+        .flex_none()
+        .rounded_full()
+        .bg(color(if human { ACCENT } else { BORDER_STRONG }))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon(
+            if human { Icon::You } else { Icon::Claude },
+            12.,
+            TEXT,
+        ))
+}
+
 /// A state as a dot of its colour, `size` across: the graph's cards shrink with the zoom, and
 /// the full mark does not.
 fn state_dot(state: State, size: f32) -> Div {
@@ -3808,6 +3916,8 @@ fn graph_control(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .debug_selector(move || id.into())
+        // Its icon brightens with its text on hover.
+        .group(id)
         .h(px(24.))
         .min_w(px(24.))
         .px_1()
@@ -3815,7 +3925,6 @@ fn graph_control(id: &'static str) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .rounded_lg()
-        .cursor_pointer()
         .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
 }
 
@@ -3858,7 +3967,6 @@ fn option_row(id: SharedString) -> Stateful<Div> {
         .items_center()
         .gap_2()
         .rounded_lg()
-        .cursor_pointer()
         .text_color(color(TEXT_2))
         .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
 }
@@ -3868,9 +3976,9 @@ fn check(on: bool) -> Div {
     div()
         .ml_auto()
         .pl_2()
-        .text_xs()
-        .text_color(color(TEXT))
-        .when(on, |d| d.child("✓"))
+        .flex()
+        .items_center()
+        .when(on, |d| d.child(icon(Icon::Check, 14., TEXT)))
 }
 
 /// A box in a menu that picks several: an outline when off, filled and ticked when on.
@@ -3883,25 +3991,24 @@ fn checkbox(on: bool) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(10.))
         .when(on, |c| {
             c.bg(color(ACCENT))
                 .border_color(color(ACCENT))
-                .text_color(color(TEXT))
-                .child("✓")
+                .child(icon(Icon::Check, 11., TEXT))
         })
         .when(!on, |c| c.border_color(color(TEXT_4)))
 }
 
 /// A labelled setting in the Display menu: the name on the left, its select on the right.
-fn display_field(label: &'static str, select: Div) -> Div {
+fn display_field(glyph: Icon, label: &'static str, select: Div) -> Div {
     div()
         .h(px(36.))
         .px(px(6.))
         .flex()
         .items_center()
-        .justify_between()
-        .child(div().text_color(color(TEXT_3)).child(label))
+        .gap_2()
+        .child(icon(glyph, 14., TEXT_4))
+        .child(div().flex_1().text_color(color(TEXT_3)).child(label))
         .child(select)
 }
 
@@ -3942,12 +4049,14 @@ fn chip(
         .child(
             div()
                 .id(SharedString::from(format!("{id}-x")))
-                .px_1()
-                .rounded(px(3.))
-                .text_color(color(TEXT_4))
-                .cursor_pointer()
-                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-                .child("×")
+                .group("chip-x")
+                .size(px(18.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .hover(|s| s.bg(color(HOVER)))
+                .child(icon_hover(Icon::Close, 12., TEXT_4, "chip-x", TEXT))
                 .on_click(clear),
         )
 }
@@ -3963,20 +4072,26 @@ fn segments() -> Div {
         .border_color(color(BORDER))
 }
 
-fn segment(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
+fn segment(id: &'static str, glyph: Icon, label: &'static str, on: bool) -> Stateful<Div> {
     div()
         .id(id)
+        .group("segment")
         .h(px(22.))
         .px_2()
         .flex()
         .items_center()
+        .gap(px(6.))
         .rounded(px(6.))
         .text_xs()
-        .cursor_pointer()
         .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
         .when(!on, |d| {
             d.text_color(color(TEXT_3))
                 .hover(|s| s.text_color(color(TEXT_2)))
+        })
+        .child(if on {
+            icon(glyph, 14., TEXT)
+        } else {
+            icon_hover(glyph, 14., TEXT_4, "segment", TEXT_3)
         })
         .child(label)
 }
@@ -3998,6 +4113,25 @@ fn tag(label: &str, c: u32) -> Div {
         .child(label.to_owned())
 }
 
+/// A tag led by an icon in its colour instead of a dot: blocked, standing rule.
+fn icon_tag(glyph: Icon, label: &str, c: u32) -> Div {
+    div()
+        .h(px(20.))
+        .px(px(7.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(5.))
+        .rounded_full()
+        .text_xs()
+        .bg(color(SURFACE))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
+        .text_color(color(TEXT_2))
+        .child(icon(glyph, 12., c))
+        .child(label.to_owned())
+}
+
 fn kbd(k: &str) -> Div {
     div()
         .min_w(px(18.))
@@ -4013,6 +4147,22 @@ fn kbd(k: &str) -> Div {
         .text_xs()
         .text_color(color(TEXT_3))
         .child(k.to_owned())
+}
+
+/// A key cap that shows an icon rather than a letter: Enter.
+fn kbd_icon(glyph: Icon) -> Div {
+    div()
+        .min_w(px(18.))
+        .h(px(18.))
+        .px(px(3.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .bg(color(LIFTED))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
+        .child(icon(glyph, 12., TEXT_3))
 }
 
 fn prop_row(label: &str, value: Div) -> Div {
@@ -4049,7 +4199,8 @@ fn title_case(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn empty(title: &str, hint: &str) -> Div {
+/// An empty view: its own icon, large and faded, what is missing, and how to fill it.
+fn empty(glyph: Icon, title: &str, hint: &str) -> Div {
     div()
         .size_full()
         .flex()
@@ -4057,6 +4208,7 @@ fn empty(title: &str, hint: &str) -> Div {
         .items_center()
         .justify_center()
         .gap_2()
+        .child(icon(glyph, 32., BORDER_STRONG).mb_2())
         .child(div().text_color(color(TEXT_2)).child(title.to_owned()))
         .child(
             div()
@@ -4129,19 +4281,7 @@ fn event_line(e: &Event) -> Div {
         .flex()
         .items_center()
         .gap_2()
-        .child(
-            div()
-                .size(px(18.))
-                .flex_none()
-                .rounded_full()
-                .bg(color(if human { ACCENT } else { BORDER_STRONG }))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(10.))
-                .text_color(color(TEXT))
-                .child(if human { "Y" } else { "C" }),
-        )
+        .child(avatar(human))
         .child(
             div()
                 .text_color(color(TEXT_2))

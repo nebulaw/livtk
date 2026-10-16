@@ -90,7 +90,8 @@ The human's control surface: an Inbox of everything waiting for you, an Activity
 change newest first (its badge counts what Claude did since you last looked), a Graph of every
 node and link where work flows left to right along its dependencies, tasks as a list or a board,
 lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
-Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette.
+Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette
+and Boxicons' filled icons; nothing changes the cursor or grows on hover.
 As in Linear, the Filter menu (`/`) narrows by title, key or priority, and the Display menu
 holds Grouping (state, priority) and Ordering (priority, last update, creation), each its own
 menu, and whether dismissed work shows; groups are solid bands that collapse on a click.

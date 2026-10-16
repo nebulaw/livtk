@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
 use gpui_kit::TestAppContext;
-use livtk_app::model::{Model, View};
+use livtk_app::model::{Grouping, Model, Ordering, View};
 use livtk_app::ui::{LivtkApp, bind_keys};
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
@@ -147,17 +147,83 @@ fn open_app<'a>(
 }
 
 #[gpui_kit::test]
-fn ctrl_slash_shows_the_shortcuts_and_esc_or_ctrl_slash_closes_them(cx: &mut TestAppContext) {
+fn ctrl_question_mark_shows_the_shortcuts_and_esc_or_it_again_closes_them(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-/");
+    cx.simulate_keystrokes("ctrl-?");
     app.read_with(cx, |a, _| assert!(a.help_open()));
     cx.simulate_keystrokes("escape");
     app.read_with(cx, |a, _| assert!(!a.help_open(), "Esc closes it"));
-    cx.simulate_keystrokes("ctrl-/");
-    cx.simulate_keystrokes("ctrl-/");
+    cx.simulate_keystrokes("ctrl-shift-/");
     app.read_with(cx, |a, _| {
-        assert!(!a.help_open(), "and so does Ctrl+/ again")
+        assert!(a.help_open(), "Shift with / is the same key")
+    });
+    cx.simulate_keystrokes("ctrl-?");
+    app.read_with(cx, |a, _| {
+        assert!(!a.help_open(), "and Ctrl+? again closes it")
+    });
+}
+
+fn click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn the_display_menu_sets_grouping_and_closes_on_a_click_outside(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    click_on(cx, "display-button");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("display")));
+    click_on(cx, "group-priority");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().display().grouping, Grouping::Priority);
+        assert_eq!(a.menu_open(), Some("display"), "a choice keeps it open");
+    });
+    click_on(cx, "order-created");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().display().ordering, Ordering::Created)
+    });
+    cx.simulate_click(
+        gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(400.)),
+        gpui_kit::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None, "outside closed it")
+    });
+
+    click_on(cx, "display-button");
+    click_on(cx, "display-button");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None, "its button closes it too")
+    });
+}
+
+#[gpui_kit::test]
+fn slash_opens_the_filter_menu_and_esc_closes_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("/");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("filter")));
+    assert!(
+        cx.debug_bounds("filter-menu").is_some(),
+        "the menu is drawn"
+    );
+    cx.simulate_keystrokes("escape");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), None));
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().selected().unwrap().key,
+            "LIV-2",
+            "the list has the keys again"
+        )
     });
 }
 

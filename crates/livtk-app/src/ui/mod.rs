@@ -89,7 +89,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         "Priority: urgent, high, medium, low",
     ),
     ("Work", &["Drag"], "Move to another state or priority"),
-    ("Display", &["/"], "Filter"),
+    ("Display", &["/"], "Filter menu"),
     ("Display", &["B"], "List or board"),
     (
         "Display",
@@ -97,7 +97,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         "Show dismissed: canceled, rejected, retired",
     ),
     ("Display", &["O"], "Open a project folder"),
-    ("Display", &["Ctrl", "+", "/"], "These shortcuts"),
+    ("Display", &["Ctrl", "+", "?"], "These shortcuts"),
 ];
 
 pub fn run(dirs: Vec<PathBuf>) {
@@ -152,8 +152,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("2", Priority2, nav),
         KeyBinding::new("3", Priority3, nav),
         KeyBinding::new("4", Priority4, nav),
-        // Everywhere, typing included: Ctrl+/ is never text.
-        KeyBinding::new("ctrl-/", ToggleHelp, None),
+        // Everywhere, typing included: Ctrl+? is never text. Keyboards report it either as the
+        // `?` character or as Shift with `/`, so both spellings are bound.
+        KeyBinding::new("ctrl-?", ToggleHelp, None),
+        KeyBinding::new("ctrl-shift-/", ToggleHelp, None),
         KeyBinding::new("escape", Cancel, Some(FORM)),
         KeyBinding::new("ctrl-enter", Submit, Some(FORM)),
     ]);
@@ -223,6 +225,9 @@ pub struct LivtkApp {
     note: Entity<InputState>,
     form: Option<NewTaskForm>,
     help: bool,
+    menu: Option<Menu>,
+    /// The menu the mouse-down being dispatched closed, if any: see `toggle_menu`.
+    menu_closed: Option<Menu>,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
 }
@@ -262,6 +267,8 @@ impl LivtkApp {
             note,
             form: None,
             help: false,
+            menu: None,
+            menu_closed: None,
             _subscriptions: subscriptions,
             _poll: poll,
         }
@@ -277,6 +284,13 @@ impl LivtkApp {
 
     pub fn form_open(&self) -> bool {
         self.form.is_some()
+    }
+
+    pub fn menu_open(&self) -> Option<&'static str> {
+        self.menu.map(|m| match m {
+            Menu::Filter => "filter",
+            Menu::Display => "display",
+        })
     }
 
     fn on_note(
@@ -309,7 +323,11 @@ impl LivtkApp {
                     cx.notify();
                 }
             }
-            InputEvent::PressEnter { .. } => self.nav.focus(window, cx),
+            InputEvent::PressEnter { .. } => {
+                self.menu = None;
+                self.nav.focus(window, cx);
+                cx.notify();
+            }
             _ => {}
         }
     }
@@ -455,32 +473,6 @@ impl LivtkApp {
             .px_2()
             .py_3()
             .gap(px(2.))
-            .child(
-                div()
-                    .px_2()
-                    .pb_4()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .size(px(18.))
-                            .rounded(px(5.))
-                            .bg(color(ACCENT))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("L"),
-                    )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(color(TEXT))
-                            .child("livtk"),
-                    ),
-            )
             .child(section_label("Projects"));
         for (i, p) in self.model.projects.iter().enumerate() {
             let current = i == self.model.current;
@@ -540,7 +532,7 @@ impl LivtkApp {
                 .cursor_pointer()
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
                 .child(kbd("Ctrl"))
-                .child(kbd("/"))
+                .child(kbd("?"))
                 .child("Shortcuts")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.help = !this.help;
@@ -616,33 +608,192 @@ impl LivtkApp {
         )
     }
 
-    /// Filter, priority chips, grouping and ordering: Linear's Display menu, laid out flat.
+    /// Open or close a menu from its button. A click on the button of the open menu first
+    /// reads as a click outside it, which closes it; that must not reopen it.
+    fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
+        let just_closed = self.menu_closed.take() == Some(menu);
+        if just_closed || self.menu == Some(menu) {
+            self.menu = None;
+            self.nav.focus(window, cx);
+        } else {
+            self.menu = Some(menu);
+            if menu == Menu::Filter {
+                self.filter.read(cx).focus_handle(cx).focus(window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.menu.is_some() {
+            self.menu = None;
+            self.nav.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The row under the header: Filter on the left with what it filters, Display on the right.
+    /// Both open menus, as in Linear; only List and Board are tabs (in the header).
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let d: Display = self.model.display();
-        let mut chips = div().flex().items_center().gap_1();
+        let active =
+            usize::from(!d.filter.trim().is_empty()) + usize::from(!d.priorities.is_empty());
+        let filter_label = if active == 0 {
+            "Filter".to_owned()
+        } else {
+            format!("Filter · {active}")
+        };
+        let mut row = div()
+            .flex_none()
+            .h(px(44.))
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(color(BORDER))
+            .child(self.menu_button(Menu::Filter, "filter-button", filter_label, active > 0, cx));
+        if !d.filter.trim().is_empty() {
+            let text = format!("Title or key: {}", d.filter.trim());
+            row = row.child(chip(
+                "clear-text-filter",
+                text,
+                cx.listener(|this, _, window, cx| {
+                    this.model.set_filter("");
+                    this.sync_filter(window, cx);
+                    cx.notify();
+                }),
+            ));
+        }
+        if !d.priorities.is_empty() {
+            let names: Vec<&str> = d
+                .priorities
+                .iter()
+                .map(|p| PRIORITY_NAMES[usize::from(p.clamp(&1, &4) - 1)])
+                .collect();
+            row = row.child(chip(
+                "clear-priority-filter",
+                format!("Priority: {}", names.join(", ")),
+                cx.listener(|this, _, _, cx| {
+                    for p in this.model.display().priorities {
+                        this.model.toggle_priority(p);
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
+        row.child(div().flex_1()).child(self.menu_button(
+            Menu::Display,
+            "display-button",
+            "Display".to_owned(),
+            false,
+            cx,
+        ))
+    }
+
+    /// A toolbar button and, when open, its menu, anchored under it and drawn above everything.
+    fn menu_button(
+        &self,
+        menu: Menu,
+        id: &'static str,
+        label: String,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let open = self.menu == Some(menu);
+        let button = div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .h(px(28.))
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_md()
+            .border_1()
+            .cursor_pointer()
+            .when(open || active, |b| {
+                b.bg(color(SELECTED))
+                    .border_color(color(BORDER_STRONG))
+                    .text_color(color(TEXT))
+            })
+            .when(!open && !active, |b| {
+                b.border_color(color(BORDER))
+                    .text_color(color(TEXT_3))
+                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT_2)))
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .child(if menu == Menu::Filter { "≡" } else { "⚙" }),
+            )
+            .child(label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
+            );
+        let anchor = if menu == Menu::Filter {
+            Anchor::TopLeft
+        } else {
+            Anchor::TopRight
+        };
+        div().relative().child(button).when(open, |d| {
+            let panel = match menu {
+                Menu::Filter => self.filter_menu(cx),
+                Menu::Display => self.display_menu(cx),
+            };
+            d.child(
+                div()
+                    .absolute()
+                    .top(px(32.))
+                    .when(menu == Menu::Filter, |a| a.left_0())
+                    .when(menu == Menu::Display, |a| a.right_0())
+                    .child(
+                        deferred(
+                            anchored()
+                                .anchor(anchor)
+                                .snap_to_window_with_margin(px(8.))
+                                .child(
+                                    panel
+                                        .occlude()
+                                        .on_mouse_down_out(cx.listener(
+                                            move |this, _, window, cx| {
+                                                // Only for this mouse-down: forgotten once it is dispatched.
+                                                this.menu_closed = Some(menu);
+                                                cx.defer_in(window, |this, _, _| {
+                                                    this.menu_closed = None
+                                                });
+                                                this.close_menu(window, cx);
+                                            },
+                                        ))
+                                        .with_animation(
+                                            SharedString::from(format!("menu-{id}")),
+                                            Animation::new(Duration::from_millis(120))
+                                                .with_easing(ease_out_quint()),
+                                            |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                                        ),
+                                ),
+                        )
+                        .with_priority(1),
+                    ),
+            )
+        })
+    }
+
+    fn filter_menu(&self, cx: &mut Context<Self>) -> Div {
+        let d = self.model.display();
+        let mut panel = menu_panel(264.)
+            .debug_selector(|| "filter-menu".into())
+            .on_action(
+                cx.listener(|this, _: &input::Escape, window, cx| this.close_menu(window, cx)),
+            )
+            .child(div().p_1().child(Input::new(&self.filter).small()))
+            .child(menu_divider())
+            .child(menu_heading("Priority"));
         for p in 1..=4u8 {
             let on = d.priorities.contains(&p);
-            chips = chips.child(
-                div()
-                    .id(SharedString::from(format!("prio-filter-{p}")))
-                    .h(px(26.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded_md()
-                    .border_1()
-                    .cursor_pointer()
-                    .when(on, |s| {
-                        s.bg(color(SELECTED))
-                            .border_color(color(BORDER_STRONG))
-                            .text_color(color(TEXT))
-                    })
-                    .when(!on, |s| {
-                        s.border_color(color(BORDER))
-                            .text_color(color(TEXT_3))
-                            .hover(|h| h.bg(color(HOVER)))
-                    })
+            panel = panel.child(
+                menu_row(SharedString::from(format!("filter-priority-{p}")), on)
                     .child(priority_mark(p))
                     .child(PRIORITY_NAMES[usize::from(p - 1)])
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -651,67 +802,78 @@ impl LivtkApp {
                     })),
             );
         }
-        let group = |id: &'static str, label: &'static str, g: Grouping| {
-            segment(id, label, d.grouping == g).on_click(cx.listener(move |this, _, _, cx| {
-                this.model.set_grouping(g);
-                cx.notify();
-            }))
-        };
+        if !d.priorities.is_empty() || !d.filter.trim().is_empty() {
+            panel = panel.child(menu_divider()).child(
+                menu_row("clear-filters".into(), false)
+                    .text_color(color(TEXT_3))
+                    .child("Clear filters")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        for p in this.model.display().priorities {
+                            this.model.toggle_priority(p);
+                        }
+                        this.model.set_filter("");
+                        this.sync_filter(window, cx);
+                        cx.notify();
+                    })),
+            );
+        }
+        panel
+    }
+
+    fn display_menu(&self, cx: &mut Context<Self>) -> Div {
+        let d = self.model.display();
         let board = self.model.view == View::Tasks && self.model.layout == Layout::Board;
-        let groups = segments()
-            .child(group("group-state", "State", Grouping::State))
-            .child(group("group-priority", "Priority", Grouping::Priority))
+        let mut panel = menu_panel(240.)
+            .debug_selector(|| "display-menu".into())
+            .child(menu_heading("Grouping"));
+        for (id, label, g) in [
+            ("group-state", "State", Grouping::State),
+            ("group-priority", "Priority", Grouping::Priority),
+            ("group-none", "No grouping", Grouping::None),
+        ] {
             // A board needs columns: as in Linear, it is never ungrouped.
-            .when(!board, |s| {
-                s.child(group("group-none", "None", Grouping::None))
-            });
-        let order = |id: &'static str, label: &'static str, o: Ordering| {
-            segment(id, label, d.ordering == o).on_click(cx.listener(move |this, _, _, cx| {
-                this.model.set_ordering(o);
-                cx.notify();
-            }))
-        };
-        let orders = segments()
-            .child(order("order-priority", "Priority", Ordering::Priority))
-            .child(order("order-updated", "Updated", Ordering::Updated))
-            .child(order("order-created", "Created", Ordering::Created));
-        let shown = segment(
-            "show-all",
-            if self.model.show_all {
-                "Dismissed shown"
-            } else {
-                "Dismissed hidden"
-            },
-            self.model.show_all,
-        )
-        .rounded_md()
-        .border_1()
-        .border_color(color(BORDER))
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.model.toggle_show_all();
-            cx.notify();
-        }));
-        div()
-            .flex_none()
-            .h(px(44.))
-            .px_4()
-            .flex()
-            .items_center()
-            .gap_3()
-            .border_b_1()
-            .border_color(color(BORDER))
-            .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
-                this.nav.focus(window, cx);
-                cx.notify();
-            }))
-            .child(div().w(px(220.)).child(Input::new(&self.filter).small()))
-            .child(chips)
-            .child(div().flex_1())
-            .child(toolbar_label("Group"))
-            .child(groups)
-            .child(toolbar_label("Order"))
-            .child(orders)
-            .when(self.model.view != View::Inbox, |t| t.child(shown))
+            if board && g == Grouping::None {
+                continue;
+            }
+            panel = panel.child(
+                menu_row(id.into(), d.grouping == g)
+                    .debug_selector(move || id.into())
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.set_grouping(g);
+                        cx.notify();
+                    })),
+            );
+        }
+        panel = panel.child(menu_divider()).child(menu_heading("Ordering"));
+        for (id, label, o) in [
+            ("order-priority", "Priority", Ordering::Priority),
+            ("order-updated", "Last updated", Ordering::Updated),
+            ("order-created", "Created", Ordering::Created),
+        ] {
+            panel = panel.child(
+                menu_row(id.into(), d.ordering == o)
+                    .debug_selector(move || id.into())
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.set_ordering(o);
+                        cx.notify();
+                    })),
+            );
+        }
+        if self.model.view != View::Inbox {
+            let on = self.model.show_all;
+            panel = panel.child(menu_divider()).child(
+                menu_row("show-dismissed".into(), false)
+                    .child(div().flex_1().child("Show dismissed"))
+                    .child(switch(on))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.toggle_show_all();
+                        cx.notify();
+                    })),
+            );
+        }
+        panel
     }
 
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1529,7 +1691,9 @@ impl Render for LivtkApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
-                if this.help || this.form.is_some() {
+                if this.menu.is_some() {
+                    this.close_menu(window, cx);
+                } else if this.help || this.form.is_some() {
                     this.close_overlays(window, cx);
                 } else {
                     this.model.close_detail();
@@ -1547,6 +1711,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)))
             .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+                this.menu = Some(Menu::Filter);
                 this.filter.read(cx).focus_handle(cx).focus(window, cx);
                 cx.notify();
             }))
@@ -1639,6 +1804,12 @@ fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
     cx.notify();
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Menu {
+    Filter,
+    Display,
+}
+
 enum Item {
     Band(usize),
     Row(usize),
@@ -1656,10 +1827,6 @@ fn section_label(text: &str) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(TEXT_4))
         .child(text.to_owned())
-}
-
-fn toolbar_label(text: &'static str) -> Div {
-    div().text_xs().text_color(color(TEXT_4)).child(text)
 }
 
 fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Stateful<Div> {
@@ -1693,6 +1860,110 @@ fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Statef
                     .child(format!("{count}")),
             )
         })
+}
+
+fn menu_panel(width: f32) -> Div {
+    div()
+        .w(px(width))
+        .p_1()
+        .flex()
+        .flex_col()
+        .rounded_lg()
+        .bg(color(SURFACE))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
+        .shadow_lg()
+        .text_sm()
+}
+
+fn menu_heading(text: &'static str) -> Div {
+    div()
+        .px_2()
+        .pt_2()
+        .pb_1()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color(TEXT_4))
+        .child(text)
+}
+
+fn menu_divider() -> Div {
+    div().my_1().h(px(1.)).bg(color(BORDER))
+}
+
+/// A menu row with a check slot on the left, filled when `checked`.
+fn menu_row(id: SharedString, checked: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(30.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_md()
+        .cursor_pointer()
+        .text_color(color(TEXT_2))
+        .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+        .child(
+            div()
+                .size(px(14.))
+                .flex_none()
+                .rounded(px(3.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(10.))
+                .when(checked, |c| {
+                    c.bg(color(ACCENT)).text_color(color(TEXT)).child("✓")
+                }),
+        )
+}
+
+fn switch(on: bool) -> Div {
+    div()
+        .w(px(26.))
+        .h(px(16.))
+        .flex_none()
+        .rounded_full()
+        .p(px(2.))
+        .flex()
+        .when(on, |s| s.bg(color(ACCENT)).justify_end())
+        .when(!on, |s| s.bg(color(BORDER_STRONG)))
+        .child(div().size(px(12.)).rounded_full().bg(color(TEXT)))
+}
+
+/// An active filter, shown beside the Filter button; its × clears it.
+fn chip(
+    id: &'static str,
+    label: String,
+    clear: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(24.))
+        .pl_2()
+        .pr_1()
+        .flex()
+        .items_center()
+        .gap_1()
+        .rounded_md()
+        .bg(color(SURFACE))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
+        .text_xs()
+        .text_color(color(TEXT_2))
+        .child(label)
+        .child(
+            div()
+                .id(SharedString::from(format!("{id}-x")))
+                .px_1()
+                .rounded(px(3.))
+                .text_color(color(TEXT_4))
+                .cursor_pointer()
+                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+                .child("×")
+                .on_click(clear),
+        )
 }
 
 fn segments() -> Div {

@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Installed from the repository with `cargo install --path`; never published.
+publish = false
 
 [[bin]]
 name = "livtk"

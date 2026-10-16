@@ -159,9 +159,15 @@ shortcut; the ones used most:
 ## Develop
 
 ```
-scripts/check              # format, lint, every test, benchmarks and model tests, each timed
+scripts/check              # format, lint, supply chain, every test, benchmarks and model tests
 scripts/check --install    # then install livtk and livtk-app
 ```
+
+The supply chain step runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)
+(`cargo install --locked cargo-deny`) against `deny.toml`. It allows permissive licences and
+MPL-2.0 but no GPL or LGPL, and crates.io as the only source. It fails on vulnerabilities and
+yanked versions, and on unmaintained crates livtk depends on directly. The advisory database is
+fetched each run; without a network, the cached copy is used.
 
 After an edit to the app, `scripts/check` takes about 12 s and `--install` about 64 s, 50 of
 them building the installed app with link-time optimisation. The UI tests run in debug only

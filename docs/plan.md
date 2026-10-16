@@ -897,6 +897,20 @@ Asked for while trying the app, and built in one batch:
   by line, and the corners of Unicode: accents, Hangul, Turkish İ, special tokens written in
   the text, words over 100 characters), and the same vectors to the bit, the whole vocabulary
   as texts included. Opening the model and embedding a prompt: 2.5 ms against the library's 87.
+- `cargo deny`, as section 9 asked, in `scripts/check` after lint, against `deny.toml`:
+  - **Licences:** permissive ones and MPL-2.0, no GPL or LGPL. `self_cell` (Apache-2.0 OR
+    GPL-2.0-only) and `r-efi` (MIT OR Apache-2.0 OR LGPL-2.1-or-later) pass on their permissive
+    option. `model2vec-rs` names no licence in its manifest, so cargo deny reads its LICENSE file
+    (MIT). The plan was a `clarify` entry pinning that file by hash, but trying it showed it
+    changes nothing, so there is none.
+  - **Sources:** crates.io only. **Bans:** no wildcard versions; the workspace's path
+    dependencies are allowed, the crates now `publish = false`.
+  - **Advisories:** no vulnerabilities in the tree. Six unmaintained crates arrive transitively
+    and are left to their parents, looked at again on upgrading them: `ttf-parser`, `rustybuzz`,
+    `instant` and `rustls-pemfile` (the GPUI stack), and `paste` and `number_prefix` (through
+    `tokenizers`). An unmaintained direct dependency fails the check.
+  - The database is fetched each run (about a second), the cached copy used offline. Each rule
+    was seen to fail once on purpose.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

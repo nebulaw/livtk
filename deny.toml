@@ -1,0 +1,50 @@
+# cargo deny: what livtk may depend on. Run by `scripts/check`.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+# Vulnerabilities and yanked versions fail the check. Unmaintained crates fail it only when
+# livtk depends on them directly; those that come in through GPUI and `tokenizers` (in
+# docs/plan.md, section 21) are theirs to replace, and are looked at again when they are
+# upgraded.
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences, and MPL-2.0, whose copyleft stays within its own files. No GPL or LGPL:
+# the crates that offer them (self_cell, r-efi) offer Apache-2.0 or MIT as well.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# model2vec-rs names no licence in its manifest, so cargo deny warns and reads its LICENSE file
+# instead: MIT, held to the list above like any other.
+
+[bans]
+# GPUI's stack carries several versions of some crates; that is not ours to fix.
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path; none is published.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

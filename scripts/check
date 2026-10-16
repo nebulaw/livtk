@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Everything a change must pass, fastest first, each step timed:
-#   scripts/check            format, lint, every test (debug), benchmarks and model tests (quick)
+#   scripts/check            format, lint, supply chain, every test (debug), benchmarks and model
+#                            tests (quick)
 #   scripts/check --install  then install both binaries
 #
 # UI tests run in debug only (GPUI records the debug selectors they use only there). The CLI's
@@ -27,6 +28,16 @@ trap 'rm -f /tmp/livtk-check.$$' EXIT
 models=${LIVTK_TEST_MODELS:-$HOME/.cache/livtk/models}
 step "format" cargo fmt --check
 step "lint" cargo clippy -q --workspace --all-targets -- -D warnings
+# What livtk may depend on (deny.toml): licences, advisories, sources. The advisory database is
+# fetched first (about a second); without a network the cached copy is used.
+if ! cargo deny --version >/dev/null 2>&1; then
+  echo "(cargo-deny is not installed: cargo install --locked cargo-deny; the supply chain is not checked)"
+else
+  if ! cargo deny fetch db >/dev/null 2>&1; then
+    echo "(cannot fetch the advisory database: checking against the cached copy)"
+  fi
+  step "supply chain (cargo deny)" cargo deny --offline check
+fi
 step "tests: core and CLI" cargo test -q
 step "tests: the app, with UI tests" cargo test -q -p livtk-app
 if [ -d "$models/potion-retrieval-32M" ]; then

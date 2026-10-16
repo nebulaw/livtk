@@ -1074,14 +1074,19 @@ fn human_only_reason(n: &Node) -> String {
     }
 }
 
-/// Which links a node of `kind` may have to `dst`.
-fn check_link(kind: Kind, rel: Rel, dst: &Node) -> Result<()> {
-    let ok = match rel {
-        Rel::DependsOn | Rel::Parent => kind == Kind::Task && dst.kind == Kind::Task,
-        Rel::Supersedes => matches!(kind, Kind::Lesson | Kind::Decision) && dst.kind == kind,
+/// Whether a node of `kind` may have a `rel` link to a node of kind `dst`: dependencies and
+/// parents join tasks, supersedes joins two lessons or two decisions, anything may be learned
+/// from or related to anything. The app offers only these.
+pub fn link_allowed(kind: Kind, rel: Rel, dst: Kind) -> bool {
+    match rel {
+        Rel::DependsOn | Rel::Parent => kind == Kind::Task && dst == Kind::Task,
+        Rel::Supersedes => matches!(kind, Kind::Lesson | Kind::Decision) && dst == kind,
         Rel::LearnedFrom | Rel::Relates => true,
-    };
-    if ok {
+    }
+}
+
+fn check_link(kind: Kind, rel: Rel, dst: &Node) -> Result<()> {
+    if link_allowed(kind, rel, dst.kind) {
         Ok(())
     } else {
         Err(Error::Invalid(format!(

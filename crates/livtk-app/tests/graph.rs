@@ -531,7 +531,7 @@ fn only_the_stretches_in_view_are_kept() {
 }
 
 #[test]
-fn the_open_or_hovered_node_is_brought_out_and_the_rest_dimmed() {
+fn the_open_node_is_brought_out_and_the_rest_dimmed_but_not_on_hover() {
     let mut g = Graph::build(tasks(3), &[dep(2, 1)]);
     let (one, two, three) = (
         g.nodes.iter().position(|n| n.id == id(1)).unwrap(),
@@ -556,9 +556,7 @@ fn the_open_or_hovered_node_is_brought_out_and_the_rest_dimmed() {
     assert!(!g.lit(three, f), "the rest dims");
 
     g.hovered = Some(three);
-    assert_eq!(
-        g.focus(true),
-        Some(three),
-        "the pointer wins while it is on a card"
-    );
+    assert_eq!(g.focus(true), Some(two), "the pointer brings nothing out");
+    g.selected = None;
+    assert_eq!(g.focus(true), None, "not even with nothing selected");
 }

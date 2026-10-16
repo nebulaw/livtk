@@ -173,11 +173,11 @@ impl Graph {
             .position(|n| wx >= n.x && wx <= n.x + CARD_W && wy >= n.y && wy <= n.y + CARD_H)
     }
 
-    /// The node the graph brings out, dimming what is not linked to it: the card under the
-    /// pointer, else the selected node while its panel is `open`. A selection with the panel
-    /// closed is only outlined.
+    /// The node the graph brings out, dimming what is not linked to it: the selected node
+    /// while its panel is `open`. A selection with the panel closed is only outlined, and the
+    /// pointer brings nothing out: cards have no hover effects.
     pub fn focus(&self, open: bool) -> Option<usize> {
-        self.hovered.or(self.selected.filter(|_| open))
+        self.selected.filter(|_| open)
     }
 
     /// Whether node `i` is drawn at full strength with `focus` brought out.

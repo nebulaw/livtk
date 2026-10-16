@@ -1060,3 +1060,200 @@ fn a_frame_of_a_thousand_node_graph_stays_in_budget(cx: &mut TestAppContext) {
         "zoom 1: {close:?}"
     );
 }
+
+/// A selector made at run time, as `debug_bounds` takes a `'static` name.
+fn named(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn priority_of(dir: &std::path::Path, key: &str) -> u8 {
+    Workspace::open(dir).unwrap().node(key).unwrap().priority
+}
+
+fn id_of(dir: &std::path::Path, key: &str) -> uuid::Uuid {
+    Workspace::open(dir).unwrap().node(key).unwrap().id
+}
+
+#[gpui_kit::test]
+fn a_rows_priority_icon_opens_a_menu_that_sets_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    let icon = named(format!("priority-of-{}", id_of(dir.path(), "LIV-2")));
+    click_on(cx, icon);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), Some("row-priority"));
+        assert_eq!(
+            a.model().selected().unwrap().key,
+            "LIV-1",
+            "the click did not select the row"
+        );
+    });
+    click_on(cx, "set-priority-1");
+    assert_eq!(priority_of(dir.path(), "LIV-2"), 1, "LIV-2 is urgent now");
+    assert_eq!(priority_of(dir.path(), "LIV-1"), 3);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None);
+        assert!(a.model().detail.is_none(), "nothing opened");
+    });
+}
+
+#[gpui_kit::test]
+fn a_board_cards_priority_and_the_panels_are_set_from_menus_too(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t b");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().layout, livtk_app::model::Layout::Board)
+    });
+    click_on(
+        cx,
+        named(format!("priority-of-{}", id_of(dir.path(), "LIV-1"))),
+    );
+    click_on(cx, "set-priority-4");
+    assert_eq!(priority_of(dir.path(), "LIV-1"), 4);
+
+    open_detail(cx);
+    click_on(cx, "detail-priority");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), Some("detail-priority"))
+    });
+    click_on(cx, "set-priority-2");
+    let open = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().unwrap().node.key.clone()
+    });
+    assert_eq!(
+        priority_of(dir.path(), &open),
+        2,
+        "the panel's menu set the open task"
+    );
+}
+
+#[gpui_kit::test]
+fn a_link_is_added_from_the_panel_and_removed_with_its_cross(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t j");
+    open_detail(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2")
+    });
+    click_on(cx, "add-link");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("add-link")));
+    click_on(cx, "link-choice-0");
+    app.read_with(cx, |a, _| {
+        let p = a
+            .model()
+            .palette
+            .as_ref()
+            .expect("the palette picks the other end");
+        assert_eq!(p.link.as_ref().unwrap().choice.label, "Waits for…");
+    });
+    cx.simulate_input("first");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert_eq!(
+        ws.links("LIV-2").unwrap().depends_on[0].key,
+        "LIV-1",
+        "LIV-2 waits for LIV-1"
+    );
+    app.read_with(cx, |a, _| assert!(!a.palette_open()));
+    click_on(cx, "unlink-waits-for-LIV-1");
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert!(
+        ws.links("LIV-2").unwrap().depends_on.is_empty(),
+        "the cross removed it"
+    );
+}
+
+#[gpui_kit::test]
+fn the_palette_adds_a_link_from_its_actions(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_input("add link: blocks");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.palette_open(), "it stays open to pick the other end")
+    });
+    cx.simulate_input("seco");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert_eq!(
+        ws.links("LIV-1").unwrap().blocks[0].key,
+        "LIV-2",
+        "LIV-1 blocks LIV-2"
+    );
+}
+
+#[gpui_kit::test]
+fn the_wheel_scrolls_a_board_column_down_and_shift_scrolls_across(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for i in 0..30 {
+            ws.execute(
+                Command::Create {
+                    kind: Kind::Task,
+                    title: format!("filler {i}"),
+                    body: String::new(),
+                    priority: None,
+                    links: vec![],
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t b");
+    cx.run_until_parked();
+    let first = cx.debug_bounds("card-LIV-3").expect("a backlog card");
+    let other = cx.debug_bounds("card-LIV-1").expect("a planned card");
+    let at = first.center();
+    let wheel = |cx: &mut gpui_kit::VisualTestContext, dy: f32, shift: bool| {
+        cx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at,
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(dy),
+            )),
+            modifiers: gpui_kit::Modifiers {
+                shift,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    };
+    wheel(cx, -200., false);
+    let scrolled = cx.debug_bounds("card-LIV-3").expect("still drawn");
+    assert!(
+        scrolled.top() < first.top() - gpui_kit::px(100.),
+        "the column scrolled down"
+    );
+    assert_eq!(scrolled.left(), first.left(), "and not across");
+    assert_eq!(
+        cx.debug_bounds("card-LIV-1").unwrap().top(),
+        other.top(),
+        "only that column"
+    );
+
+    wheel(cx, -120., true);
+    let across = cx.debug_bounds("card-LIV-3").expect("still drawn");
+    assert!(
+        across.left() < scrolled.left(),
+        "Shift+wheel scrolled the board across"
+    );
+    assert_eq!(across.top(), scrolled.top(), "and the column did not move");
+}

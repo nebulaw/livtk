@@ -18,13 +18,13 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use livtk_core::event::{Event, Op};
-use livtk_core::{Brief, Kind, State, Summary};
+use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
     Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, Model, Ordering, View, choices, describe, drop_allowed,
-    link_curve, visible_runs,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Model, Ordering, View, choices, describe,
+    drop_allowed, link_choices, link_curve, visible_runs,
 };
 use theme::*;
 
@@ -295,6 +295,8 @@ pub struct LivtkApp {
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
+    /// The board's sideways scroll, which Shift+wheel drives.
+    board_scroll: ScrollHandle,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
     /// its origin turns pointer positions into the graph's own.
     graph_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -360,6 +362,7 @@ impl LivtkApp {
             list_scroll: UniformListScrollHandle::new(),
             palette_input,
             palette_scroll: ScrollHandle::new(),
+            board_scroll: ScrollHandle::new(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
             filter,
@@ -398,6 +401,9 @@ impl LivtkApp {
             Menu::Grouping => "grouping",
             Menu::Ordering => "ordering",
             Menu::Priority => "priority",
+            Menu::RowPriority(_) => "row-priority",
+            Menu::DetailPriority => "detail-priority",
+            Menu::AddLink => "add-link",
         })
     }
 
@@ -498,6 +504,12 @@ impl LivtkApp {
         self.menu = None;
         self.sub = None;
         self.model.open_palette();
+        self.reset_palette_input(window, cx);
+        cx.notify();
+    }
+
+    /// An empty, focused palette field, scrolled to the top.
+    fn reset_palette_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette_input
             .update(cx, |s, cx| s.set_value("", window, cx));
         self.palette_input
@@ -505,6 +517,16 @@ impl LivtkApp {
             .focus_handle(cx)
             .focus(window, cx);
         self.palette_scroll.scroll_to_item(0);
+    }
+
+    /// Start adding a link from the node open in the panel: the palette picks the other end.
+    fn pick_link(&mut self, choice: LinkChoice, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        self.help = false;
+        self.model.open_link_picker(choice);
+        if self.model.palette.is_some() {
+            self.reset_palette_input(window, cx);
+        }
         cx.notify();
     }
 
@@ -523,6 +545,12 @@ impl LivtkApp {
             Some(i) => self.model.palette_run_at(i),
             None => self.model.palette_run(),
         };
+        if ask == Some(Ask::PickLink) {
+            // The palette stays, now picking the link's other end, from an empty field.
+            self.reset_palette_input(window, cx);
+            cx.notify();
+            return;
+        }
         self.nav.focus(window, cx);
         // Going to a node may have cleared the filter that hid it.
         self.sync_filter(window, cx);
@@ -542,7 +570,7 @@ impl LivtkApp {
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.help = true,
-            None => {}
+            Some(Ask::PickLink) | None => {}
         }
         self.after_move(cx);
     }
@@ -1444,6 +1472,169 @@ impl LivtkApp {
         panel
     }
 
+    /// A task's priority mark that opens a menu of priorities, as in Linear. A press here is
+    /// the button's alone: it neither selects the row nor starts a drag.
+    fn priority_button(
+        &self,
+        menu: Menu,
+        id: Uuid,
+        current: u8,
+        name: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.menu == Some(menu);
+        let selector = match menu {
+            Menu::DetailPriority => "detail-priority".to_owned(),
+            _ => format!("priority-of-{id}"),
+        };
+        let button = div()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .h(px(22.))
+            .px(px(4.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .cursor_pointer()
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
+            .child(priority_mark(current))
+            .when(name, |b| {
+                b.child(PRIORITY_NAMES[usize::from(current.clamp(1, 4) - 1)])
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_menu(menu, window, cx);
+                }),
+            );
+        div().relative().flex_none().child(button).when(open, |d| {
+            let mut panel = menu_panel(180.).debug_selector(|| "set-priority-menu".into());
+            for p in 1..=4u8 {
+                let row_id = format!("set-priority-{p}");
+                panel = panel.child(
+                    option_row(SharedString::from(row_id.clone()))
+                        .debug_selector(move || row_id.clone())
+                        .child(priority_mark(p))
+                        .child(PRIORITY_NAMES[usize::from(p - 1)])
+                        .child(check(current == p))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.model.set_priority_of(id, p);
+                            this.close_menu(window, cx);
+                        })),
+                );
+            }
+            d.child(self.popover(menu, false, 26., panel, cx))
+        })
+    }
+
+    /// "+ Add link": the relations the open node can gain, each opening the palette to pick
+    /// the other end.
+    fn add_link_button(&self, kind: Kind, cx: &mut Context<Self>) -> Div {
+        let open = self.menu == Some(Menu::AddLink);
+        let button = div()
+            .id("add-link")
+            .debug_selector(|| "add-link".into())
+            .h(px(24.))
+            .px_2()
+            .flex()
+            .items_center()
+            .rounded_lg()
+            .text_xs()
+            .cursor_pointer()
+            .text_color(color(if open { TEXT } else { TEXT_3 }))
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| {
+                b.hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
+            })
+            .child("+ Add link")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.toggle_menu(Menu::AddLink, window, cx)),
+            );
+        div().relative().child(button).when(open, |d| {
+            let mut panel = menu_panel(200.).debug_selector(|| "add-link-menu".into());
+            for (i, choice) in link_choices(kind).into_iter().enumerate() {
+                let row_id = format!("link-choice-{i}");
+                panel = panel.child(
+                    option_row(SharedString::from(row_id.clone()))
+                        .debug_selector(move || row_id.clone())
+                        .child(choice.label)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.pick_link(choice, window, cx)
+                        })),
+                );
+            }
+            d.child(self.popover(Menu::AddLink, true, 28., panel, cx))
+        })
+    }
+
+    /// One group of the open node's links, each with an × that removes it.
+    fn link_group(&self, g: &LinkGroup, cx: &mut Context<Self>) -> Div {
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_xs().text_color(color(TEXT_4)).child(g.label));
+        let (rel, outgoing) = (g.rel, g.outgoing);
+        let group = g.label.to_lowercase().replace(' ', "-");
+        for b in &g.briefs {
+            let key = b.key.clone();
+            let unlink = format!("unlink-{group}-{key}");
+            out = out.child(
+                div()
+                    .h(px(28.))
+                    .pl_2()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(color(CONTENT))
+                    .border_1()
+                    .border_color(color(BORDER))
+                    .child(state_mark(Kind::Task, b.state))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(color(TEXT_4))
+                            .child(b.key.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(color(TEXT_2))
+                            .child(b.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(unlink.clone()))
+                            .debug_selector(move || unlink.clone())
+                            .size(px(20.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .text_color(color(TEXT_4))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.model.unlink(rel, outgoing, &key);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        out
+    }
+
     /// The new task's priority, chosen from a menu as in Linear's issue composer.
     fn priority_menu(&self, cx: &mut Context<Self>) -> Div {
         let current = self.form.as_ref().map_or(3, |f| f.priority);
@@ -1576,7 +1767,6 @@ impl LivtkApp {
                 continue;
             }
             let on = g.selected == Some(i);
-            let hover = g.hovered == Some(i);
             if dots {
                 dot_quads.push((sx, sy, w, h, state_color(n.state), on, lit(i)));
                 continue;
@@ -1598,13 +1788,7 @@ impl LivtkApp {
                     .rounded(px(8. * z))
                     .border_1()
                     .bg(color(if on { SELECTED } else { SURFACE }))
-                    .border_color(color(if on {
-                        ACCENT
-                    } else if hover {
-                        BORDER_STRONG
-                    } else {
-                        BORDER
-                    }))
+                    .border_color(color(if on { ACCENT } else { BORDER }))
                     .text_size(px(13. * z))
                     .line_height(px(18. * z))
                     .when(!lit(i), |d| d.opacity(0.35))
@@ -1723,7 +1907,7 @@ impl LivtkApp {
             },
         )
         .absolute()
-        .size_full();
+        .inset_0();
         let controls = div()
             .absolute()
             .bottom(px(12.))
@@ -2141,7 +2325,7 @@ impl LivtkApp {
             .when(!selected, |d| d.hover(|s| s.bg(color(HOVER))))
             .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }));
         if r.kind == Kind::Task {
-            row = row.child(priority_mark(r.priority));
+            row = row.child(self.priority_button(Menu::RowPriority(id), id, r.priority, false, cx));
         }
         row = row
             .child(
@@ -2224,10 +2408,14 @@ impl LivtkApp {
 
     fn board(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.model.selected().map(|r| r.id);
+        // The wheel scrolls a column down; across, only a sideways swipe or Shift+wheel.
         let mut cols = div()
             .id("board")
+            .debug_selector(|| "board".into())
             .size_full()
             .overflow_x_scroll()
+            .restrict_scroll_to_axis()
+            .track_scroll(&self.board_scroll)
             .flex()
             .gap_2()
             .p_3();
@@ -2247,6 +2435,7 @@ impl LivtkApp {
                 .border_1()
                 .border_color(color(BORDER))
                 .overflow_y_scroll()
+                .restrict_scroll_to_axis()
                 .drag_over::<Dragged>(move |style, d, _, _| {
                     if d.fits(key) {
                         style
@@ -2263,6 +2452,7 @@ impl LivtkApp {
                 .child(
                     div()
                         .flex()
+                        .flex_none()
                         .items_center()
                         .gap_2()
                         .px_1()
@@ -2287,6 +2477,12 @@ impl LivtkApp {
                 let flash = self.model.flashed.get(&id).copied();
                 let card = div()
                     .id(SharedString::from(format!("card-{}", r.key)))
+                    .debug_selector({
+                        let key = r.key.clone();
+                        move || format!("card-{key}")
+                    })
+                    // Cards keep their height, so a full column overflows and scrolls.
+                    .flex_none()
                     .p_3()
                     .rounded_lg()
                     .bg(color(if sel { SELECTED } else { CONTENT }))
@@ -2318,7 +2514,13 @@ impl LivtkApp {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(priority_mark(r.priority))
+                            .child(self.priority_button(
+                                Menu::RowPriority(id),
+                                id,
+                                r.priority,
+                                false,
+                                cx,
+                            ))
                             .child(state_mark(Kind::Task, r.state)),
                     )
                     .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
@@ -2333,7 +2535,35 @@ impl LivtkApp {
             }
             cols = cols.child(col);
         }
-        cols
+        // Shift+wheel scrolls the board across, before any column sees it: a listener in the
+        // capture phase over the board's area, which then stops the event.
+        let handle = self.board_scroll.clone();
+        let shift_wheel = canvas(
+            |_, _, _| (),
+            move |area, (), window, _| {
+                window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture
+                        || !e.modifiers.shift
+                        || !area.contains(&e.position)
+                    {
+                        return;
+                    }
+                    let d = e.delta.pixel_delta(px(20.));
+                    let along = if f32::from(d.x) != 0. { d.x } else { d.y };
+                    let max = f32::from(handle.max_offset().x);
+                    let mut offset = handle.offset();
+                    offset.x = px((f32::from(offset.x) + f32::from(along)).clamp(-max, 0.));
+                    handle.set_offset(offset);
+                    cx.stop_propagation();
+                    window.refresh();
+                });
+            },
+        )
+        // Pinned to the corner: an absolute element without offsets sits where the flow would
+        // have put it, here below the board.
+        .absolute()
+        .inset_0();
+        div().relative().size_full().child(cols).child(shift_wheel)
     }
 
     // ---- rendering: the detail panel ----------------------------------------------------------
@@ -2454,12 +2684,7 @@ impl LivtkApp {
         if n.kind == Kind::Task {
             props = props.child(prop_row(
                 "Priority",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(priority_mark(n.priority))
-                    .child(PRIORITY_NAMES[usize::from(n.priority.clamp(1, 4) - 1)]),
+                self.priority_button(Menu::DetailPriority, n.id, n.priority, true, cx),
             ));
         } else {
             props = props.child(prop_row("Kind", div().child(title_case(n.kind.as_str()))));
@@ -2471,17 +2696,22 @@ impl LivtkApp {
             "Created",
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
         ));
-        let mut links = div().flex().flex_col().gap_3();
-        for (label, briefs) in [
-            ("Waits for", &d.links.depends_on),
-            ("Blocks", &d.links.blocks),
-            ("Replaces", &d.replaces),
-            ("Replaced by", &d.replaced_by),
-            ("Learned from", &d.learned_from),
-        ] {
-            if !briefs.is_empty() {
-                links = links.child(link_group(label, briefs));
-            }
+        let mut links = div().flex().flex_col().gap_3().child(
+            div()
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color(TEXT_4))
+                        .child("Links"),
+                )
+                .child(div().flex_1())
+                .child(self.add_link_button(n.kind, cx)),
+        );
+        for g in &d.link_groups {
+            links = links.child(self.link_group(g, cx));
         }
         let title = self.detail_title(n, cx);
         let body = self.detail_body(n, cx);
@@ -2693,7 +2923,11 @@ impl LivtkApp {
             .flex_col();
         let mut section = None;
         for (i, item) in p.items.iter().enumerate() {
-            let s = section_of(item, &p.query);
+            let s = if p.link.is_some() {
+                "Link to"
+            } else {
+                section_of(item, &p.query)
+            };
             if section != Some(s) {
                 results = results.child(
                     div()
@@ -2719,7 +2953,11 @@ impl LivtkApp {
                     .child("Nothing matches"),
             );
         }
-        let context = self.model.selected().map(|r| r.key.clone());
+        // What the actions apply to; when picking a link's other end, the link so far.
+        let context = match &p.link {
+            Some(pick) => Some(format!("{} · {}", pick.key, pick.choice.label)),
+            None => self.model.acted_on().map(|r| r.key),
+        };
         let card = div()
             .debug_selector(|| "palette".into())
             .key_context(PALETTE)
@@ -3117,6 +3355,12 @@ enum Menu {
     Ordering,
     /// The new task's priority, in the form.
     Priority,
+    /// A task's priority, from its row or card.
+    RowPriority(Uuid),
+    /// The open task's priority, in the detail panel.
+    DetailPriority,
+    /// The relations a link can be added by, in the detail panel.
+    AddLink,
 }
 
 impl Menu {
@@ -3498,38 +3742,6 @@ fn empty(title: &str, hint: &str) -> Div {
                 .text_color(color(TEXT_4))
                 .child(hint.to_owned()),
         )
-}
-
-fn link_group(label: &str, briefs: &[Brief]) -> Div {
-    let mut g = div().flex().flex_col().gap_1().child(
-        div()
-            .text_xs()
-            .text_color(color(TEXT_4))
-            .child(label.to_owned()),
-    );
-    for b in briefs {
-        g = g.child(
-            div()
-                .h(px(28.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded_lg()
-                .bg(color(CONTENT))
-                .border_1()
-                .border_color(color(BORDER))
-                .child(state_mark(Kind::Task, b.state))
-                .child(div().text_color(color(TEXT_4)).child(b.key.clone()))
-                .child(
-                    div()
-                        .truncate()
-                        .text_color(color(TEXT_2))
-                        .child(b.title.clone()),
-                ),
-        );
-    }
-    g
 }
 
 /// A row that flashes the accent once when someone else changed it.

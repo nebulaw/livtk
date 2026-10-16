@@ -17,7 +17,7 @@ pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,
 };
-pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
+pub use palette::{Action, Ask, Found, Item, LinkPick, Palette, Run, fuzzy};
 
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -167,8 +167,51 @@ pub struct Detail {
     pub replaces: Vec<Brief>,
     pub replaced_by: Vec<Brief>,
     pub learned_from: Vec<Brief>,
+    /// Every link, grouped as the panel shows them, each group knowing its relation and its
+    /// direction so a link can be removed from it.
+    pub link_groups: Vec<LinkGroup>,
     pub history: Vec<Event>,
     pub choices: Vec<Choice>,
+}
+
+/// Links of one relation and direction, as the detail panel lists them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkGroup {
+    pub label: &'static str,
+    pub rel: Rel,
+    /// The open node is the link's source (it waits for, learned from, supersedes, relates to).
+    pub outgoing: bool,
+    pub briefs: Vec<Brief>,
+}
+
+/// A link the human can add from a node: how it reads, and which relation and direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkChoice {
+    pub label: &'static str,
+    pub rel: Rel,
+    pub outgoing: bool,
+}
+
+/// The links a node of `kind` can gain, as the panel and the palette offer them.
+pub fn link_choices(kind: Kind) -> Vec<LinkChoice> {
+    let c = |label, rel, outgoing| LinkChoice {
+        label,
+        rel,
+        outgoing,
+    };
+    let mut out = match kind {
+        Kind::Task => vec![
+            c("Waits for…", Rel::DependsOn, true),
+            c("Blocks…", Rel::DependsOn, false),
+        ],
+        Kind::Lesson | Kind::Decision => vec![
+            c("Learned from…", Rel::LearnedFrom, true),
+            c("Supersedes…", Rel::Supersedes, true),
+        ],
+        Kind::Finding => vec![c("Learned from…", Rel::LearnedFrom, true)],
+    };
+    out.push(c("Related to…", Rel::Relates, true));
+    out
 }
 
 pub struct Model {
@@ -490,6 +533,48 @@ impl Model {
             },
             None,
         );
+    }
+
+    /// Set a task's priority wherever it shows: a list row, a board card, the panel.
+    pub fn set_priority_of(&mut self, id: Uuid, priority: u8) {
+        self.run(
+            Command::SetPriority {
+                node: id.to_string(),
+                priority,
+            },
+            None,
+        );
+    }
+
+    /// Link node `id` and `other` by `choice`: from `id` when outgoing, else to it. A refusal
+    /// (a cycle, say) becomes the notice.
+    pub fn link(&mut self, id: Uuid, choice: LinkChoice, other: Uuid) {
+        let (src, dst) = if choice.outgoing {
+            (id, other)
+        } else {
+            (other, id)
+        };
+        self.run(
+            Command::Link {
+                src: src.to_string(),
+                rel: choice.rel,
+                dst: dst.to_string(),
+            },
+            None,
+        );
+    }
+
+    /// Remove the link between the open node and `other`, as listed in a group of the panel.
+    pub fn unlink(&mut self, rel: Rel, outgoing: bool, other: &str) {
+        let Some(id) = self.detail.as_ref().map(|d| d.node.id.to_string()) else {
+            return;
+        };
+        let (src, dst) = if outgoing {
+            (id, other.to_owned())
+        } else {
+            (other.to_owned(), id)
+        };
+        self.run(Command::Unlink { src, rel, dst }, None);
     }
 
     pub fn add_note(&mut self, text: &str) {
@@ -909,14 +994,36 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
     let key = id.to_string();
     let node = ws.node(&key)?;
     let (replaces, replaced_by) = ws.related(&key, Rel::Supersedes)?;
-    let (learned_from, _) = ws.related(&key, Rel::LearnedFrom)?;
+    let (learned_from, taught) = ws.related(&key, Rel::LearnedFrom)?;
+    let (relates_to, related_by) = ws.related(&key, Rel::Relates)?;
+    let links = ws.links(&key)?;
+    let group = |label, rel, outgoing, briefs: &Vec<Brief>| LinkGroup {
+        label,
+        rel,
+        outgoing,
+        briefs: briefs.clone(),
+    };
+    let link_groups: Vec<LinkGroup> = [
+        group("Waits for", Rel::DependsOn, true, &links.depends_on),
+        group("Blocks", Rel::DependsOn, false, &links.blocks),
+        group("Related to", Rel::Relates, true, &relates_to),
+        group("Related from", Rel::Relates, false, &related_by),
+        group("Replaces", Rel::Supersedes, true, &replaces),
+        group("Replaced by", Rel::Supersedes, false, &replaced_by),
+        group("Learned from", Rel::LearnedFrom, true, &learned_from),
+        group("Taught", Rel::LearnedFrom, false, &taught),
+    ]
+    .into_iter()
+    .filter(|g| !g.briefs.is_empty())
+    .collect();
     Ok(Detail {
         choices: choices(node.kind, node.state),
-        links: ws.links(&key)?,
+        links,
         history: ws.history(Some(&key))?,
         replaces,
         replaced_by,
         learned_from,
+        link_groups,
         node,
     })
 }

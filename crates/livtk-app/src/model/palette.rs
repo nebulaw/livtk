@@ -1,10 +1,10 @@
 //! The command palette, as Linear's Cmd+K: find any node and run any legal action from one
 //! field. What it offers and what choosing does live here; the view only draws it.
 
-use livtk_core::{Hit, Kind, State, Summary};
+use livtk_core::{Hit, Kind, State, Summary, link_allowed};
 use uuid::Uuid;
 
-use super::{Choice, Grouping, Layout, Model, Ordering, View, choices};
+use super::{Choice, Grouping, Layout, LinkChoice, Model, Ordering, View, choices, link_choices};
 
 /// Nodes shown for a typed query.
 const FOUND: usize = 20;
@@ -20,6 +20,30 @@ pub struct Palette {
     pub items: Vec<Item>,
     /// The highlighted item, which `Enter` runs.
     pub selected: usize,
+    /// Picking the other end of a link instead of running commands.
+    pub link: Option<LinkPick>,
+}
+
+/// A link waiting for its other end: from (or to) `node`, by `choice`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkPick {
+    pub node: Uuid,
+    pub key: String,
+    pub kind: Kind,
+    pub choice: LinkChoice,
+}
+
+impl LinkPick {
+    /// Whether `other` can be this link's other end, by the core's rule.
+    fn accepts(&self, other: &Found) -> bool {
+        let rel = self.choice.rel;
+        other.id != self.node
+            && if self.choice.outgoing {
+                link_allowed(self.kind, rel, other.kind)
+            } else {
+                link_allowed(other.kind, rel, self.kind)
+            }
+    }
 }
 
 /// One line of the palette.
@@ -51,6 +75,8 @@ pub enum Run {
     Order(Ordering),
     ToggleDismissed,
     FitGraph,
+    /// Pick the other end of a link from the selected node.
+    PickLink(LinkChoice),
     /// Done by the view: it owns the forms, inputs and dialogs.
     Ask(Ask),
 }
@@ -58,6 +84,8 @@ pub enum Run {
 /// Actions the view carries out after the palette closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ask {
+    /// The palette reopened to pick a link's other end: its field starts empty.
+    PickLink,
     NewTask,
     AddNote,
     EditTitle,
@@ -115,6 +143,26 @@ impl Model {
         self.palette_query("");
     }
 
+    /// Open the palette to pick the other end of a link from the node actions act on.
+    pub fn open_link_picker(&mut self, choice: LinkChoice) {
+        let Some(row) = self.acted_on() else { return };
+        if let Some(p) = self.projects.get_mut(self.current)
+            && let Err(e) = p.ws.prepare_search()
+        {
+            self.notice = Some(e.to_string());
+        }
+        self.palette = Some(Palette {
+            link: Some(LinkPick {
+                node: row.id,
+                key: row.key,
+                kind: row.kind,
+                choice,
+            }),
+            ..Palette::default()
+        });
+        self.palette_query("");
+    }
+
     pub fn close_palette(&mut self) {
         self.palette = None;
     }
@@ -122,7 +170,20 @@ impl Model {
     /// Show what `query` finds: matching actions, then matching nodes. An empty query shows the
     /// selected node's actions, then the nodes updated last.
     pub fn palette_query(&mut self, query: &str) {
-        let items = if query.trim().is_empty() {
+        let pick = self.palette.as_ref().and_then(|p| p.link.clone());
+        let items = if let Some(pick) = pick {
+            // Picking a link's other end: only nodes it can join.
+            let found = if query.trim().is_empty() {
+                self.recent()
+            } else {
+                self.find(query)
+            };
+            found
+                .into_iter()
+                .filter(|f| pick.accepts(f))
+                .map(Item::Node)
+                .collect()
+        } else if query.trim().is_empty() {
             let mut items: Vec<Item> = self.node_actions().into_iter().map(Item::Action).collect();
             items.extend(self.recent().into_iter().map(Item::Node));
             items
@@ -170,15 +231,21 @@ impl Model {
 
     /// Run the highlighted item and close the palette. What only the view can do comes back.
     pub fn palette_run(&mut self) -> Option<Ask> {
-        let p = self.palette.take()?;
-        let item = p.items.into_iter().nth(p.selected)?;
-        self.run_item(item)
+        let index = self.palette.as_ref()?.selected;
+        self.palette_run_at(index)
     }
 
     /// Run item `index` (a click) and close the palette.
     pub fn palette_run_at(&mut self, index: usize) -> Option<Ask> {
-        let item = self.palette.take()?.items.into_iter().nth(index)?;
-        self.run_item(item)
+        let p = self.palette.take()?;
+        let item = p.items.into_iter().nth(index)?;
+        match (p.link, item) {
+            (Some(pick), Item::Node(other)) => {
+                self.link(pick.node, pick.choice, other.id);
+                None
+            }
+            (_, item) => self.run_item(item),
+        }
     }
 
     fn run_item(&mut self, item: Item) -> Option<Ask> {
@@ -223,6 +290,10 @@ impl Model {
                 Run::FitGraph => {
                     self.graph_fit();
                     None
+                }
+                Run::PickLink(choice) => {
+                    self.open_link_picker(choice);
+                    Some(Ask::PickLink)
                 }
                 Run::Ask(ask) => Some(ask),
             },
@@ -332,6 +403,14 @@ impl Model {
                     });
                 }
             }
+        }
+        for choice in link_choices(row.kind) {
+            out.push(Action {
+                label: format!("Add link: {}", choice.label.to_lowercase()),
+                context: key.clone(),
+                shortcut: None,
+                run: Run::PickLink(choice),
+            });
         }
         for (label, shortcut, ask) in [
             ("Add a note", Some("C"), Ask::AddNote),

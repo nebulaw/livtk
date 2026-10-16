@@ -780,6 +780,23 @@ and any node opens in a click.
   slid away), and GPUI then sends keys from the window's root, above the app's handlers: Ctrl+?
   and every list key stopped. Lost focus now goes back to what is in front.
 
+## 21. After milestone 5: the developer's first review (2026-10-16)
+
+Asked for while trying the app, and built in one batch:
+
+- A task's priority changes from a menu on its priority icon, in a list row, on a board card and
+  in the detail panel; the icon's press neither selects the row nor starts a drag.
+- Links are made in the app: "+ Add link" in the detail panel and "Add link: …" in the palette
+  pick a relation, then the palette picks the other end, offering only nodes the core accepts
+  (`link_allowed`, now public, is the one rule for both). The panel lists every link, related
+  ones and what a node taught included, each with an × that removes it.
+- The graph's cards have no hover effects: only the node open in the panel brings out its links.
+- Board columns scroll with the wheel; they did not, because cards shrank to fit instead of
+  overflowing. Shift+wheel scrolls the board across, taken in the capture phase so no column
+  sees it.
+- Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
+  `.livtk/events.jsonl.before-sample` restores the log as it was.
+
 ## 18. Milestone 6 in outline: the team
 
 Decided (developer, 2026-10-16): after milestone 5. livtk becomes a team tool, Linear tailored to

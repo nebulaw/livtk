@@ -98,6 +98,10 @@ Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter f
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
 Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `h`.
+A task's priority icon, in a row, on a card or in the detail panel, opens a menu to change it.
+Links are added from the detail panel (+ Add link: waits for, blocks, related to, learned from,
+supersedes) or the palette ("Add link: …"), picking the other end by search, and removed with
+their ×. On the board the wheel scrolls a column and Shift+wheel scrolls across.
 `Ctrl+K` opens the command palette: type a few letters to run any action that is legal from
 where you stand (acknowledge, move, set priority, go to a view, group, order, new task), or to
 find any task, lesson, decision or finding by key (`LIV-12`, `12`), by words as you type them,

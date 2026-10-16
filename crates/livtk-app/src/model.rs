@@ -10,8 +10,12 @@ use livtk_core::{Actor, Brief, Command, Kind, Links, Node, Rel, State, Summary, 
 use uuid::Uuid;
 
 mod activity;
+mod graph;
 mod palette;
 pub use activity::{FeedRow, day_label, describe};
+pub use graph::{
+    CARD_H, CARD_W, Camera, DOTS_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
+};
 pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
 
 /// The views in the sidebar, in order.
@@ -24,16 +28,19 @@ pub enum View {
     Lessons,
     Decisions,
     Findings,
+    /// Every node and link, laid out.
+    Graph,
 }
 
 impl View {
-    pub const ALL: [View; 6] = [
+    pub const ALL: [View; 7] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
         View::Lessons,
         View::Decisions,
         View::Findings,
+        View::Graph,
     ];
 
     pub const fn title(self) -> &'static str {
@@ -44,13 +51,14 @@ impl View {
             View::Lessons => "Lessons",
             View::Decisions => "Decisions",
             View::Findings => "Findings",
+            View::Graph => "Graph",
         }
     }
 
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
-            View::Inbox | View::Activity => None,
+            View::Inbox | View::Activity | View::Graph => None,
             View::Tasks => Some(Kind::Task),
             View::Lessons => Some(Kind::Lesson),
             View::Decisions => Some(Kind::Decision),
@@ -98,7 +106,7 @@ impl Display {
         Display {
             filter: String::new(),
             priorities: Vec::new(),
-            grouping: if matches!(view, View::Inbox | View::Activity) {
+            grouping: if matches!(view, View::Inbox | View::Activity | View::Graph) {
                 Grouping::None
             } else {
                 Grouping::State
@@ -194,6 +202,8 @@ pub struct Model {
     pub activity_index: usize,
     /// The mark as it was when the feed was opened: what came after it is new on this visit.
     activity_seen_before: Option<Uuid>,
+    /// The graph view's nodes, links, camera and selection.
+    pub graph: Graph,
     selected: Option<Uuid>,
     /// Everything the view holds, before display options.
     all: Vec<Summary>,
@@ -250,6 +260,7 @@ impl Model {
             activity_more: false,
             activity_index: 0,
             activity_seen_before: None,
+            graph: Graph::default(),
             selected: None,
             all: Vec::new(),
             displays: HashMap::new(),
@@ -298,6 +309,7 @@ impl Model {
             self.leaving.clear();
             self.flashed.clear();
             self.enter_activity();
+            self.enter_graph();
             self.reload();
         }
     }
@@ -309,6 +321,7 @@ impl Model {
             self.detail = None;
             self.leaving.clear();
             self.enter_activity();
+            self.enter_graph();
             self.reload();
         }
     }
@@ -356,6 +369,10 @@ impl Model {
             self.activity_select_by(delta);
             return;
         }
+        if self.view == View::Graph {
+            self.graph_select_by(delta);
+            return;
+        }
         if self.rows.is_empty() {
             return;
         }
@@ -393,6 +410,9 @@ impl Model {
         if self.view == View::Activity {
             // The feed's highlighted event opens its node, and the feed stays.
             self.selected = self.activity_node();
+        }
+        if self.view == View::Graph {
+            self.selected = self.graph_node();
         }
         let Some(id) = self.selected else { return };
         let Some(project) = self.projects.get(self.current) else {
@@ -785,6 +805,9 @@ impl Model {
         if self.view == View::Activity {
             self.load_activity();
         }
+        if self.view == View::Graph {
+            self.load_graph();
+        }
         for p in &mut self.projects {
             p.inbox = p.ws.inbox().map(|i| i.len()).unwrap_or(0);
             p.unseen = p.ws.unseen_activity().unwrap_or(0);
@@ -794,7 +817,8 @@ impl Model {
             return;
         };
         let rows = match self.view.kind() {
-            None if self.view == View::Activity => Ok(Vec::new()),
+            // The feed lists events and the graph lays nodes out; neither has rows.
+            None if matches!(self.view, View::Activity | View::Graph) => Ok(Vec::new()),
             None => project.ws.inbox(),
             Some(kind) => {
                 let states: Vec<State> = if self.show_all {

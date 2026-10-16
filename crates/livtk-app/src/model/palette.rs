@@ -50,6 +50,7 @@ pub enum Run {
     Group(Grouping),
     Order(Ordering),
     ToggleDismissed,
+    FitGraph,
     /// Done by the view: it owns the forms, inputs and dialogs.
     Ask(Ask),
 }
@@ -219,6 +220,10 @@ impl Model {
                     self.toggle_show_all();
                     None
                 }
+                Run::FitGraph => {
+                    self.graph_fit();
+                    None
+                }
                 Run::Ask(ask) => Some(ask),
             },
         }
@@ -361,6 +366,7 @@ impl Model {
             (View::Lessons, "G L"),
             (View::Decisions, "G D"),
             (View::Findings, "G F"),
+            (View::Graph, "G R"),
         ] {
             if v != self.view {
                 out.push(plain(
@@ -410,6 +416,9 @@ impl Model {
             if d.ordering != o {
                 out.push(plain(label, None, Run::Order(o)));
             }
+        }
+        if self.view == View::Graph {
+            out.push(plain("Zoom to fit", Some("0"), Run::FitGraph));
         }
         if !matches!(self.view, View::Inbox | View::Activity) {
             let label = if self.show_all {

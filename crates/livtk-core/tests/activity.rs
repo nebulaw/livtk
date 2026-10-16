@@ -220,5 +220,9 @@ fn edges_lists_every_link_once() {
     .unwrap();
     let ids = |k: &str| ws.node(k).unwrap().id;
     assert_eq!(ws.edges().unwrap(), [(ids(&b), Rel::DependsOn, ids(&a))]);
-    assert_eq!(ws.snapshot().unwrap().edges, ws.edges().unwrap(), "the snapshot agrees");
+    assert_eq!(
+        ws.snapshot().unwrap().edges,
+        ws.edges().unwrap(),
+        "the snapshot agrees"
+    );
 }

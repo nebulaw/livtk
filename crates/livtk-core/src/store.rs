@@ -422,6 +422,77 @@ impl Store {
         self.events_where("WHERE node = ?1 OR other = ?1", Some(id))
     }
 
+    /// A page of the log, newest first: up to `limit` events before `before`, or the newest.
+    pub fn events_page(&self, before: Option<Uuid>, limit: usize) -> Result<Vec<Event>> {
+        // uuidv7s in their text form sort as their times do.
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT line FROM events WHERE ?1 IS NULL OR id < ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let lines: Vec<String> = stmt
+            .query_map(params![before.map(|b| b.to_string()), limit as i64], |r| {
+                r.get(0)
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        lines
+            .iter()
+            .map(|l| serde_json::from_str(l).map_err(Error::from))
+            .collect()
+    }
+
+    /// A node's key, title and state, if it exists.
+    pub fn brief(&self, id: Uuid) -> Result<Option<Brief>> {
+        let row: Option<(String, String, String)> = self
+            .conn
+            .prepare_cached("SELECT key, title, state FROM nodes WHERE id = ?1")?
+            .query_row([id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        row.map(|(key, title, state)| {
+            Ok(Brief {
+                key,
+                title,
+                state: state.parse()?,
+            })
+        })
+        .transpose()
+    }
+
+    /// A value kept beside the projection that a rebuild leaves alone.
+    pub fn meta(&self, k: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT v FROM meta WHERE k = ?1", [k], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn set_meta(&self, k: &str, v: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET v = ?2",
+            params![k, v],
+        )?;
+        Ok(())
+    }
+
+    /// Events after `after` (all, without it) by anyone but `except`, counted up to `cap`:
+    /// the count stops there, so it costs the same however long the log grows.
+    pub fn count_events_after(
+        &self,
+        after: Option<Uuid>,
+        except: &str,
+        cap: usize,
+    ) -> Result<usize> {
+        let n: i64 = self
+            .conn
+            .prepare_cached(
+                "SELECT count(*) FROM (SELECT 1 FROM events \
+                 WHERE (?1 IS NULL OR id > ?1) AND by != ?2 LIMIT ?3)",
+            )?
+            .query_row(
+                params![after.map(|a| a.to_string()), except, cap as i64],
+                |r| r.get(0),
+            )?;
+        Ok(n as usize)
+    }
+
     /// The whole log as applied, oldest first.
     pub fn all_events(&self) -> Result<Vec<Event>> {
         self.events_where("", None)

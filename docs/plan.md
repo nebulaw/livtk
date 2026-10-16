@@ -707,7 +707,9 @@ acted on the selected row now act on the node open in the panel when no row is s
 what the feed needs.
 
 **Budget.** A page of 200 under 10 ms on a log of 100,000 events; counting what is unseen under
-1 ms, as it runs on every refresh.
+1 ms, as it runs on every refresh. Measured (release): the newest page 0.4 ms, a page 50,000 deep 1.9 ms. Counting
+everything unseen scanned the whole log, 7.5 ms with no mark yet; the count is for a badge, so it
+stops at 100 ("99+"): 11 µs.
 
 **Steps**, each its own commit: the core with tests and a benchmark; the model with tests; the
 view with headless UI tests; README, plan and install.

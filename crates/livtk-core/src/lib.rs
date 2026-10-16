@@ -19,5 +19,6 @@ pub use model::{Actor, Kind, Rel, State};
 pub use search::Hit;
 pub use store::{Brief, Node, Snapshot, Summary};
 pub use workspace::{
-    Command, Config, DIR_NAME, Hooks, Links, Memory, RECALL_MAX, Scope, Workspace, find_dir,
+    Activity, Command, Config, DIR_NAME, Hooks, Links, Memory, RECALL_MAX, Scope, UNSEEN_CAP,
+    Workspace, find_dir,
 };

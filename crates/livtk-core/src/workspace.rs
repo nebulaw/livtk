@@ -174,6 +174,21 @@ pub enum Scope {
     Recall,
 }
 
+/// One line of the activity feed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Activity {
+    pub event: Event,
+    /// The node the event is about; `None` only if the log names a node that never applied.
+    pub node: Option<Brief>,
+    /// For a link, the node at its other end.
+    pub other: Option<Brief>,
+}
+
+const ACTIVITY_SEEN: &str = "activity_seen";
+
+/// The most unseen events [`Workspace::unseen_activity`] counts.
+pub const UNSEEN_CAP: usize = 100;
+
 /// A node's dependencies in both directions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Links {
@@ -401,6 +416,42 @@ impl Workspace {
             Some(r) => self.store.history(self.resolve(r)?),
             None => self.store.all_events(),
         }
+    }
+
+    /// The activity feed: up to `limit` events, newest first, before `before` or from the
+    /// newest, each with the node it is about and, for a link, the other end.
+    pub fn activity(&self, before: Option<Uuid>, limit: usize) -> Result<Vec<Activity>> {
+        let mut out = Vec::new();
+        for event in self.store.events_page(before, limit)? {
+            let (node, other) = event.op.subjects();
+            out.push(Activity {
+                node: self.store.brief(node)?,
+                other: match other {
+                    Some(o) => self.store.brief(o)?,
+                    None => None,
+                },
+                event,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The newest event the human has seen in the activity feed. Local to this machine, and
+    /// kept by a rebuild.
+    pub fn activity_seen(&self) -> Result<Option<Uuid>> {
+        Ok(self.store.meta(ACTIVITY_SEEN)?.and_then(|v| v.parse().ok()))
+    }
+
+    pub fn set_activity_seen(&self, id: Uuid) -> Result<()> {
+        self.store.set_meta(ACTIVITY_SEEN, &id.to_string())
+    }
+
+    /// Events by anyone but the human since they last looked at the feed, up to
+    /// [`UNSEEN_CAP`]: a count for a badge, which shows more as "99+".
+    pub fn unseen_activity(&self) -> Result<usize> {
+        // The log names the actor as `Actor` displays it.
+        self.store
+            .count_events_after(self.activity_seen()?, &Actor::Human.to_string(), UNSEEN_CAP)
     }
 
     pub fn snapshot(&self) -> Result<Snapshot> {

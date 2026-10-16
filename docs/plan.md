@@ -1,7 +1,8 @@
 # livtk: plan
 
-Status: milestones 1 to 4 done; milestone 5 parts 1 and 2, the command palette and search
-(section 17) and the activity feed (section 19), done; the graph waits for the developer's go.
+Status: milestones 1 to 5 done: milestone 5 is the command palette and search (section 17), the
+activity feed (section 19) and the graph (section 20). Milestone 6, the team (section 18), comes
+next, after the developer's review.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -737,10 +738,8 @@ tested and left for their review.
 - **Links** are lines with an arrow: a dependency points from what must be done first to what
   waits for it, so work flows along the arrows. Other links (relates, supersedes, learned from,
   parent) are fainter. Selecting a node brings out its links and neighbours and dims the rest.
-- **Layout**: linked nodes by a force layout (spring along links, repulsion between nodes,
-  gravity to the centre), deterministic for the same graph; nodes without links sit in a tidy
-  grid beside it rather than as a cloud. When the graph changes, the layout starts from the old
-  positions, so nodes stay where the eye left them.
+- **Layout**: linked nodes in layers (see below for why not a force layout), deterministic for
+  the same graph; nodes without links sit in a tidy grid below rather than as a cloud.
 - **Moving around**: drag the background to pan, scroll to pan, Ctrl+scroll to zoom at the
   pointer, `+`/`-` to zoom, `0` to fit everything. Opening the view fits it. Zoomed far out,
   cards shrink to dots.
@@ -761,6 +760,25 @@ tests and a benchmark; the view with headless UI tests; README, plan and install
 
 **Done when** the graph of a real project opens fitted, reads clearly, pans and zooms smoothly,
 and any node opens in a click.
+
+**What building it found.**
+
+- *Layers, not forces.* Most links here are dependencies, and a dependency graph reads best in
+  layers: a node a column right of everything it comes after, so work flows left to right along
+  the arrows, with each column ordered by barycentre sweeps to cut crossings. That is
+  deterministic outright and needs no iterations to settle; a force layout suits undirected
+  webs and wanders. Measured (release): 100 nodes 0.1 ms, 1,000 nodes 1.8 ms, 10,000 nodes
+  36 ms. The minimum zoom is 0.02, so a 60-deep chain still fits.
+- *Culling links by their box draws them all.* A long link's bounding box covers the view
+  even when the curve misses it, so at zoom 1 every link of a 1,000-node graph was tessellated
+  each frame: 31 ms. Links are now sampled along their curves and only the stretches crossing
+  the view are stroked, one path per style: 5.4 ms at zoom 1, 7.6 ms fitted, without the GPU.
+- *Dimming.* The node open in the panel, or the card under the pointer, brings out its links
+  and neighbours; a selection with the panel closed is only outlined, so the graph is never
+  left dim.
+- *Keys and focus.* Keyboard focus could end up nowhere (a focused note field in a panel that
+  slid away), and GPUI then sends keys from the window's root, above the app's handlers: Ctrl+?
+  and every list key stopped. Lost focus now goes back to what is in front.
 
 ## 18. Milestone 6 in outline: the team
 

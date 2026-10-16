@@ -3127,9 +3127,7 @@ impl LivtkApp {
             .w(px(DETAIL_WIDTH))
             .flex_none()
             .h_full()
-            .bg(color(SURFACE))
-            .border_l_1()
-            .border_color(color(BORDER))
+            // The window's black shows through, as behind the sidebar.
             .flex()
             .flex_col()
             .child(
@@ -3771,6 +3769,7 @@ impl Render for LivtkApp {
             .child(
                 div().flex_1().min_w_0().h_full().py_2().pr_2().child(
                     div()
+                        .debug_selector(|| "content-box".into())
                         .size_full()
                         .flex()
                         .rounded_xl()
@@ -3800,10 +3799,12 @@ impl Render for LivtkApp {
                                         .justify_center()
                                         .child(dock),
                                 ),
-                        )
-                        .children(detail),
+                        ),
                 ),
             )
+            // Beside the content box, on the window's own black, as the sidebar is: the content
+            // stands alone in the middle.
+            .children(detail)
             .children(form)
             .children(palette)
             .children(help)

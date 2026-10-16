@@ -828,6 +828,8 @@ Asked for while trying the app, and built in one batch:
   window (less the sidebar, the inset and the open panel) rather than measured after drawing:
   measuring laid the first frame out narrow and switched a frame later, a flicker on start and
   on every resize, which a test caught by clicking where the button had been.
+- The detail panel left the content box: it sits on the window's black beside it, full height,
+  as the sidebar does, so the content stands alone in the middle between the two.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

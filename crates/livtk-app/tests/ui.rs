@@ -1830,3 +1830,32 @@ fn the_docks_new_task_and_palette_buttons_work(cx: &mut TestAppContext) {
     click_on(cx, "dock-dismissed");
     app.read_with(cx, |a, _| assert!(a.model().show_all));
 }
+
+#[gpui_kit::test]
+fn the_detail_panel_stands_apart_from_the_content_as_the_sidebar_does(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    let content = cx.debug_bounds("content-box").expect("the content box");
+    let panel = cx.debug_bounds("detail-body-panel").expect("the panel");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert!(
+        panel.left() >= content.right() + gpui_kit::px(8.),
+        "a gap of black between them: {content:?} then {panel:?}"
+    );
+    assert_eq!(
+        panel.right(),
+        window.width,
+        "the panel runs to the window's edge"
+    );
+    assert_eq!(
+        panel.top(),
+        gpui_kit::px(0.),
+        "and its full height, as the sidebar does"
+    );
+    assert!(
+        content.left() >= gpui_kit::px(232.),
+        "the content box keeps the sidebar's side too"
+    );
+}

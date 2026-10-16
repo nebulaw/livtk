@@ -7,7 +7,9 @@
 
 mod theme;
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::Sizable;
@@ -20,8 +22,9 @@ use livtk_core::{Brief, Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Ask, Choice, Detail, Display, FeedRow, GroupKey, Grouping, Item as PaletteItem, Layout, Model,
-    Ordering, View, choices, describe, drop_allowed,
+    Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
+    Item as PaletteItem, Layout, Model, Ordering, View, choices, describe, drop_allowed,
+    link_curve, visible_runs,
 };
 use theme::*;
 
@@ -44,6 +47,10 @@ actions!(
         GoLessons,
         GoDecisions,
         GoFindings,
+        GoGraph,
+        ZoomIn,
+        ZoomOut,
+        ZoomFit,
         PrevProject,
         NextProject,
         Note,
@@ -75,6 +82,16 @@ const FLASH: Duration = Duration::from_millis(900);
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
 const DETAIL_WIDTH: f32 = 480.;
+/// How much `+` and `-` zoom the graph.
+const ZOOM_STEP: f32 = 1.25;
+/// An arrowhead on screen: its tip, and the way it points.
+type Arrowhead = ((f32, f32), (f32, f32));
+
+/// The ways a link is drawn: touching the focus; ordering work, plain and dimmed; other
+/// links, plain and dimmed.
+const LINK_STYLES: usize = 5;
+/// The graph's background dots, in world units.
+const GRID_STEP: f32 = 24.;
 /// The detail title's line, shared by the title and its editor.
 const TITLE_LINE: f32 = 28.;
 /// The horizontal padding GPUI Component gives an extra-small textarea.
@@ -103,6 +120,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "L"], "Lessons"),
     ("Navigate", &["G", "then", "D"], "Decisions"),
     ("Navigate", &["G", "then", "F"], "Findings"),
+    ("Navigate", &["G", "then", "R"], "Graph"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
     ("Decide", &["S"], "Ratify as a standing rule"),
@@ -173,6 +191,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("g l", GoLessons, nav),
         KeyBinding::new("g d", GoDecisions, nav),
         KeyBinding::new("g f", GoFindings, nav),
+        KeyBinding::new("g r", GoGraph, nav),
+        KeyBinding::new("+", ZoomIn, nav),
+        KeyBinding::new("=", ZoomIn, nav),
+        KeyBinding::new("-", ZoomOut, nav),
+        KeyBinding::new("0", ZoomFit, nav),
         KeyBinding::new("[", PrevProject, nav),
         KeyBinding::new("]", NextProject, nav),
         KeyBinding::new("1", Priority1, nav),
@@ -272,6 +295,12 @@ pub struct LivtkApp {
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
+    /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
+    /// its origin turns pointer positions into the graph's own.
+    graph_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// A press on the graph's background: where the pointer was last, and whether it moved,
+    /// which makes it a drag rather than a click.
+    graph_press: Option<(Point<Pixels>, bool)>,
     form: Option<NewTaskForm>,
     help: bool,
     editing: Option<Editing>,
@@ -331,6 +360,8 @@ impl LivtkApp {
             list_scroll: UniformListScrollHandle::new(),
             palette_input,
             palette_scroll: ScrollHandle::new(),
+            graph_bounds: Rc::new(Cell::new(Bounds::default())),
+            graph_press: None,
             filter,
             note,
             form: None,
@@ -440,6 +471,13 @@ impl LivtkApp {
         } else {
             self.nav.focus(window, cx);
         }
+    }
+
+    /// Set the graph's zoom at its centre, for benchmarks.
+    #[doc(hidden)]
+    pub fn zoom_for_test(&mut self, zoom: f32) {
+        let z = self.model.graph.camera.zoom;
+        self.model.graph_zoom(zoom / z, None);
     }
 
     pub fn palette_open(&self) -> bool {
@@ -957,6 +995,13 @@ impl LivtkApp {
                             m.activity.len(),
                             if m.activity_more { "+" } else { "" }
                         )
+                    } else if m.view == View::Graph {
+                        let links = m.graph.edges.len();
+                        format!(
+                            "{} · {links} link{}",
+                            m.graph.nodes.len(),
+                            if links == 1 { "" } else { "s" }
+                        )
                     } else {
                         format!("{}", m.filtered.len())
                     }),
@@ -1433,9 +1478,354 @@ impl LivtkApp {
         match (self.model.view, self.model.layout) {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.feed(cx),
+            (View::Graph, _) => self.graph_view(cx),
             (View::Tasks, Layout::Board) => self.board(cx).into_any_element(),
             _ => self.list(window, cx).into_any_element(),
         }
+    }
+
+    // ---- rendering: the graph -------------------------------------------------------------------
+
+    fn zoom_graph(&mut self, factor: f32, cx: &mut Context<Self>) {
+        if self.model.view == View::Graph {
+            self.model.graph_zoom(factor, None);
+            cx.notify();
+        }
+    }
+
+    /// A pointer position in the graph's own coordinates.
+    fn graph_point(&self, p: Point<Pixels>) -> (f32, f32) {
+        let o = self.graph_bounds.get().origin;
+        (f32::from(p.x - o.x), f32::from(p.y - o.y))
+    }
+
+    /// The graph: links on a canvas, cards over them, only what is in view. Drag or scroll to
+    /// pan, Ctrl+scroll to zoom at the pointer, click a card to open it.
+    fn graph_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let drawn = self.graph_bounds.get().size;
+        self.model
+            .graph_viewport(f32::from(drawn.width), f32::from(drawn.height));
+        if self.model.graph.nodes.is_empty() {
+            return div()
+                .size_full()
+                .child(empty(
+                    "Nothing to draw yet",
+                    "Tasks, lessons, decisions and findings show here with the links between them.",
+                ))
+                .into_any_element();
+        }
+        let g = &self.model.graph;
+        let cam = g.camera;
+        let z = cam.zoom;
+        let (vw, vh) = g.viewport();
+        // Before the first frame the size is unknown: draw everything once to learn it.
+        let known = vw > 0. && vh > 0.;
+        let focus = g.focus(self.model.detail.is_some());
+        let near = focus.map(|i| g.neighbours(i)).unwrap_or_default();
+        // As `Graph::lit`, with the neighbours worked out once for the frame.
+        let lit = |i: usize| focus.is_none_or(|f| f == i || near.contains(&i));
+        let in_view = |x: f32, y: f32, w: f32, h: f32| {
+            !known || (x + w >= 0. && y + h >= 0. && x <= vw && y <= vh)
+        };
+
+        // Links as the stretches of their curves that show, gathered by how they are drawn,
+        // and the arrowheads whose tips show. A long link costs only what is in view.
+        let mut strokes: [Vec<Vec<(f32, f32)>>; LINK_STYLES] = Default::default();
+        let mut heads: [Vec<Arrowhead>; LINK_STYLES] = Default::default();
+        for e in &g.edges {
+            let ((x0, y0), (x1, y1), across) = g.ends(e);
+            let (a, b) = (cam.to_screen(x0, y0), cam.to_screen(x1, y1));
+            let (lx, ly) = (a.0.min(b.0), a.1.min(b.1));
+            if !in_view(lx, ly, (a.0 - b.0).abs(), (a.1 - b.1).abs()) {
+                continue;
+            }
+            let runs = if known {
+                visible_runs(&link_curve(a, b, across), vw, vh, 16.)
+            } else {
+                vec![link_curve(a, b, across)]
+            };
+            if runs.is_empty() {
+                continue;
+            }
+            let touches = focus.is_some_and(|f| e.from == f || e.to == f);
+            let dim = focus.is_some() && !touches;
+            let style = match (touches, e.orders(), dim) {
+                (true, _, _) => 0,
+                (false, true, false) => 1,
+                (false, true, true) => 2,
+                (false, false, false) => 3,
+                (false, false, true) => 4,
+            };
+            strokes[style].extend(runs);
+            if e.orders() && in_view(b.0 - 10., b.1 - 10., 20., 20.) {
+                let dir = if across {
+                    ((b.0 - a.0).signum(), 0.)
+                } else {
+                    (0., (b.1 - a.1).signum())
+                };
+                heads[style].push((b, dir));
+            }
+        }
+        let dots = z < DOTS_BELOW;
+        let mut dot_quads = Vec::new();
+        let mut cards = Vec::new();
+        for (i, n) in g.nodes.iter().enumerate() {
+            let (sx, sy) = cam.to_screen(n.x, n.y);
+            let (w, h) = (CARD_W * z, CARD_H * z);
+            if !in_view(sx, sy, w, h) {
+                continue;
+            }
+            let on = g.selected == Some(i);
+            let hover = g.hovered == Some(i);
+            if dots {
+                dot_quads.push((sx, sy, w, h, state_color(n.state), on, lit(i)));
+                continue;
+            }
+            let key = n.key.clone();
+            cards.push(
+                div()
+                    .debug_selector(move || format!("gnode-{key}"))
+                    .absolute()
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(w))
+                    .h(px(h))
+                    .px(px(10. * z))
+                    .flex()
+                    .items_center()
+                    .gap(px(8. * z))
+                    // As the board's cards, scaled with the zoom.
+                    .rounded(px(8. * z))
+                    .border_1()
+                    .bg(color(if on { SELECTED } else { SURFACE }))
+                    .border_color(color(if on {
+                        ACCENT
+                    } else if hover {
+                        BORDER_STRONG
+                    } else {
+                        BORDER
+                    }))
+                    .text_size(px(13. * z))
+                    .line_height(px(18. * z))
+                    .when(!lit(i), |d| d.opacity(0.35))
+                    .child(state_dot(n.state, 10. * z))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(color(TEXT_4))
+                            .child(n.key.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(color(if on { TEXT } else { TEXT_2 }))
+                            .child(n.title.clone()),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let unlinked = g.unlinked_top.filter(|_| !dots).map(|top| {
+            let (sx, sy) = cam.to_screen(0., top - 26.);
+            div()
+                .absolute()
+                .left(px(sx))
+                .top(px(sy))
+                .text_size(px(12. * z))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color(TEXT_4))
+                .child("Not linked")
+        });
+        let bounds = self.graph_bounds.clone();
+        let edges = canvas(
+            move |b, window, _| {
+                // The size fits the camera next frame; draw again if it changed.
+                if bounds.get() != b {
+                    bounds.set(b);
+                    window.refresh();
+                }
+            },
+            move |b, (), window, _| {
+                let o = b.origin;
+                let at = |(x, y): (f32, f32)| point(o.x + px(x), o.y + px(y));
+                // A faint dot grid that moves with the world, so panning is felt; its spacing
+                // doubles as the zoom falls, so it never crowds.
+                let mut step = GRID_STEP * z;
+                while step < 14. {
+                    step *= 2.;
+                }
+                let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+                let dot = with_alpha(BORDER_STRONG, 0.45);
+                let mut y = cam.pan_y.rem_euclid(step);
+                while y < h {
+                    let mut x = cam.pan_x.rem_euclid(step);
+                    while x < w {
+                        window
+                            .paint_quad(fill(Bounds::new(at((x, y)), size(px(1.5), px(1.5))), dot));
+                        x += step;
+                    }
+                    y += step;
+                }
+                let width = px((1.5 * z).clamp(0.75, 2.));
+                let colours = [
+                    with_alpha(ACCENT_HOVER, 0.9),
+                    with_alpha(TEXT_4, 0.85),
+                    with_alpha(TEXT_4, 0.25),
+                    with_alpha(BORDER_STRONG, 0.9),
+                    with_alpha(BORDER_STRONG, 0.25),
+                ];
+                // One path per style: every stretch of every link drawn that way.
+                for (style, runs) in strokes.iter().enumerate() {
+                    if runs.is_empty() {
+                        continue;
+                    }
+                    let mut line = PathBuilder::stroke(width);
+                    for run in runs {
+                        line.move_to(at(run[0]));
+                        for &p in &run[1..] {
+                            line.line_to(at(p));
+                        }
+                    }
+                    if let Ok(path) = line.build() {
+                        window.paint_path(path, colours[style]);
+                    }
+                }
+                let s = (7. * z).clamp(3.5, 9.);
+                for (style, tips) in heads.iter().enumerate() {
+                    if tips.is_empty() {
+                        continue;
+                    }
+                    let mut head = PathBuilder::fill();
+                    for &(tip, (dx, dy)) in tips {
+                        let base = (tip.0 - dx * s, tip.1 - dy * s);
+                        let side = (-dy * s * 0.55, dx * s * 0.55);
+                        head.move_to(at(tip));
+                        head.line_to(at((base.0 + side.0, base.1 + side.1)));
+                        head.line_to(at((base.0 - side.0, base.1 - side.1)));
+                        head.close();
+                    }
+                    if let Ok(path) = head.build() {
+                        window.paint_path(path, colours[style]);
+                    }
+                }
+                for (x, y, w, h, state, on, lit) in dot_quads {
+                    let r = Bounds::new(at((x, y)), size(px(w.max(2.)), px(h.max(2.))));
+                    window.paint_quad(quad(
+                        r,
+                        px((3. * z).max(1.)),
+                        with_alpha(state, if lit { 0.9 } else { 0.3 }),
+                        px(if on { 1.5 } else { 0. }),
+                        color(ACCENT_HOVER),
+                        BorderStyle::default(),
+                    ));
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+        let controls = div()
+            .absolute()
+            .bottom(px(12.))
+            .right(px(12.))
+            .flex()
+            .items_center()
+            .p(px(3.))
+            .gap(px(2.))
+            .rounded_xl()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER_STRONG))
+            .shadow_lg()
+            .text_xs()
+            .text_color(color(TEXT_3))
+            // Presses here are the controls', not the background's.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                graph_control("zoom-out")
+                    .child("−")
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx))),
+            )
+            .child(
+                graph_control("zoom-fit")
+                    .min_w(px(52.))
+                    .child(format!("{:.0}%", z * 100.))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.graph_fit();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                graph_control("zoom-in")
+                    .child("+")
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(ZOOM_STEP, cx))),
+            );
+        let hovering = self.model.graph.hovered.is_some();
+        let dragging = matches!(self.graph_press, Some((_, true)));
+        div()
+            .id("graph")
+            .debug_selector(|| "graph".into())
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .cursor(if dragging {
+                CursorStyle::ClosedHand
+            } else if hovering {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::OpenHand
+            })
+            .child(edges)
+            .children(unlinked)
+            .children(cards)
+            .child(controls)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _, _| {
+                    this.graph_press = Some((e.position, false));
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                match (this.graph_press, e.pressed_button) {
+                    (Some((last, _)), Some(MouseButton::Left)) => {
+                        let d = e.position - last;
+                        this.model.graph_pan(f32::from(d.x), f32::from(d.y));
+                        this.graph_press = Some((e.position, true));
+                        cx.notify();
+                    }
+                    _ => {
+                        // A release outside the graph ends a drag without a click.
+                        this.graph_press = None;
+                        let (x, y) = this.graph_point(e.position);
+                        if this.model.graph_hover(x, y) {
+                            cx.notify();
+                        }
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseUpEvent, _, cx| {
+                    if let Some((_, false)) = this.graph_press.take() {
+                        let (x, y) = this.graph_point(e.position);
+                        this.model.graph_click(x, y);
+                    }
+                    cx.notify();
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                let d = e.delta.pixel_delta(px(20.));
+                if e.modifiers.control || e.modifiers.platform {
+                    let (x, y) = this.graph_point(e.position);
+                    this.model
+                        .graph_zoom((f32::from(d.y) * 0.004).exp(), Some((x, y)));
+                } else {
+                    this.model.graph_pan(f32::from(d.x), f32::from(d.y));
+                }
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     // ---- rendering: lists ---------------------------------------------------------------------
@@ -2561,8 +2951,9 @@ impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(window, cx).into_any_element();
         let header = self.header(cx).into_any_element();
-        let toolbar =
-            (self.model.view != View::Activity).then(|| self.toolbar(cx).into_any_element());
+        // The toolbar's filters apply to lists; the feed and the graph have their own ways.
+        let toolbar = (!matches!(self.model.view, View::Activity | View::Graph))
+            .then(|| self.toolbar(cx).into_any_element());
         let content = self.content(window, cx);
         self.track_detail(window, cx);
         let detail = self.detail(cx);
@@ -2636,6 +3027,15 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
             .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
             .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
+            .on_action(cx.listener(|this, _: &GoGraph, w, cx| this.go(View::Graph, w, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_graph(ZOOM_STEP, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx)))
+            .on_action(cx.listener(|this, _: &ZoomFit, _, cx| {
+                if this.model.view == View::Graph {
+                    this.model.graph_fit();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &PrevProject, window, cx| {
                 let i = this.model.current.saturating_sub(1);
                 this.model.select_project(i);
@@ -2826,6 +3226,33 @@ fn menu_divider() -> Div {
 }
 
 /// A row of a menu: what it is, from the left edge, with no empty slot before it.
+/// A state as a dot of its colour, `size` across: the graph's cards shrink with the zoom, and
+/// the full mark does not.
+fn state_dot(state: State, size: f32) -> Div {
+    let faint = matches!(state, State::Backlog | State::Parked) || state.is_dismissed();
+    div()
+        .size(px(size))
+        .flex_none()
+        .rounded_full()
+        .bg(with_alpha(state_color(state), if faint { 0.5 } else { 1. }))
+}
+
+/// A button of the graph's zoom controls.
+fn graph_control(id: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .h(px(24.))
+        .min_w(px(24.))
+        .px_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .cursor_pointer()
+        .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+}
+
 /// The section an item of the palette sits in.
 fn section_of(item: &PaletteItem, query: &str) -> &'static str {
     match item {

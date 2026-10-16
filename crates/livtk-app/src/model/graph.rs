@@ -29,8 +29,8 @@ const SWEEPS: usize = 6;
 /// Far enough out to fit a long chain of work (a 60-deep one needs 0.06).
 pub const MIN_ZOOM: f32 = 0.02;
 pub const MAX_ZOOM: f32 = 2.0;
-/// Below this zoom cards are dots: text would be too small to read.
-pub const DOTS_BELOW: f32 = 0.45;
+/// Below this zoom cards are dots: their 13 px titles would be under 7 px.
+pub const DOTS_BELOW: f32 = 0.55;
 /// Room left round everything when fitting.
 const FIT_MARGIN: f32 = 48.;
 
@@ -173,6 +173,18 @@ impl Graph {
             .position(|n| wx >= n.x && wx <= n.x + CARD_W && wy >= n.y && wy <= n.y + CARD_H)
     }
 
+    /// The node the graph brings out, dimming what is not linked to it: the card under the
+    /// pointer, else the selected node while its panel is `open`. A selection with the panel
+    /// closed is only outlined.
+    pub fn focus(&self, open: bool) -> Option<usize> {
+        self.hovered.or(self.selected.filter(|_| open))
+    }
+
+    /// Whether node `i` is drawn at full strength with `focus` brought out.
+    pub fn lit(&self, i: usize, focus: Option<usize>) -> bool {
+        focus.is_none_or(|f| f == i || self.neighbours(f).contains(&i))
+    }
+
     /// Nodes linked to node `i`, either way.
     pub fn neighbours(&self, i: usize) -> HashSet<usize> {
         self.edges
@@ -223,12 +235,16 @@ impl Graph {
         )
     }
 
-    /// The view's size this frame; fits on the first frame that knows it.
+    /// The view's size this frame; fits on the first frame that knows it. When the size
+    /// changes (the detail panel opening beside it, say), the selected node stays in view.
     pub fn set_viewport(&mut self, w: f32, h: f32) {
+        let resized = self.viewport != (w, h);
         self.viewport = (w, h);
         if self.fit_pending && w > 0. && h > 0. {
             self.fit();
             self.fit_pending = false;
+        } else if resized && let Some(i) = self.selected {
+            self.reveal(i);
         }
     }
 
@@ -248,10 +264,85 @@ impl Graph {
         }
     }
 
+    /// Where a link's line starts and ends, in world units, and whether it runs across (else
+    /// down): between columns, from the side of one card facing the other at mid-height;
+    /// within a column, from the bottom of the upper card to the top of the lower.
+    pub fn ends(&self, e: &GraphEdge) -> ((f32, f32), (f32, f32), bool) {
+        let (a, b) = (&self.nodes[e.from], &self.nodes[e.to]);
+        let mid = CARD_H / 2.;
+        if a.x + CARD_W <= b.x {
+            ((a.x + CARD_W, a.y + mid), (b.x, b.y + mid), true)
+        } else if b.x + CARD_W <= a.x {
+            ((a.x, a.y + mid), (b.x + CARD_W, b.y + mid), true)
+        } else if a.y <= b.y {
+            (
+                (a.x + CARD_W / 2., a.y + CARD_H),
+                (b.x + CARD_W / 2., b.y),
+                false,
+            )
+        } else {
+            (
+                (a.x + CARD_W / 2., a.y),
+                (b.x + CARD_W / 2., b.y + CARD_H),
+                false,
+            )
+        }
+    }
+
     /// The reading order, for stepping through nodes.
     pub fn reading(&self) -> &[usize] {
         &self.reading
     }
+}
+
+/// A link's line on screen as points along its curve: a gentle S from `a` to `b` whose
+/// tangents follow the way the link runs (across, else down). Long links get more points.
+pub fn link_curve(a: (f32, f32), b: (f32, f32), across: bool) -> Vec<(f32, f32)> {
+    let (c1, c2) = if across {
+        let d = (b.0 - a.0) / 2.;
+        ((a.0 + d, a.1), (b.0 - d, b.1))
+    } else {
+        let d = (b.1 - a.1) / 2.;
+        ((a.0, a.1 + d), (b.0, b.1 - d))
+    };
+    let length = (b.0 - a.0).hypot(b.1 - a.1);
+    let steps = ((length / 24.).ceil() as usize).clamp(4, 400);
+    (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32;
+            let u = 1. - t;
+            let (w0, w1, w2, w3) = (u * u * u, 3. * u * u * t, 3. * u * t * t, t * t * t);
+            (
+                w0 * a.0 + w1 * c1.0 + w2 * c2.0 + w3 * b.0,
+                w0 * a.1 + w1 * c1.1 + w2 * c2.1 + w3 * b.1,
+            )
+        })
+        .collect()
+}
+
+/// The stretches of a polyline that cross the rectangle (0, 0)–(`w`, `h`) grown by `margin`:
+/// only those are drawn, so a long link costs only what shows of it.
+pub fn visible_runs(points: &[(f32, f32)], w: f32, h: f32, margin: f32) -> Vec<Vec<(f32, f32)>> {
+    let (x0, y0, x1, y1) = (-margin, -margin, w + margin, h + margin);
+    let crosses = |p: (f32, f32), q: (f32, f32)| {
+        p.0.max(q.0) >= x0 && p.0.min(q.0) <= x1 && p.1.max(q.1) >= y0 && p.1.min(q.1) <= y1
+    };
+    let mut runs: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut open = false;
+    for pair in points.windows(2) {
+        if crosses(pair[0], pair[1]) {
+            if !open {
+                runs.push(vec![pair[0]]);
+                open = true;
+            }
+            if let Some(run) = runs.last_mut() {
+                run.push(pair[1]);
+            }
+        } else {
+            open = false;
+        }
+    }
+    runs
 }
 
 /// Kinds in a fixed order, then keys by number.

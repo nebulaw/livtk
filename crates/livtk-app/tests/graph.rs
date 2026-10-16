@@ -3,7 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use livtk_app::model::{CARD_H, CARD_W, Camera, Graph, MAX_ZOOM, MIN_ZOOM, Model, View};
+use livtk_app::model::{
+    CARD_H, CARD_W, Camera, Graph, MAX_ZOOM, MIN_ZOOM, Model, View, link_curve, visible_runs,
+};
 use livtk_core::{Actor, Command, Kind, Rel, State, Summary, Workspace};
 use uuid::Uuid;
 
@@ -429,4 +431,134 @@ fn the_palette_goes_to_the_graph_and_fits_it() {
     m.palette_query("zoom to fit");
     m.palette_run();
     assert_eq!(m.graph.camera, fitted);
+}
+
+#[test]
+fn links_run_between_the_facing_sides_of_their_cards() {
+    let g = Graph::build(tasks(3), &[dep(2, 1), (id(3), Rel::Relates, id(1))]);
+    let across = g.edges.iter().find(|e| e.orders()).unwrap();
+    let ((x0, y0), (x1, y1), horizontal) = g.ends(across);
+    let (a, b) = (&g.nodes[across.from], &g.nodes[across.to]);
+    assert!(horizontal);
+    assert_eq!(
+        (x0, y0),
+        (a.x + CARD_W, a.y + CARD_H / 2.),
+        "leaves the right side"
+    );
+    assert_eq!(
+        (x1, y1),
+        (b.x, b.y + CARD_H / 2.),
+        "arrives at the left side"
+    );
+    let down = g.edges.iter().find(|e| !e.orders()).unwrap();
+    let (_, _, horizontal) = g.ends(down);
+    assert!(
+        !horizontal,
+        "3 relates to 1, both first: one column, joined top to bottom"
+    );
+}
+
+#[test]
+fn a_narrower_view_keeps_the_selected_node_in_it() {
+    let links: Vec<_> = (2..=6).map(|i| dep(i, i - 1)).collect();
+    let mut g = Graph::build(tasks(6), &links);
+    g.set_viewport(2000., 600.);
+    let last = g.nodes.iter().position(|n| n.id == id(6)).unwrap();
+    g.selected = Some(last);
+    // The detail panel opens: 480 px fewer.
+    g.set_viewport(1520., 600.);
+    let n = &g.nodes[last];
+    let (x, _) = g.camera.to_screen(n.x, n.y);
+    assert!(
+        x >= 0. && x + CARD_W * g.camera.zoom <= 1520.,
+        "still in view at {x}"
+    );
+}
+
+#[test]
+fn a_link_curve_runs_end_to_end_with_level_tangents() {
+    let pts = link_curve((0., 0.), (300., 100.), true);
+    assert_eq!(pts.first(), Some(&(0., 0.)));
+    let last = *pts.last().unwrap();
+    assert!((last.0 - 300.).abs() < 1e-3 && (last.1 - 100.).abs() < 1e-3);
+    let slope = (pts[1].1 - pts[0].1) / (pts[1].0 - pts[0].0);
+    assert!(slope.abs() < 0.1, "leaves level: slope {slope}");
+    assert!(
+        pts.windows(2).all(|w| w[1].0 >= w[0].0),
+        "never doubles back"
+    );
+    assert!(
+        link_curve((0., 0.), (5000., 0.), true).len() > 100,
+        "long links get more points"
+    );
+    assert_eq!(
+        link_curve((0., 0.), (1., 1.), true).len(),
+        5,
+        "short ones a few"
+    );
+}
+
+#[test]
+fn only_the_stretches_in_view_are_kept() {
+    // A line from far left to far right through the view, and back out above it.
+    let pts = [
+        (-1000., 50.),
+        (-500., 50.),
+        (100., 50.),
+        (700., 50.),
+        (1500., 50.),
+        (1500., -900.),
+    ];
+    let runs = visible_runs(&pts, 800., 600., 10.);
+    assert_eq!(
+        runs,
+        [vec![(-500., 50.), (100., 50.), (700., 50.), (1500., 50.)]]
+    );
+    let away = [(-1000., -1000.), (-900., -900.)];
+    assert!(visible_runs(&away, 800., 600., 10.).is_empty());
+    let twice = [
+        (-50., 10.),
+        (50., 10.),
+        (50., -500.),
+        (60., -500.),
+        (60., 10.),
+    ];
+    assert_eq!(
+        visible_runs(&twice, 800., 600., 0.).len(),
+        2,
+        "out and back in again"
+    );
+}
+
+#[test]
+fn the_open_or_hovered_node_is_brought_out_and_the_rest_dimmed() {
+    let mut g = Graph::build(tasks(3), &[dep(2, 1)]);
+    let (one, two, three) = (
+        g.nodes.iter().position(|n| n.id == id(1)).unwrap(),
+        g.nodes.iter().position(|n| n.id == id(2)).unwrap(),
+        g.nodes.iter().position(|n| n.id == id(3)).unwrap(),
+    );
+    assert_eq!(g.focus(false), None);
+    assert!(
+        (0..3).all(|i| g.lit(i, None)),
+        "nothing in focus, nothing dimmed"
+    );
+
+    g.selected = Some(two);
+    assert_eq!(
+        g.focus(false),
+        None,
+        "selected with the panel closed: only outlined"
+    );
+    let f = g.focus(true);
+    assert_eq!(f, Some(two), "open in the panel: brought out");
+    assert!(g.lit(two, f) && g.lit(one, f), "it and what it links to");
+    assert!(!g.lit(three, f), "the rest dims");
+
+    g.hovered = Some(three);
+    assert_eq!(
+        g.focus(true),
+        Some(three),
+        "the pointer wins while it is on a card"
+    );
 }

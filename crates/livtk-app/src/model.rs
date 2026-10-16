@@ -15,6 +15,7 @@ mod palette;
 pub use activity::{FeedRow, day_label, describe};
 pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
+    link_curve, visible_runs,
 };
 pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
 

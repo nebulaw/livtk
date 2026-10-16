@@ -752,3 +752,308 @@ fn closing_the_panel_under_the_note_field_leaves_the_keys_working(cx: &mut TestA
     cx.simulate_keystrokes("ctrl-?");
     app.read_with(cx, |a, _| assert!(a.help_open()));
 }
+
+/// Two frames: the first learns the graph's size, the second draws it fitted.
+fn draw_graph(cx: &mut gpui_kit::VisualTestContext) {
+    for _ in 0..2 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+}
+
+fn camera(
+    app: &gpui_kit::Entity<LivtkApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+) -> livtk_app::model::Camera {
+    app.read_with(cx, |a, _| a.model().graph.camera)
+}
+
+/// A project whose second plan waits on the first.
+fn linked_project() -> tempfile::TempDir {
+    let dir = project();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    ws.execute(
+        Command::Link {
+            src: "LIV-2".into(),
+            rel: livtk_core::Rel::DependsOn,
+            dst: "LIV-1".into(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    dir
+}
+
+#[gpui_kit::test]
+fn g_r_opens_the_graph_fitted_and_a_click_opens_a_card(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Graph);
+        assert_eq!(a.model().graph.nodes.len(), 3);
+    });
+    let graph = cx.debug_bounds("graph").expect("drawn");
+    let one = cx.debug_bounds("gnode-LIV-1").expect("a card for LIV-1");
+    let two = cx.debug_bounds("gnode-LIV-2").expect("a card for LIV-2");
+    assert!(
+        one.right() < two.left(),
+        "LIV-2 waits on LIV-1, so sits right of it"
+    );
+    for card in [one, two] {
+        assert!(
+            card.left() >= graph.left() && card.right() <= graph.right(),
+            "fitted: {card:?} inside {graph:?}"
+        );
+    }
+    click_on(cx, "gnode-LIV-2");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Graph, "the graph stays");
+        assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2");
+    });
+}
+
+#[gpui_kit::test]
+fn dragging_the_background_pans_and_opens_nothing(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    let before = camera(&app, cx);
+    let graph = cx.debug_bounds("graph").unwrap();
+    let start = gpui_kit::point(
+        graph.left() + gpui_kit::px(10.),
+        graph.top() + gpui_kit::px(10.),
+    );
+    let end = gpui_kit::point(start.x + gpui_kit::px(120.), start.y + gpui_kit::px(40.));
+    cx.simulate_mouse_down(
+        start,
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+        end,
+        Some(gpui_kit::MouseButton::Left),
+        gpui_kit::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        end,
+        gpui_kit::MouseButton::Left,
+        gpui_kit::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    let after = camera(&app, cx);
+    assert!((after.pan_x - before.pan_x - 120.).abs() < 0.01);
+    assert!((after.pan_y - before.pan_y - 40.).abs() < 0.01);
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_none(), "a drag is not a click")
+    });
+}
+
+#[gpui_kit::test]
+fn scrolling_pans_and_ctrl_scroll_zooms_at_the_pointer(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    let graph = cx.debug_bounds("graph").unwrap();
+    let at = gpui_kit::point(
+        graph.left() + gpui_kit::px(200.),
+        graph.top() + gpui_kit::px(150.),
+    );
+    let before = camera(&app, cx);
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(-30.),
+            gpui_kit::px(25.),
+        )),
+        modifiers: gpui_kit::Modifiers::default(),
+        ..Default::default()
+    });
+    let panned = camera(&app, cx);
+    assert!((panned.pan_x - before.pan_x + 30.).abs() < 0.01);
+    assert!((panned.pan_y - before.pan_y - 25.).abs() < 0.01);
+    assert_eq!(panned.zoom, before.zoom);
+
+    let local = (200., 150.);
+    let world = panned.to_world(local.0, local.1);
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-100.),
+        )),
+        modifiers: gpui_kit::Modifiers::control(),
+        ..Default::default()
+    });
+    let zoomed = camera(&app, cx);
+    assert!(zoomed.zoom < panned.zoom, "Ctrl+scroll zoomed");
+    let (sx, sy) = zoomed.to_screen(world.0, world.1);
+    assert!(
+        (sx - local.0).abs() < 0.01 && (sy - local.1).abs() < 0.01,
+        "at the pointer"
+    );
+}
+
+#[gpui_kit::test]
+fn keys_and_buttons_zoom_and_far_out_cards_become_dots(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    let fitted = camera(&app, cx);
+    cx.simulate_keystrokes("+");
+    assert!((camera(&app, cx).zoom - fitted.zoom * 1.25).abs() < 1e-4);
+    cx.simulate_keystrokes("- -");
+    assert!((camera(&app, cx).zoom - fitted.zoom / 1.25).abs() < 1e-4);
+    cx.simulate_keystrokes("0");
+    assert_eq!(camera(&app, cx), fitted, "0 fits");
+
+    click_on(cx, "zoom-in");
+    assert!(camera(&app, cx).zoom > fitted.zoom);
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_none(), "a control is not a card")
+    });
+    click_on(cx, "zoom-fit");
+    assert_eq!(camera(&app, cx), fitted);
+
+    for _ in 0..8 {
+        click_on(cx, "zoom-out");
+    }
+    draw_graph(cx);
+    assert!(camera(&app, cx).zoom < livtk_app::model::DOTS_BELOW);
+    assert!(
+        cx.debug_bounds("gnode-LIV-1").is_none(),
+        "far out, cards are dots"
+    );
+    assert!(cx.debug_bounds("graph").is_some());
+}
+
+#[gpui_kit::test]
+fn the_graph_fills_its_area_and_j_steps_in_reading_order(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    let graph = cx.debug_bounds("graph").unwrap();
+    assert!(
+        graph.size.height > gpui_kit::px(600.),
+        "the full height: {graph:?}"
+    );
+    assert!(
+        graph.size.width > gpui_kit::px(1200.),
+        "the full width: {graph:?}"
+    );
+    cx.simulate_keystrokes("j");
+    open_detail(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().detail.as_ref().unwrap().node.key,
+            "LIV-1",
+            "left first"
+        )
+    });
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().detail.as_ref().unwrap().node.key,
+            "LIV-2",
+            "then what waits"
+        )
+    });
+}
+
+/// `cargo test --release -p livtk-app --test ui -- --ignored --nocapture`: a frame of a
+/// 1,000-node graph, fitted (far out, dots) and zoomed in (cards), without the GPU.
+#[gpui_kit::test]
+#[ignore = "a benchmark: run in release with --ignored"]
+fn a_frame_of_a_thousand_node_graph_stays_in_budget(cx: &mut TestAppContext) {
+    use livtk_core::event::{EdgeData, NodeData, Op};
+    let dir = tempfile::tempdir().unwrap();
+    Workspace::init(dir.path(), Some("LIV")).unwrap();
+    let mut lines = String::new();
+    let mut last = None;
+    let mut ids = Vec::new();
+    let mut push = |op: Op, last: &mut Option<uuid::Uuid>| {
+        let e = livtk_core::Event::new(*last, &CLAUDE, op);
+        *last = Some(e.id);
+        lines.push_str(&e.to_line().unwrap());
+        lines.push('\n');
+    };
+    for i in 1..=1_000u32 {
+        let node = uuid::Uuid::now_v7();
+        ids.push(node);
+        push(
+            Op::NodeCreate {
+                node,
+                data: NodeData {
+                    kind: Kind::Task,
+                    key: format!("LIV-{i}"),
+                    title: format!("task {i} with an ordinary title"),
+                    body: String::new(),
+                    state: State::Backlog,
+                    priority: livtk_core::model::Priority::DEFAULT,
+                    props: serde_json::Map::new(),
+                },
+            },
+            &mut last,
+        );
+    }
+    for i in 1..ids.len() {
+        push(
+            Op::EdgeAdd {
+                data: EdgeData {
+                    src: ids[i],
+                    dst: ids[(i * 7 + 3) % i],
+                    rel: livtk_core::Rel::DependsOn,
+                },
+            },
+            &mut last,
+        );
+    }
+    std::fs::write(dir.path().join(".livtk/events.jsonl"), lines).unwrap();
+    Workspace::open(dir.path()).unwrap().rebuild().unwrap();
+
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    let frame = |cx: &mut gpui_kit::VisualTestContext| {
+        (0..10)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                cx.update(|window, _| window.refresh());
+                cx.run_until_parked();
+                t.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let fitted = frame(cx);
+    app.update(cx, |a, _| a.zoom_for_test(1.));
+    let close = frame(cx);
+    app.read_with(cx, |a, _| {
+        let g = &a.model().graph;
+        let (vw, vh) = g.viewport();
+        let cam = g.camera;
+        let shown = g
+            .nodes
+            .iter()
+            .filter(|n| {
+                let (x, y) = cam.to_screen(n.x, n.y);
+                x + livtk_app::model::CARD_W * cam.zoom >= 0. && y + 36. >= 0. && x <= vw && y <= vh
+            })
+            .count();
+        eprintln!("at zoom 1: {shown} cards in a {vw}x{vh} view");
+    });
+    eprintln!("a frame of 1,000 nodes: fitted {fitted:?}, at zoom 1 {close:?}");
+    assert!(
+        fitted < std::time::Duration::from_millis(16),
+        "fitted: {fitted:?}"
+    );
+    assert!(
+        close < std::time::Duration::from_millis(16),
+        "zoom 1: {close:?}"
+    );
+}

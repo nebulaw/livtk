@@ -203,3 +203,22 @@ fn a_page_of_100k_events_and_the_unseen_count_stay_in_budget() {
         "count budget 1 ms: {unseen:?}"
     );
 }
+
+#[test]
+fn edges_lists_every_link_once() {
+    let (_dir, mut ws) = workspace();
+    let a = create(&mut ws, "first", &CLAUDE);
+    let b = create(&mut ws, "second", &CLAUDE);
+    ws.execute(
+        Command::Link {
+            src: b.clone(),
+            rel: Rel::DependsOn,
+            dst: a.clone(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let ids = |k: &str| ws.node(k).unwrap().id;
+    assert_eq!(ws.edges().unwrap(), [(ids(&b), Rel::DependsOn, ids(&a))]);
+    assert_eq!(ws.snapshot().unwrap().edges, ws.edges().unwrap(), "the snapshot agrees");
+}

@@ -439,6 +439,19 @@ impl Store {
             .collect()
     }
 
+    /// Every link, as (source, relation, destination).
+    pub fn edges(&self) -> Result<Vec<(Uuid, Rel, Uuid)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT src, rel, dst FROM edges ORDER BY src, rel, dst")?;
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(s, r, d)| Ok((parse_uuid(&s)?, parse_rel(&r)?, parse_uuid(&d)?)))
+            .collect()
+    }
+
     /// A node's key, title and state, if it exists.
     pub fn brief(&self, id: Uuid) -> Result<Option<Brief>> {
         let row: Option<(String, String, String)> = self
@@ -618,21 +631,10 @@ impl Store {
         while let Some(row) = rows.next()? {
             nodes.push(node_from(row)?);
         }
-        let edges = self
-            .conn
-            .prepare("SELECT src, rel, dst FROM edges ORDER BY src, rel, dst")?
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|(s, r, d)| Ok((parse_uuid(&s)?, parse_rel(&r)?, parse_uuid(&d)?)))
-            .collect::<Result<_>>()?;
-        Ok(Snapshot { nodes, edges })
+        Ok(Snapshot {
+            nodes,
+            edges: self.edges()?,
+        })
     }
 }
 

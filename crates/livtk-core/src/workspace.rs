@@ -454,6 +454,11 @@ impl Workspace {
             .count_events_after(self.activity_seen()?, &Actor::Human.to_string(), UNSEEN_CAP)
     }
 
+    /// Every link between nodes, as (source, relation, destination).
+    pub fn edges(&self) -> Result<Vec<(Uuid, Rel, Uuid)>> {
+        self.store.edges()
+    }
+
     pub fn snapshot(&self) -> Result<Snapshot> {
         self.store.snapshot()
     }

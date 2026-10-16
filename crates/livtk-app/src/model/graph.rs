@@ -33,6 +33,8 @@ pub const MAX_ZOOM: f32 = 2.0;
 pub const DOTS_BELOW: f32 = 0.55;
 /// Room left round everything when fitting.
 const FIT_MARGIN: f32 = 48.;
+/// What the view's dock covers at the bottom: fitting keeps everything above it.
+pub const FIT_BELOW: f32 = 56.;
 
 /// A node as the graph places it. `x`, `y` are its card's top-left corner, in world units.
 #[derive(Clone, Debug, PartialEq)]
@@ -210,13 +212,15 @@ impl Graph {
         }
         let (x0, y0, x1, y1) = self.bounds();
         let (bw, bh) = (x1 - x0, y1 - y0);
+        // The area above the dock floating over the bottom.
+        let above = (vh - FIT_BELOW).max(1.);
         let zoom = ((vw - 2. * FIT_MARGIN) / bw)
-            .min((vh - 2. * FIT_MARGIN) / bh)
+            .min((above - 2. * FIT_MARGIN) / bh)
             .clamp(MIN_ZOOM, 1.);
         self.camera = Camera {
             zoom,
             pan_x: vw / 2. - (x0 + bw / 2.) * zoom,
-            pan_y: vh / 2. - (y0 + bh / 2.) * zoom,
+            pan_y: above / 2. - (y0 + bh / 2.) * zoom,
         };
     }
 

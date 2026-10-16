@@ -813,6 +813,15 @@ Asked for while trying the app, and built in one batch:
   gets one and follows its row's hover through a group.
 - No cursor changes on hover and nothing grows on hover, by the developer's rule; the cursor
   changes only while dragging the graph. A test checks the UI's source for it.
+- The dock, the developer's design: the toolbar row and the header's controls became one compact
+  bar floating 16 px above the content's bottom, centred on the content (so it follows the detail
+  panel), 12 px corners. It holds what the view can do, in groups: New task; Filter, Grouping,
+  Ordering, dismissed work; List or Board; the graph's zoom; the command palette at the end.
+  Grouping and Ordering became menus of their own and the Display menu went; menus open upwards.
+  Below 900 px of content the buttons drop their labels for icons and tooltips. Lists, the inbox,
+  the feed and each board column keep the dock's height free at their bottom, so their last item
+  scrolls clear of it; fitting the graph keeps above it; notices sit above it. The top bar holds
+  only the view's name and count, kept for things to come.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

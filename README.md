@@ -92,9 +92,11 @@ node and link where work flows left to right along its dependencies, tasks as a 
 lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
 Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette
 and Boxicons' filled icons; nothing changes the cursor or grows on hover.
-As in Linear, the Filter menu (`/`) narrows by title, key or priority, and the Display menu
-holds Grouping (state, priority) and Ordering (priority, last update, creation), each its own
-menu, and whether dismissed work shows; groups are solid bands that collapse on a click.
+A dock floats at the bottom of the content with what the view can do: New task, Filter (`/`,
+by title, key or priority), Grouping (state, priority), Ordering (priority, last update,
+creation), dismissed work, List or Board, the graph's zoom, and the command palette. Its menus
+open upwards; on a narrow window it shows icons alone. The top bar holds only the view's name and
+count. Groups are solid bands that collapse on a click.
 Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter for the body)
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.

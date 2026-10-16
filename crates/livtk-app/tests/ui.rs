@@ -180,49 +180,43 @@ fn click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
 }
 
 #[gpui_kit::test]
-fn grouping_and_ordering_are_menus_of_their_own_in_display(cx: &mut TestAppContext) {
+fn grouping_and_ordering_open_upwards_from_the_dock(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
-    click_on(cx, "display-button");
-    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("display")));
-    assert!(
-        cx.debug_bounds("group-priority").is_none(),
-        "grouping waits in its own menu"
-    );
-
-    click_on(cx, "grouping-select");
+    cx.run_until_parked();
+    let button = cx
+        .debug_bounds("dock-grouping")
+        .expect("grouping in the dock");
+    click_on(cx, "dock-grouping");
     app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("grouping")));
+    let menu = cx.debug_bounds("grouping-menu").expect("its menu");
+    assert!(
+        menu.bottom() <= button.top(),
+        "it opens upwards: {menu:?} over {button:?}"
+    );
     click_on(cx, "group-priority");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().display().grouping, Grouping::Priority);
-        assert_eq!(
-            a.menu_open(),
-            Some("display"),
-            "a choice closes only its menu"
-        );
+        assert_eq!(a.menu_open(), None, "a choice closes it");
     });
 
-    click_on(cx, "ordering-select");
+    click_on(cx, "dock-ordering");
     click_on(cx, "order-created");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().display().ordering, Ordering::Created)
     });
 
-    // Outside everything: an open submenu closes first, then Display.
     let outside = gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(400.));
-    click_on(cx, "ordering-select");
-    cx.simulate_click(outside, gpui_kit::Modifiers::default());
-    cx.run_until_parked();
-    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("display")));
+    click_on(cx, "dock-ordering");
     cx.simulate_click(outside, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None, "outside closed it")
     });
 
-    click_on(cx, "display-button");
-    click_on(cx, "display-button");
+    click_on(cx, "dock-grouping");
+    click_on(cx, "dock-grouping");
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None, "its button closes it too")
     });
@@ -1459,22 +1453,29 @@ fn each_view_has_its_icon_in_the_sidebar_at_16_px(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn toolbar_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
+fn dock_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
     let dir = project();
     let (_app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
     cx.run_until_parked();
-    let filter = cx.debug_bounds("filter-button").unwrap();
-    let display = cx.debug_bounds("display-button").unwrap();
-    assert!(inside(icon_at(cx, "menu-filter"), filter));
-    assert!(inside(icon_at(cx, "slider-alt"), display));
-    assert_eq!(
-        filter.size.height,
-        gpui_kit::px(28.),
-        "the button kept its height"
-    );
-    assert!(icon_at(cx, "list-ul").size.width == gpui_kit::px(14.));
-    assert!(icon_at(cx, "columns-4").size.width == gpui_kit::px(14.));
+    let dock = cx.debug_bounds("dock").expect("the dock");
+    for (button, file) in [
+        ("filter-button", "menu-filter"),
+        ("dock-grouping", "blocks"),
+        ("dock-ordering", "arrow-down-up"),
+        ("layout-list", "list-ul"),
+        ("layout-board", "columns-4"),
+        ("dock-palette", "search"),
+    ] {
+        let b = cx.debug_bounds(named(button.into())).unwrap();
+        assert!(inside(b, dock), "{button} is in the dock");
+        assert!(inside(icon_at(cx, file), b), "{file} sits in {button}");
+        assert_eq!(
+            b.size.height,
+            gpui_kit::px(30.),
+            "{button} keeps its height"
+        );
+    }
 
     open_detail(cx);
     let close = cx.debug_bounds("close-detail").unwrap();
@@ -1576,4 +1577,222 @@ fn modals_fit_a_short_window_and_scroll_inside(cx: &mut TestAppContext) {
         palette.bottom() <= short.height,
         "the palette fits too: {palette:?}"
     );
+}
+
+/// Which of the dock's buttons are drawn.
+fn dock_holds(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
+    [
+        "dock-new-task",
+        "zoom-in",
+        "filter-button",
+        "dock-grouping",
+        "dock-ordering",
+        "dock-dismissed",
+        "layout-list",
+        "layout-board",
+        "dock-palette",
+    ]
+    .into_iter()
+    .filter(|b| cx.debug_bounds(b).is_some())
+    .collect()
+}
+
+#[gpui_kit::test]
+fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let (_app, cx) = open_app(cx, dir.path());
+    assert_eq!(
+        dock_holds(cx),
+        ["filter-button", "dock-palette"],
+        "the inbox"
+    );
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    assert_eq!(
+        dock_holds(cx),
+        [
+            "dock-new-task",
+            "filter-button",
+            "dock-grouping",
+            "dock-ordering",
+            "dock-dismissed",
+            "layout-list",
+            "layout-board",
+            "dock-palette"
+        ],
+        "tasks"
+    );
+    cx.simulate_keystrokes("g l");
+    cx.run_until_parked();
+    assert_eq!(
+        dock_holds(cx),
+        [
+            "filter-button",
+            "dock-grouping",
+            "dock-ordering",
+            "dock-dismissed",
+            "dock-palette"
+        ],
+        "lessons"
+    );
+    cx.simulate_keystrokes("g a");
+    cx.run_until_parked();
+    assert_eq!(dock_holds(cx), ["dock-palette"], "the feed");
+    cx.simulate_keystrokes("g r");
+    draw_graph(cx);
+    assert_eq!(
+        dock_holds(cx),
+        ["zoom-in", "dock-dismissed", "dock-palette"],
+        "the graph"
+    );
+    let header = cx.debug_bounds("view-header").unwrap();
+    for gone in ["layout-list", "dock-new-task"] {
+        if let Some(b) = cx.debug_bounds(gone) {
+            assert!(!inside(b, header), "{gone} is not in the top bar");
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn the_dock_floats_centred_on_the_content_and_follows_the_panel(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    let centre = |b: gpui_kit::Bounds<gpui_kit::Pixels>| f32::from(b.left() + b.right()) / 2.;
+    let header = cx.debug_bounds("view-header").unwrap();
+    let dock = cx.debug_bounds("dock").unwrap();
+    assert!(
+        (centre(dock) - centre(header)).abs() < 1.,
+        "centred on the content"
+    );
+    let window = cx.update(|window, _| window.viewport_size());
+    let gap = f32::from(window.height - dock.bottom());
+    assert!(
+        (16.0..40.0).contains(&gap),
+        "floating near the bottom, {gap} px up"
+    );
+    assert_eq!(dock.size.height, gpui_kit::px(40.));
+
+    open_detail(cx);
+    let header = cx.debug_bounds("view-header").unwrap();
+    let dock = cx.debug_bounds("dock").unwrap();
+    let panel = cx.debug_bounds("detail-body-panel").unwrap();
+    assert!(
+        (centre(dock) - centre(header)).abs() < 1.,
+        "still centred on the narrower content"
+    );
+    assert!(dock.right() <= panel.left(), "never under the panel");
+}
+
+#[gpui_kit::test]
+fn a_narrow_content_area_shows_the_docks_icons_alone(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    let wide = cx.debug_bounds("dock-grouping").unwrap();
+    assert!(
+        wide.size.width > gpui_kit::px(50.),
+        "labelled when wide: {wide:?}"
+    );
+
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(700.)));
+    for _ in 0..2 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    let narrow = cx.debug_bounds("dock-grouping").unwrap();
+    assert!(
+        narrow.size.width <= gpui_kit::px(32.),
+        "icon alone when narrow: {narrow:?}"
+    );
+    let dock = cx.debug_bounds("dock").unwrap();
+    let header = cx.debug_bounds("view-header").unwrap();
+    assert!(
+        dock.left() >= header.left() && dock.right() <= header.right(),
+        "the dock {dock:?} fits within the content {header:?}"
+    );
+}
+
+/// A project with `n` more backlog tasks than the usual two plans and a lesson.
+fn long_project(n: usize) -> tempfile::TempDir {
+    let dir = project();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    for i in 0..n {
+        ws.execute(
+            Command::Create {
+                kind: Kind::Task,
+                title: format!("filler {i}"),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    dir
+}
+
+#[gpui_kit::test]
+fn the_last_row_and_card_scroll_clear_of_the_dock(cx: &mut TestAppContext) {
+    let dir = long_project(40);
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    for _ in 0..50 {
+        cx.simulate_keystrokes("j");
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let dock = cx.debug_bounds("dock").unwrap();
+    let last = cx
+        .debug_bounds("key-LIV-42")
+        .expect("the last row is shown");
+    assert!(
+        last.bottom() <= dock.top(),
+        "the last row {last:?} ends above the dock {dock:?}"
+    );
+
+    cx.simulate_keystrokes("b");
+    cx.run_until_parked();
+    let at = cx.debug_bounds("card-LIV-3").unwrap().center();
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-20000.),
+        )),
+        ..Default::default()
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let dock = cx.debug_bounds("dock").unwrap();
+    let card = cx
+        .debug_bounds("card-LIV-42")
+        .expect("the column's last card");
+    assert!(
+        card.bottom() <= dock.top(),
+        "the last card {card:?} ends above the dock {dock:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_docks_new_task_and_palette_buttons_work(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    click_on(cx, "dock-palette");
+    app.read_with(cx, |a, _| assert!(a.palette_open()));
+    cx.simulate_keystrokes("escape g t");
+    cx.run_until_parked();
+    click_on(cx, "dock-new-task");
+    app.read_with(cx, |a, _| assert!(a.form_open()));
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "layout-board");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().layout, livtk_app::model::Layout::Board)
+    });
+    click_on(cx, "dock-dismissed");
+    app.read_with(cx, |a, _| assert!(a.model().show_all));
 }

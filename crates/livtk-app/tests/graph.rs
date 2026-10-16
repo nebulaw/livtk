@@ -4,7 +4,8 @@
 use std::time::{Duration, Instant};
 
 use livtk_app::model::{
-    CARD_H, CARD_W, Camera, Graph, MAX_ZOOM, MIN_ZOOM, Model, View, link_curve, visible_runs,
+    CARD_H, CARD_W, Camera, FIT_BELOW, Graph, MAX_ZOOM, MIN_ZOOM, Model, View, link_curve,
+    visible_runs,
 };
 use livtk_core::{Actor, Command, Kind, Rel, State, Summary, Workspace};
 use uuid::Uuid;
@@ -559,4 +560,21 @@ fn the_open_node_is_brought_out_and_the_rest_dimmed_but_not_on_hover() {
     assert_eq!(g.focus(true), Some(two), "the pointer brings nothing out");
     g.selected = None;
     assert_eq!(g.focus(true), None, "not even with nothing selected");
+}
+
+#[test]
+fn fitting_keeps_everything_above_the_dock() {
+    // A tall graph: two columns of thirty, so height decides the fit.
+    let links: Vec<_> = (31..=60).map(|i| dep(i, i - 30)).collect();
+    let mut g = Graph::build(tasks(60), &links);
+    g.set_viewport(1400., 700.);
+    let (_, y0, _, y1) = g.bounds();
+    let (_, top) = g.camera.to_screen(0., y0);
+    let (_, bottom) = g.camera.to_screen(0., y1);
+    assert!(top >= 0., "{top}");
+    assert!(
+        bottom <= 700. - FIT_BELOW,
+        "the fitted graph ends at {bottom}, above the dock's {}",
+        700. - FIT_BELOW
+    );
 }

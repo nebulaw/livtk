@@ -23,7 +23,7 @@ use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
+    Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
     Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Step, View,
     arrows, choices, describe, drop_allowed, has_flow, link_choices, link_curve, state_name,
     state_short, steps, visible_runs,
@@ -89,6 +89,14 @@ const DETAIL_WIDTH: f32 = 480.;
 const ZOOM_STEP: f32 = 1.25;
 /// A list row's leading slot: a task's priority, or another kind's icon.
 const LEAD: f32 = 22.;
+/// The dock's height, and its gap from the content's bottom edge.
+const DOCK_HEIGHT: f32 = 40.;
+const DOCK_GAP: f32 = 16.;
+/// What lists and columns keep free at their bottom, so their last row scrolls clear of the
+/// dock floating over them.
+const DOCK_SPACE: f32 = DOCK_HEIGHT + 2. * DOCK_GAP;
+/// The content width from which the dock's buttons carry labels; narrower, icons alone.
+const DOCK_WIDE: f32 = 900.;
 /// An arrowhead on screen: its tip, and the way it points.
 type Arrowhead = ((f32, f32), (f32, f32));
 
@@ -308,6 +316,8 @@ pub struct LivtkApp {
     /// A press on the graph's background: where the pointer was last, and whether it moved,
     /// which makes it a drag rather than a click.
     graph_press: Option<(Point<Pixels>, bool)>,
+    /// The content column's width, as last drawn: the dock shows labels only when it is wide.
+    content_width: Rc<Cell<f32>>,
     form: Option<NewTaskForm>,
     help: bool,
     editing: Option<Editing>,
@@ -319,8 +329,6 @@ pub struct LivtkApp {
     /// open panel plays none.
     detail_epoch: usize,
     menu: Option<Menu>,
-    /// A menu opened from inside `menu`: Display's Grouping or Ordering.
-    sub: Option<Menu>,
     /// The menu the mouse-down being dispatched closed, if any: see `toggle_menu`.
     menu_closed: Option<Menu>,
     _subscriptions: Vec<Subscription>,
@@ -370,6 +378,7 @@ impl LivtkApp {
             board_scroll: ScrollHandle::new(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
+            content_width: Rc::new(Cell::new(0.)),
             filter,
             note,
             form: None,
@@ -379,7 +388,6 @@ impl LivtkApp {
             detail_leaving: None,
             detail_epoch: 0,
             menu: None,
-            sub: None,
             menu_closed: None,
             _subscriptions: subscriptions,
             _poll: poll,
@@ -398,11 +406,10 @@ impl LivtkApp {
         self.form.is_some()
     }
 
-    /// The innermost open menu.
+    /// The open menu.
     pub fn menu_open(&self) -> Option<&'static str> {
-        self.sub.or(self.menu).map(|m| match m {
+        self.menu.map(|m| match m {
             Menu::Filter => "filter",
-            Menu::Display => "display",
             Menu::Grouping => "grouping",
             Menu::Ordering => "ordering",
             Menu::Priority => "priority",
@@ -509,7 +516,6 @@ impl LivtkApp {
         }
         self.help = false;
         self.menu = None;
-        self.sub = None;
         self.model.open_palette();
         self.reset_palette_input(window, cx);
         cx.notify();
@@ -863,7 +869,6 @@ impl LivtkApp {
     fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.close_palette();
         self.menu = None;
-        self.sub = None;
         self.form = None;
         self.help = false;
         self.nav.focus(window, cx);
@@ -1006,9 +1011,11 @@ impl LivtkApp {
         )
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The top bar: the view's name and how many items it holds; its controls live in the dock.
+    fn header(&self) -> impl IntoElement {
         let m = &self.model;
-        let mut bar = div()
+        div()
+            .debug_selector(|| "view-header".into())
             .h(px(46.))
             .flex_none()
             .flex()
@@ -1043,62 +1050,16 @@ impl LivtkApp {
                         format!("{}", m.filtered.len())
                     }),
             )
-            .child(div().flex_1());
-        if m.view == View::Tasks {
-            let board = m.layout == Layout::Board;
-            bar = bar.child(
-                segments()
-                    .child(segment("layout-list", Icon::List, "List", !board).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            if this.model.layout == Layout::Board {
-                                this.model.toggle_layout();
-                                cx.notify();
-                            }
-                        }),
-                    ))
-                    .child(
-                        segment("layout-board", Icon::Board, "Board", board).on_click(cx.listener(
-                            |this, _, _, cx| {
-                                if this.model.layout == Layout::List {
-                                    this.model.toggle_layout();
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                    ),
-            );
-        }
-        bar.child(
-            div()
-                .id("new-task")
-                .h(px(28.))
-                .px_3()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded_lg()
-                .bg(color(ACCENT))
-                .text_color(color(TEXT))
-                .font_weight(FontWeight::MEDIUM)
-                .hover(|s| s.bg(color(ACCENT_HOVER)))
-                .child(icon(Icon::NewTask, 16., TEXT))
-                .child("New task")
-                .child(div().text_xs().text_color(with_alpha(TEXT, 0.7)).child("N"))
-                .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx))),
-        )
     }
 
     /// Open or close a menu from its button. A click on the button of the open menu first
     /// reads as a click outside it, which closes it; that must not reopen it.
     fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let just_closed = self.menu_closed.take() == Some(menu);
-        if menu.is_sub() {
-            self.sub = (!just_closed && self.sub != Some(menu)).then_some(menu);
-        } else if just_closed || self.menu == Some(menu) {
+        if just_closed || self.menu == Some(menu) {
             self.close_menu(window, cx);
         } else {
             self.menu = Some(menu);
-            self.sub = None;
             if menu == Menu::Filter {
                 self.filter.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -1112,7 +1073,6 @@ impl LivtkApp {
             return;
         }
         self.menu = None;
-        self.sub = None;
         match &self.form {
             Some(form) => form.title.read(cx).focus_handle(cx).focus(window, cx),
             None => self.nav.focus(window, cx),
@@ -1120,36 +1080,24 @@ impl LivtkApp {
         cx.notify();
     }
 
-    /// Esc closes the innermost thing open: a submenu, a menu, then a modal.
+    /// Esc closes the innermost thing open: a menu, then a modal.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sub.take().is_some() {
-            cx.notify();
-        } else if self.menu.is_some() {
+        if self.menu.is_some() {
             self.close_menu(window, cx);
         } else {
             self.close_overlays(window, cx);
         }
     }
 
-    /// A mouse-down outside `menu`. A submenu closes alone; its parent stays open for the next
-    /// choice, as in Linear. The flag lives only for this mouse-down: see `toggle_menu`.
+    /// A mouse-down outside `menu`. The flag lives only for this mouse-down: see `toggle_menu`.
     fn clicked_outside(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
-        let sub_closing = self.menu_closed.is_some_and(Menu::is_sub);
-        if !menu.is_sub() && (self.sub.is_some() || sub_closing) {
-            return;
-        }
         self.menu_closed = Some(menu);
         cx.defer_in(window, |this, _, _| this.menu_closed = None);
-        if menu.is_sub() {
-            self.sub = None;
-            cx.notify();
-        } else {
-            self.close_menu(window, cx);
-        }
+        self.close_menu(window, cx);
     }
 
-    /// `panel` as `menu`'s popover: anchored `top` below its button's left or right edge, and
-    /// drawn above everything, submenus above their menu.
+    /// `panel` as `menu`'s popover, drawn above everything: anchored `top` below its button's
+    /// left or right edge, or, from the dock at the bottom, `up` above the button.
     fn popover(
         &self,
         menu: Menu,
@@ -1158,6 +1106,31 @@ impl LivtkApp {
         panel: Div,
         cx: &mut Context<Self>,
     ) -> Div {
+        self.popover_at(menu, right, false, top, panel, cx)
+    }
+
+    /// A menu opening upwards from the dock, `gap` above its button.
+    fn popover_up(&self, menu: Menu, right: bool, panel: Div, cx: &mut Context<Self>) -> Div {
+        self.popover_at(menu, right, true, -8., panel, cx)
+    }
+
+    fn popover_at(
+        &self,
+        menu: Menu,
+        right: bool,
+        up: bool,
+        top: f32,
+        panel: Div,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let anchor = match (up, right) {
+            (false, false) => Anchor::TopLeft,
+            (false, true) => Anchor::TopRight,
+            (true, false) => Anchor::BottomLeft,
+            (true, true) => Anchor::BottomRight,
+        };
+        // Up, the panel rises from where it lands; down, it drops a little into place.
+        let rise = if up { 4.0 } else { -4.0 };
         div()
             .absolute()
             .top(px(top))
@@ -1166,11 +1139,7 @@ impl LivtkApp {
             .child(
                 deferred(
                     anchored()
-                        .anchor(if right {
-                            Anchor::TopRight
-                        } else {
-                            Anchor::TopLeft
-                        })
+                        .anchor(anchor)
                         .snap_to_window_with_margin(px(8.))
                         .child(
                             panel
@@ -1182,11 +1151,11 @@ impl LivtkApp {
                                     SharedString::from(format!("menu-{menu:?}")),
                                     Animation::new(Duration::from_millis(120))
                                         .with_easing(ease_out_quint()),
-                                    |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                                    move |el, t| el.opacity(t).mt(px(rise * (1.0 - t))),
                                 ),
                         ),
                 )
-                .with_priority(if menu.is_sub() { 2 } else { 1 }),
+                .with_priority(1),
             )
     }
 
@@ -1199,7 +1168,7 @@ impl LivtkApp {
         panel: impl FnOnce(&Self, &mut Context<Self>) -> Div,
         cx: &mut Context<Self>,
     ) -> Div {
-        let open = self.sub == Some(menu) || self.menu == Some(menu);
+        let open = self.menu == Some(menu);
         let button = div()
             .id(id)
             .debug_selector(move || id.into())
@@ -1226,124 +1195,9 @@ impl LivtkApp {
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
             );
-        let right = menu.is_sub();
         div().relative().child(button).when(open, |d| {
             let panel = panel(self, cx);
-            d.child(self.popover(menu, right, 32., panel, cx))
-        })
-    }
-
-    /// The row under the header: Filter on the left with what it filters, Display on the right.
-    /// Both open menus, as in Linear; only List and Board are tabs (in the header).
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let d: Display = self.model.display();
-        let active =
-            usize::from(!d.filter.trim().is_empty()) + usize::from(!d.priorities.is_empty());
-        let filter_label = if active == 0 {
-            "Filter".to_owned()
-        } else {
-            format!("Filter · {active}")
-        };
-        let mut row = div()
-            .flex_none()
-            .h(px(44.))
-            .px_4()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(color(BORDER))
-            .child(self.menu_button(Menu::Filter, "filter-button", filter_label, active > 0, cx));
-        if !d.filter.trim().is_empty() {
-            let text = format!("Title or key: {}", d.filter.trim());
-            row = row.child(chip(
-                "clear-text-filter",
-                text,
-                cx.listener(|this, _, window, cx| {
-                    this.model.set_filter("");
-                    this.sync_filter(window, cx);
-                    cx.notify();
-                }),
-            ));
-        }
-        if !d.priorities.is_empty() {
-            let names: Vec<&str> = d
-                .priorities
-                .iter()
-                .map(|p| PRIORITY_NAMES[usize::from(p.clamp(&1, &4) - 1)])
-                .collect();
-            row = row.child(chip(
-                "clear-priority-filter",
-                format!("Priority: {}", names.join(", ")),
-                cx.listener(|this, _, _, cx| {
-                    for p in this.model.display().priorities {
-                        this.model.toggle_priority(p);
-                    }
-                    cx.notify();
-                }),
-            ));
-        }
-        row.child(div().flex_1()).child(self.menu_button(
-            Menu::Display,
-            "display-button",
-            "Display".to_owned(),
-            false,
-            cx,
-        ))
-    }
-
-    /// A toolbar button and, when open, its menu, anchored under it and drawn above everything.
-    fn menu_button(
-        &self,
-        menu: Menu,
-        id: &'static str,
-        label: String,
-        active: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let open = self.menu == Some(menu);
-        let glyph = if menu == Menu::Filter {
-            Icon::Filter
-        } else {
-            Icon::Display
-        };
-        let button = div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .group("menu-button")
-            .h(px(28.))
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_lg()
-            .border_1()
-            .when(open || active, |b| {
-                b.bg(color(SELECTED))
-                    .border_color(color(BORDER_STRONG))
-                    .text_color(color(TEXT))
-            })
-            .when(!open && !active, |b| {
-                b.border_color(color(BORDER))
-                    .text_color(color(TEXT_3))
-                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT_2)))
-            })
-            .child(if open || active {
-                icon(glyph, 14., TEXT)
-            } else {
-                icon_hover(glyph, 14., TEXT_3, "menu-button", TEXT_2)
-            })
-            .child(label)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
-            );
-        div().relative().child(button).when(open, |d| {
-            let panel = match menu {
-                Menu::Filter => self.filter_menu(cx),
-                _ => self.display_menu(cx),
-            };
-            d.child(self.popover(menu, menu == Menu::Display, 32., panel, cx))
+            d.child(self.popover(menu, false, 32., panel, cx))
         })
     }
 
@@ -1402,56 +1256,275 @@ impl LivtkApp {
         panel
     }
 
-    /// Grouping and Ordering, each its own menu, and whether dismissed work shows.
-    fn display_menu(&self, cx: &mut Context<Self>) -> Div {
-        let d = self.model.display();
-        let grouping = GROUPINGS
-            .iter()
-            .find(|g| g.2 == d.grouping)
-            .map_or("State", |g| g.1);
-        let ordering = ORDERINGS
-            .iter()
-            .find(|o| o.2 == d.ordering)
-            .map_or("Priority", |o| o.1);
-        let mut panel = menu_panel(272.)
-            .debug_selector(|| "display-menu".into())
-            .child(display_field(
-                Icon::Grouping,
-                "Grouping",
-                self.select(
-                    Menu::Grouping,
-                    "grouping-select",
-                    div().child(grouping),
-                    Self::grouping_menu,
-                    cx,
-                ),
-            ))
-            .child(display_field(
-                Icon::Ordering,
-                "Ordering",
-                self.select(
-                    Menu::Ordering,
-                    "ordering-select",
-                    div().child(ordering),
-                    Self::ordering_menu,
-                    cx,
-                ),
-            ));
-        if self.model.view != View::Inbox {
-            let on = self.model.show_all;
-            panel = panel.child(menu_divider()).child(
-                option_row("show-dismissed".into())
-                    .debug_selector(|| "show-dismissed".into())
-                    .child(icon(if on { Icon::Show } else { Icon::Hide }, 14., TEXT_4))
-                    .child(div().flex_1().child("Show dismissed"))
-                    .child(switch(on))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.toggle_show_all();
-                        cx.notify();
-                    })),
-            );
+    /// The dock: one compact bar floating over the bottom of the content, centred on it, holding
+    /// what the view can do: a new task, the filter, grouping, ordering, dismissed work, list or
+    /// board, the graph's zoom, and the palette. Labels show where there is room; else the icons
+    /// stand alone, named by their tooltips. Menus open upwards from it.
+    fn dock(&self, cx: &mut Context<Self>) -> Div {
+        let view = self.model.view;
+        let wide = self.content_width.get() >= DOCK_WIDE;
+        let lists = matches!(
+            view,
+            View::Tasks | View::Lessons | View::Decisions | View::Findings
+        );
+        let mut groups: Vec<Vec<AnyElement>> = Vec::new();
+        if view == View::Tasks {
+            groups.push(vec![self.dock_new_task(wide, cx)]);
         }
-        panel
+        if view == View::Graph {
+            groups.push(self.dock_zoom(cx));
+        }
+        let mut shaping = Vec::new();
+        if lists || view == View::Inbox {
+            shaping.push(self.dock_filter(wide, cx));
+        }
+        if lists {
+            shaping.push(self.dock_choice(Menu::Grouping, wide, cx));
+            shaping.push(self.dock_choice(Menu::Ordering, wide, cx));
+        }
+        if lists || view == View::Graph {
+            shaping.push(self.dock_dismissed(cx));
+        }
+        if !shaping.is_empty() {
+            groups.push(shaping);
+        }
+        if view == View::Tasks {
+            groups.push(self.dock_layout(wide, cx));
+        }
+        groups.push(vec![self.dock_palette(wide, cx)]);
+
+        let mut dock = div()
+            .debug_selector(|| "dock".into())
+            .id("dock")
+            .h(px(DOCK_HEIGHT))
+            .p(px(4.))
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .rounded_xl()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER_STRONG))
+            .shadow_lg()
+            .text_sm()
+            // Presses here are the dock's: nothing under it is clicked or dragged through it.
+            .occlude();
+        for (i, group) in groups.into_iter().enumerate() {
+            if i > 0 {
+                dock = dock.child(div().w(px(1.)).h(px(20.)).mx(px(4.)).bg(color(BORDER)));
+            }
+            dock = dock.children(group);
+        }
+        div().child(dock)
+    }
+
+    /// A button of the dock: an icon, a label when `label` is given, a tooltip always.
+    fn dock_button(
+        id: &'static str,
+        glyph: Icon,
+        label: Option<String>,
+        tip: &'static str,
+        on: bool,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .group(id)
+            .h(px(30.))
+            .min_w(px(30.))
+            .px(px(if label.is_some() { 10. } else { 7. }))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .rounded_lg()
+            .when(on, |b| b.bg(color(SELECTED)).text_color(color(TEXT)))
+            .when(!on, |b| {
+                b.text_color(color(TEXT_3))
+                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
+            })
+            .child(if on {
+                icon(glyph, 16., TEXT)
+            } else {
+                icon_hover(glyph, 16., TEXT_3, id, TEXT)
+            })
+            .when_some(label, |b, l| b.child(div().whitespace_nowrap().child(l)))
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+            })
+    }
+
+    fn dock_new_task(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("dock-new-task")
+            .debug_selector(|| "dock-new-task".into())
+            .h(px(30.))
+            .min_w(px(30.))
+            .px(px(if wide { 10. } else { 7. }))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .rounded_lg()
+            .bg(color(ACCENT))
+            .text_color(color(TEXT))
+            .font_weight(FontWeight::MEDIUM)
+            .hover(|s| s.bg(color(ACCENT_HOVER)))
+            .child(icon(Icon::NewTask, 16., TEXT))
+            .when(wide, |b| {
+                b.child(div().whitespace_nowrap().child("New task"))
+            })
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("New task · N").build(window, cx)
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx)))
+            .into_any_element()
+    }
+
+    /// A dock button that opens `menu` upwards; the press is the button's alone.
+    fn dock_menu(&self, menu: Menu, button: Stateful<Div>, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.menu == Some(menu);
+        let button = button.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.toggle_menu(menu, window, cx);
+            }),
+        );
+        div()
+            .relative()
+            .flex_none()
+            .child(button)
+            .when(open, |d| {
+                let panel = match menu {
+                    Menu::Filter => self.filter_menu(cx),
+                    Menu::Grouping => self.grouping_menu(cx),
+                    _ => self.ordering_menu(cx),
+                };
+                d.child(self.popover_up(menu, false, panel, cx))
+            })
+            .into_any_element()
+    }
+
+    fn dock_filter(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let d = self.model.display();
+        let active =
+            usize::from(!d.filter.trim().is_empty()) + usize::from(!d.priorities.is_empty());
+        let label = match (wide, active) {
+            (false, _) => None,
+            (true, 0) => Some("Filter".to_owned()),
+            (true, n) => Some(format!("Filter · {n}")),
+        };
+        let open = self.menu == Some(Menu::Filter);
+        let button = Self::dock_button(
+            "filter-button",
+            Icon::Filter,
+            label,
+            "Filter · /",
+            open || active > 0,
+        );
+        self.dock_menu(Menu::Filter, button, cx)
+    }
+
+    /// Grouping or Ordering: the current choice when there is room, its menu on a press.
+    fn dock_choice(&self, menu: Menu, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let d = self.model.display();
+        let (id, glyph, tip, current) = if menu == Menu::Grouping {
+            let name = GROUPINGS
+                .iter()
+                .find(|g| g.2 == d.grouping)
+                .map_or("State", |g| g.1);
+            ("dock-grouping", Icon::Grouping, "Grouping", name)
+        } else {
+            let name = ORDERINGS
+                .iter()
+                .find(|o| o.2 == d.ordering)
+                .map_or("Priority", |o| o.1);
+            ("dock-ordering", Icon::Ordering, "Ordering", name)
+        };
+        let open = self.menu == Some(menu);
+        let button = Self::dock_button(id, glyph, wide.then(|| current.to_owned()), tip, open);
+        self.dock_menu(menu, button, cx)
+    }
+
+    fn dock_dismissed(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.model.show_all;
+        Self::dock_button(
+            "dock-dismissed",
+            if on { Icon::Show } else { Icon::Hide },
+            None,
+            if on {
+                "Hide dismissed work · H"
+            } else {
+                "Show dismissed work · H"
+            },
+            on,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.model.toggle_show_all();
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
+    fn dock_layout(&self, wide: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let board = self.model.layout == Layout::Board;
+        [
+            ("layout-list", Icon::List, "List", "List · B", !board),
+            ("layout-board", Icon::Board, "Board", "Board · B", board),
+        ]
+        .into_iter()
+        .map(|(id, glyph, label, tip, on)| {
+            Self::dock_button(id, glyph, wide.then(|| label.to_owned()), tip, on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.model.layout == Layout::Board && label == "List"
+                        || this.model.layout == Layout::List && label == "Board"
+                    {
+                        this.model.toggle_layout();
+                        cx.notify();
+                    }
+                }))
+                .into_any_element()
+        })
+        .collect()
+    }
+
+    fn dock_zoom(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let z = self.model.graph.camera.zoom;
+        vec![
+            Self::dock_button("zoom-out", Icon::ZoomOut, None, "Zoom out · -", false)
+                .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx)))
+                .into_any_element(),
+            Self::dock_button(
+                "zoom-fit",
+                Icon::Fit,
+                Some(format!("{:.0}%", z * 100.)),
+                "Zoom to fit · 0",
+                false,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.model.graph_fit();
+                cx.notify();
+            }))
+            .into_any_element(),
+            Self::dock_button("zoom-in", Icon::ZoomIn, None, "Zoom in · +", false)
+                .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(ZOOM_STEP, cx)))
+                .into_any_element(),
+        ]
+    }
+
+    fn dock_palette(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        Self::dock_button(
+            "dock-palette",
+            Icon::Search,
+            wide.then(|| "Search".to_owned()),
+            "Command palette · Ctrl K",
+            self.model.palette.is_some(),
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)))
+        .into_any_element()
     }
 
     fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -1468,10 +1541,9 @@ impl LivtkApp {
                     .debug_selector(move || id.into())
                     .child(label)
                     .child(check(current == g))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.model.set_grouping(g);
-                        this.sub = None;
-                        cx.notify();
+                        this.close_menu(window, cx);
                     })),
             );
         }
@@ -1487,10 +1559,9 @@ impl LivtkApp {
                     .debug_selector(move || id.into())
                     .child(label)
                     .child(check(current == o))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.model.set_ordering(o);
-                        this.sub = None;
-                        cx.notify();
+                        this.close_menu(window, cx);
                     })),
             );
         }
@@ -2237,45 +2308,6 @@ impl LivtkApp {
         )
         .absolute()
         .inset_0();
-        let controls = div()
-            .absolute()
-            .bottom(px(12.))
-            .right(px(12.))
-            .flex()
-            .items_center()
-            .p(px(3.))
-            .gap(px(2.))
-            .rounded_xl()
-            .bg(color(SURFACE))
-            .border_1()
-            .border_color(color(BORDER_STRONG))
-            .shadow_lg()
-            .text_xs()
-            .text_color(color(TEXT_3))
-            // Presses here are the controls', not the background's.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                graph_control("zoom-out")
-                    .child(icon_hover(Icon::ZoomOut, 14., TEXT_3, "zoom-out", TEXT))
-                    .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx))),
-            )
-            .child(
-                graph_control("zoom-fit")
-                    .min_w(px(64.))
-                    .gap(px(5.))
-                    .child(icon_hover(Icon::Fit, 13., TEXT_3, "zoom-fit", TEXT))
-                    .child(format!("{:.0}%", z * 100.))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.graph_fit();
-                        cx.notify();
-                    })),
-            )
-            .child(
-                graph_control("zoom-in")
-                    .child(icon_hover(Icon::ZoomIn, 14., TEXT_3, "zoom-in", TEXT))
-                    .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(ZOOM_STEP, cx))),
-            );
         // The cursor stays as it is, except while dragging the graph around.
         let dragging = matches!(self.graph_press, Some((_, true)));
         div()
@@ -2288,7 +2320,6 @@ impl LivtkApp {
             .child(edges)
             .children(unlinked)
             .children(cards)
-            .child(controls)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _, _| {
@@ -2399,7 +2430,9 @@ impl LivtkApp {
             }),
         )
         .track_scroll(&self.list_scroll)
-        .size_full();
+        .size_full()
+        // The last line scrolls clear of the dock floating over the bottom.
+        .pb(px(DOCK_SPACE));
         div()
             .debug_selector(|| "feed".into())
             .size_full()
@@ -2500,7 +2533,8 @@ impl LivtkApp {
             .id("inbox")
             .size_full()
             .overflow_y_scroll()
-            .py_1()
+            .pt_1()
+            .pb(px(DOCK_SPACE))
             .flex()
             .flex_col();
         for (r, leaving) in shown {
@@ -2552,6 +2586,8 @@ impl LivtkApp {
         )
         .track_scroll(&self.list_scroll)
         .size_full()
+        // The last row scrolls clear of the dock floating over the bottom.
+        .pb(px(DOCK_SPACE))
         .into_any_element()
     }
 
@@ -2754,6 +2790,8 @@ impl LivtkApp {
                 .flex_col()
                 .gap_2()
                 .p_2()
+                // Full height behind the floating dock, its last card scrolling clear of it.
+                .pb(px(DOCK_SPACE))
                 .rounded_xl()
                 .bg(color(SURFACE))
                 .border_1()
@@ -3514,7 +3552,8 @@ impl LivtkApp {
         Some(
             div()
                 .absolute()
-                .bottom(px(16.))
+                // Above the dock's level, so the two never meet.
+                .bottom(px(DOCK_SPACE + 8.))
                 .right(px(16.))
                 .max_w(px(520.))
                 .p_3()
@@ -3537,10 +3576,23 @@ impl LivtkApp {
 impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(window, cx).into_any_element();
-        let header = self.header(cx).into_any_element();
-        // The toolbar's filters apply to lists; the feed and the graph have their own ways.
-        let toolbar = (!matches!(self.model.view, View::Activity | View::Graph))
-            .then(|| self.toolbar(cx).into_any_element());
+        let header = self.header().into_any_element();
+        let dock = self.dock(cx);
+        // The column's width decides whether the dock's buttons carry labels; draw again when
+        // it changes.
+        let width = self.content_width.clone();
+        let measure = canvas(
+            move |b, window, _| {
+                let w = f32::from(b.size.width);
+                if width.get() != w {
+                    width.set(w);
+                    window.refresh();
+                }
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .inset_0();
         let content = self.content(window, cx);
         self.track_detail(window, cx);
         let detail = self.detail(cx);
@@ -3587,7 +3639,6 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
                 this.menu = Some(Menu::Filter);
-                this.sub = None;
                 this.filter.read(cx).focus_handle(cx).focus(window, cx);
                 cx.notify();
             }))
@@ -3670,14 +3721,27 @@ impl Render for LivtkApp {
                         .overflow_hidden()
                         .child(
                             div()
+                                .relative()
                                 .flex_1()
                                 .min_w_0()
                                 .h_full()
                                 .flex()
                                 .flex_col()
+                                .child(measure)
                                 .child(header)
-                                .children(toolbar)
-                                .child(list_area),
+                                .child(list_area)
+                                // Floating over the content's bottom, centred on it; it moves
+                                // with the content as the detail panel opens beside it.
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .bottom(px(DOCK_GAP))
+                                        .flex()
+                                        .justify_center()
+                                        .child(dock),
+                                ),
                         )
                         .children(detail),
                 ),
@@ -3697,10 +3761,7 @@ fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Menu {
     Filter,
-    Display,
-    /// Opened from Display.
     Grouping,
-    /// Opened from Display.
     Ordering,
     /// The new task's priority, in the form.
     Priority,
@@ -3714,12 +3775,6 @@ enum Menu {
     RowState(Uuid),
     /// Ratify or ratify as a standing rule, from the flow in the detail panel.
     Standing,
-}
-
-impl Menu {
-    fn is_sub(self) -> bool {
-        matches!(self, Menu::Grouping | Menu::Ordering)
-    }
 }
 
 const GROUPINGS: &[(&str, &str, Grouping)] = &[
@@ -3951,23 +4006,6 @@ fn state_dot(state: State, size: f32) -> Div {
         .bg(with_alpha(state_color(state), if faint { 0.5 } else { 1. }))
 }
 
-/// A button of the graph's zoom controls.
-fn graph_control(id: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .debug_selector(move || id.into())
-        // Its icon brightens with its text on hover.
-        .group(id)
-        .h(px(24.))
-        .min_w(px(24.))
-        .px_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_lg()
-        .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-}
-
 /// The section an item of the palette sits in.
 fn section_of(item: &PaletteItem, query: &str) -> &'static str {
     match item {
@@ -4037,103 +4075,6 @@ fn checkbox(on: bool) -> Div {
                 .child(icon(Icon::Check, 11., TEXT))
         })
         .when(!on, |c| c.border_color(color(TEXT_4)))
-}
-
-/// A labelled setting in the Display menu: the name on the left, its select on the right.
-fn display_field(glyph: Icon, label: &'static str, select: Div) -> Div {
-    div()
-        .h(px(36.))
-        .px(px(6.))
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(icon(glyph, 14., TEXT_4))
-        .child(div().flex_1().text_color(color(TEXT_3)).child(label))
-        .child(select)
-}
-
-fn switch(on: bool) -> Div {
-    div()
-        .w(px(26.))
-        .h(px(16.))
-        .flex_none()
-        .rounded_full()
-        .p(px(2.))
-        .flex()
-        .when(on, |s| s.bg(color(ACCENT)).justify_end())
-        .when(!on, |s| s.bg(color(BORDER_STRONG)))
-        .child(div().size(px(12.)).rounded_full().bg(color(TEXT)))
-}
-
-/// An active filter, shown beside the Filter button; its × clears it.
-fn chip(
-    id: &'static str,
-    label: String,
-    clear: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .h(px(24.))
-        .pl_2()
-        .pr_1()
-        .flex()
-        .items_center()
-        .gap_1()
-        .rounded_lg()
-        .bg(color(SURFACE))
-        .border_1()
-        .border_color(color(BORDER_STRONG))
-        .text_xs()
-        .text_color(color(TEXT_2))
-        .child(label)
-        .child(
-            div()
-                .id(SharedString::from(format!("{id}-x")))
-                .group("chip-x")
-                .size(px(18.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(4.))
-                .hover(|s| s.bg(color(HOVER)))
-                .child(icon_hover(Icon::Close, 12., TEXT_4, "chip-x", TEXT))
-                .on_click(clear),
-        )
-}
-
-fn segments() -> Div {
-    div()
-        .flex()
-        .p(px(2.))
-        .gap(px(2.))
-        .rounded_lg()
-        .bg(color(WINDOW))
-        .border_1()
-        .border_color(color(BORDER))
-}
-
-fn segment(id: &'static str, glyph: Icon, label: &'static str, on: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .group("segment")
-        .h(px(22.))
-        .px_2()
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .rounded(px(6.))
-        .text_xs()
-        .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
-        .when(!on, |d| {
-            d.text_color(color(TEXT_3))
-                .hover(|s| s.text_color(color(TEXT_2)))
-        })
-        .child(if on {
-            icon(glyph, 14., TEXT)
-        } else {
-            icon_hover(glyph, 14., TEXT_4, "segment", TEXT_3)
-        })
-        .child(label)
 }
 
 fn tag(label: &str, c: u32) -> Div {

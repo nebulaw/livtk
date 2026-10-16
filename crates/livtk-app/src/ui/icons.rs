@@ -48,8 +48,6 @@ icons! {
     List => "list-ul",
     Board => "columns-4",
     Filter => "menu-filter",
-    Display => "slider-alt",
-    Close => "x",
     Search => "search",
     CaretDown => "caret-big-down",
     CaretRight => "caret-big-right",

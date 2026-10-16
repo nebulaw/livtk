@@ -1436,13 +1436,15 @@ impl LivtkApp {
         }
         let rows = self.model.feed();
         let count = rows.len() + usize::from(self.model.activity_more);
-        uniform_list(
+        let list = uniform_list(
             "feed",
             count,
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
                 range
                     .map(|i| match rows.get(i) {
+                        // Every line spans the feed, as the lists' rows do.
                         Some(FeedRow::Day(label)) => div()
+                            .w_full()
                             .h(px(ROW))
                             .px_4()
                             .flex()
@@ -1457,6 +1459,7 @@ impl LivtkApp {
                         None => div()
                             .id("show-older")
                             .debug_selector(|| "show-older".into())
+                            .w_full()
                             .h(px(ROW))
                             .px_4()
                             .flex()
@@ -1475,8 +1478,12 @@ impl LivtkApp {
             }),
         )
         .track_scroll(&self.list_scroll)
-        .size_full()
-        .into_any_element()
+        .size_full();
+        div()
+            .debug_selector(|| "feed".into())
+            .size_full()
+            .child(list)
+            .into_any_element()
     }
 
     /// One event: a dot if it is new on this visit, who, what, the node, and when.
@@ -1493,6 +1500,7 @@ impl LivtkApp {
         let line = div()
             .id(SharedString::from(format!("event-{index}")))
             .debug_selector(move || format!("event-{index}"))
+            .w_full()
             .h(px(ROW))
             .px_4()
             .flex()

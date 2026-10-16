@@ -699,3 +699,18 @@ fn a_click_on_a_line_opens_its_node(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn feed_lines_span_the_feed_as_list_rows_do(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g a");
+    cx.run_until_parked();
+    let feed = cx.debug_bounds("feed").expect("drawn");
+    let line = cx.debug_bounds("event-0").expect("drawn");
+    assert_eq!(
+        (line.left(), line.size.width),
+        (feed.left(), feed.size.width),
+        "a line runs the feed's whole width"
+    );
+}

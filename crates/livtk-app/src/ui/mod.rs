@@ -97,6 +97,7 @@ const DOCK_GAP: f32 = 16.;
 const DOCK_SPACE: f32 = DOCK_HEIGHT + 2. * DOCK_GAP;
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
+const SIDEBAR_WIDTH: f32 = 232.;
 /// An arrowhead on screen: its tip, and the way it points.
 type Arrowhead = ((f32, f32), (f32, f32));
 
@@ -316,8 +317,6 @@ pub struct LivtkApp {
     /// A press on the graph's background: where the pointer was last, and whether it moved,
     /// which makes it a drag rather than a click.
     graph_press: Option<(Point<Pixels>, bool)>,
-    /// The content column's width, as last drawn: the dock shows labels only when it is wide.
-    content_width: Rc<Cell<f32>>,
     form: Option<NewTaskForm>,
     help: bool,
     editing: Option<Editing>,
@@ -378,7 +377,6 @@ impl LivtkApp {
             board_scroll: ScrollHandle::new(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
-            content_width: Rc::new(Cell::new(0.)),
             filter,
             note,
             form: None,
@@ -926,7 +924,7 @@ impl LivtkApp {
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = window;
         let mut side = div()
-            .w(px(232.))
+            .w(px(SIDEBAR_WIDTH))
             .flex_none()
             .h_full()
             .flex()
@@ -1256,13 +1254,25 @@ impl LivtkApp {
         panel
     }
 
+    /// The content column's width, worked out from the window rather than measured, so a frame
+    /// is laid out right the first time: the window, less the sidebar, the content's inset and
+    /// border, and the detail panel when it is open.
+    fn content_width(&self, window: &Window) -> f32 {
+        let panel = if self.model.detail.is_some() {
+            DETAIL_WIDTH
+        } else {
+            0.
+        };
+        f32::from(window.viewport_size().width) - SIDEBAR_WIDTH - 10. - panel
+    }
+
     /// The dock: one compact bar floating over the bottom of the content, centred on it, holding
     /// what the view can do: a new task, the filter, grouping, ordering, dismissed work, list or
     /// board, the graph's zoom, and the palette. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
-    fn dock(&self, cx: &mut Context<Self>) -> Div {
+    fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let view = self.model.view;
-        let wide = self.content_width.get() >= DOCK_WIDE;
+        let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
             view,
             View::Tasks | View::Lessons | View::Decisions | View::Findings
@@ -1291,7 +1301,7 @@ impl LivtkApp {
         if view == View::Tasks {
             groups.push(self.dock_layout(wide, cx));
         }
-        groups.push(vec![self.dock_palette(wide, cx)]);
+        groups.push(vec![self.dock_palette(cx)]);
 
         let mut dock = div()
             .debug_selector(|| "dock".into())
@@ -1469,26 +1479,71 @@ impl LivtkApp {
         .into_any_element()
     }
 
+    /// List or Board as tabs: a recessed track as tall as the dock's buttons, the chosen tab
+    /// raised inside it, its corners following the track's.
     fn dock_layout(&self, wide: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let board = self.model.layout == Layout::Board;
-        [
+        let mut track = div()
+            .debug_selector(|| "layout-tabs".into())
+            .h(px(30.))
+            .p(px(2.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(2.))
+            .rounded_lg()
+            .bg(color(WINDOW))
+            .border_1()
+            .border_color(color(BORDER));
+        for (id, glyph, label, tip, on) in [
             ("layout-list", Icon::List, "List", "List · B", !board),
             ("layout-board", Icon::Board, "Board", "Board · B", board),
-        ]
-        .into_iter()
-        .map(|(id, glyph, label, tip, on)| {
-            Self::dock_button(id, glyph, wide.then(|| label.to_owned()), tip, on)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.model.layout == Layout::Board && label == "List"
-                        || this.model.layout == Layout::List && label == "Board"
-                    {
-                        this.model.toggle_layout();
-                        cx.notify();
-                    }
-                }))
-                .into_any_element()
-        })
-        .collect()
+        ] {
+            track = track.child(
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .group(id)
+                    // The track's 30 px, less its border and its inset.
+                    .h(px(24.))
+                    .min_w(px(26.))
+                    .px(px(if wide { 9. } else { 5. }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .when(on, |t| {
+                        t.bg(color(SELECTED))
+                            .border_color(color(BORDER_STRONG))
+                            .text_color(color(TEXT))
+                    })
+                    .when(!on, |t| {
+                        t.border_color(with_alpha(BORDER, 0.))
+                            .text_color(color(TEXT_3))
+                            .hover(|h| h.text_color(color(TEXT_2)))
+                    })
+                    .child(if on {
+                        icon(glyph, 14., TEXT)
+                    } else {
+                        icon_hover(glyph, 14., TEXT_4, id, TEXT_2)
+                    })
+                    .when(wide, |t| t.child(label))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.model.layout == Layout::Board && label == "List"
+                            || this.model.layout == Layout::List && label == "Board"
+                        {
+                            this.model.toggle_layout();
+                            cx.notify();
+                        }
+                    })),
+            );
+        }
+        vec![track.into_any_element()]
     }
 
     fn dock_zoom(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1515,16 +1570,35 @@ impl LivtkApp {
         ]
     }
 
-    fn dock_palette(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
-        Self::dock_button(
-            "dock-palette",
-            Icon::Search,
-            wide.then(|| "Search".to_owned()),
-            "Command palette · Ctrl K",
-            self.model.palette.is_some(),
-        )
-        .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)))
-        .into_any_element()
+    /// The palette, set apart from the tools before it: an icon alone at every width, in a
+    /// filled, bordered square of its own.
+    fn dock_palette(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.model.palette.is_some();
+        div()
+            .id("dock-palette")
+            .debug_selector(|| "dock-palette".into())
+            .group("dock-palette")
+            .size(px(30.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .border_1()
+            .border_color(color(BORDER_STRONG))
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| b.bg(color(LIFTED)).hover(|h| h.bg(color(HOVER))))
+            .child(if open {
+                icon(Icon::Search, 16., TEXT)
+            } else {
+                icon_hover(Icon::Search, 16., TEXT_2, "dock-palette", TEXT)
+            })
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("Command palette · Ctrl K")
+                    .build(window, cx)
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)))
+            .into_any_element()
     }
 
     fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -3577,22 +3651,7 @@ impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(window, cx).into_any_element();
         let header = self.header().into_any_element();
-        let dock = self.dock(cx);
-        // The column's width decides whether the dock's buttons carry labels; draw again when
-        // it changes.
-        let width = self.content_width.clone();
-        let measure = canvas(
-            move |b, window, _| {
-                let w = f32::from(b.size.width);
-                if width.get() != w {
-                    width.set(w);
-                    window.refresh();
-                }
-            },
-            |_, (), _, _| {},
-        )
-        .absolute()
-        .inset_0();
+        let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
         let detail = self.detail(cx);
@@ -3727,7 +3786,6 @@ impl Render for LivtkApp {
                                 .h_full()
                                 .flex()
                                 .flex_col()
-                                .child(measure)
                                 .child(header)
                                 .child(list_area)
                                 // Floating over the content's bottom, centred on it; it moves

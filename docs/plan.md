@@ -822,6 +822,12 @@ Asked for while trying the app, and built in one batch:
   the feed and each board column keep the dock's height free at their bottom, so their last item
   scrolls clear of it; fitting the graph keeps above it; notices sit above it. The top bar holds
   only the view's name and count, kept for things to come.
+- Refined on review: List or Board is a tab control, a recessed track as tall as the dock's
+  buttons with the chosen tab raised in it; the palette is an icon alone at every width, in a
+  filled, bordered square set apart at the end. The dock's width threshold is worked out from the
+  window (less the sidebar, the inset and the open panel) rather than measured after drawing:
+  measuring laid the first frame out narrow and switched a frame later, a flicker on start and
+  on every resize, which a test caught by clicking where the button had been.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

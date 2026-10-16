@@ -1463,8 +1463,6 @@ fn dock_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
         ("filter-button", "menu-filter"),
         ("dock-grouping", "blocks"),
         ("dock-ordering", "arrow-down-up"),
-        ("layout-list", "list-ul"),
-        ("layout-board", "columns-4"),
         ("dock-palette", "search"),
     ] {
         let b = cx.debug_bounds(named(button.into())).unwrap();
@@ -1476,6 +1474,30 @@ fn dock_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
             "{button} keeps its height"
         );
     }
+    // List and Board: tabs in a track exactly as tall as the buttons around it.
+    let track = cx.debug_bounds("layout-tabs").expect("the tabs' track");
+    assert!(inside(track, dock));
+    assert_eq!(
+        track.size.height,
+        gpui_kit::px(30.),
+        "the track matches the buttons"
+    );
+    for (tab, file) in [("layout-list", "list-ul"), ("layout-board", "columns-4")] {
+        let t = cx.debug_bounds(named(tab.into())).unwrap();
+        assert!(inside(t, track), "{tab} is a tab of the track");
+        assert!(inside(icon_at(cx, file), t), "{file} sits in {tab}");
+    }
+    // The palette: an icon alone, even on a wide window, in a square of its own.
+    let palette = cx.debug_bounds("dock-palette").unwrap();
+    assert_eq!(
+        (palette.size.width, palette.size.height),
+        (gpui_kit::px(30.), gpui_kit::px(30.)),
+        "no label, whatever the width"
+    );
+    assert!(
+        palette.left() > track.right(),
+        "set apart at the end, after the tabs"
+    );
 
     open_detail(cx);
     let close = cx.debug_bounds("close-detail").unwrap();
@@ -1673,6 +1695,13 @@ fn the_dock_floats_centred_on_the_content_and_follows_the_panel(cx: &mut TestApp
         "floating near the bottom, {gap} px up"
     );
     assert_eq!(dock.size.height, gpui_kit::px(40.));
+    // The dock picks labels or icons from a width it works out rather than measures: the
+    // window less the sidebar and the content's inset and border (242 px), less the panel.
+    assert_eq!(
+        header.size.width,
+        window.width - gpui_kit::px(242.),
+        "the content's width"
+    );
 
     open_detail(cx);
     let header = cx.debug_bounds("view-header").unwrap();
@@ -1683,6 +1712,11 @@ fn the_dock_floats_centred_on_the_content_and_follows_the_panel(cx: &mut TestApp
         "still centred on the narrower content"
     );
     assert!(dock.right() <= panel.left(), "never under the panel");
+    assert_eq!(
+        header.size.width,
+        window.width - gpui_kit::px(242. + 480.),
+        "the content's width beside the panel"
+    );
 }
 
 #[gpui_kit::test]

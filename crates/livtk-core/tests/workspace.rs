@@ -67,6 +67,95 @@ fn state(ws: &Workspace, key: &str) -> State {
 
 // ---- the human gate ---------------------------------------------------------------------------
 
+/// Add `[gates]` to the project's config and open it again.
+fn with_gates(dir: &Path, entries: &str) -> Result<Workspace, Error> {
+    let path = dir.join(".livtk/config.toml");
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str(&format!("\n[gates]\nhuman = [{entries}]\n"));
+    fs::write(&path, text).unwrap();
+    Workspace::open(dir)
+}
+
+#[test]
+fn a_project_can_keep_more_moves_for_the_human() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let (a, b) = (task(&mut ws, "a"), task(&mut ws, "b"));
+    for k in [&a, &b] {
+        ack(&mut ws, k);
+        mv(&mut ws, k, State::Doing, &CLAUDE).unwrap();
+        mv(&mut ws, k, State::Review, &CLAUDE).unwrap();
+    }
+    let c = task(&mut ws, "c");
+    drop(ws);
+    let mut ws = with_gates(dir.path(), r#""task: review -> done", "task: -> canceled""#).unwrap();
+    assert!(ws.human_only(Kind::Task, State::Review, State::Done));
+    assert!(
+        ws.human_only(Kind::Task, State::Backlog, State::Canceled),
+        "from any state"
+    );
+    assert!(!ws.human_only(Kind::Task, State::Doing, State::Review));
+
+    let refused = mv(&mut ws, &a, State::Done, &CLAUDE).unwrap_err();
+    assert!(
+        matches!(&refused, Error::Refused(m) if m.contains("[gates]") && m.contains("livtk move LIV-1 done")),
+        "{refused}"
+    );
+    assert!(matches!(
+        mv(&mut ws, &c, State::Canceled, &CLAUDE),
+        Err(Error::Refused(_))
+    ));
+    mv(&mut ws, &a, State::Done, &HUMAN).unwrap();
+    mv(&mut ws, &b, State::Doing, &CLAUDE).unwrap();
+    mv(&mut ws, &b, State::Review, &CLAUDE).unwrap();
+
+    let inbox: Vec<String> = ws.inbox().unwrap().into_iter().map(|s| s.key).collect();
+    assert_eq!(
+        inbox,
+        [b],
+        "what waits on a gate from a state is in the inbox; a gate from anywhere adds nothing"
+    );
+    assert!(
+        mv(&mut ws, &c, State::Planned, &CLAUDE).is_ok(),
+        "other moves stay Claude's"
+    );
+    assert!(
+        matches!(
+            mv(&mut ws, &c, State::Acked, &CLAUDE),
+            Err(Error::Refused(_))
+        ),
+        "and the built-in gates stay"
+    );
+}
+
+#[test]
+fn a_gate_that_names_no_legal_move_is_a_config_error() {
+    for (entry, says) in [
+        (r#""task review done""#, "write it as"),
+        (r#""story: review -> done""#, "no kind `story`"),
+        (
+            r#""task: review -> ratified""#,
+            "a task has no state `ratified`",
+        ),
+        (
+            r#""task: backlog -> done""#,
+            "cannot move from backlog to done",
+        ),
+        (
+            r#""finding: -> recorded""#,
+            "no finding ever moves to recorded",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path());
+        let err = with_gates(dir.path(), entry).err().unwrap();
+        assert!(
+            matches!(&err, Error::Config { .. }) && err.to_string().contains(says),
+            "{entry}: {err}"
+        );
+    }
+}
+
 #[test]
 fn only_a_human_acknowledges() {
     let dir = tempfile::tempdir().unwrap();

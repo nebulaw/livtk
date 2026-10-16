@@ -4,7 +4,7 @@
 use livtk_core::{Hit, Kind, State, Summary, link_allowed};
 use uuid::Uuid;
 
-use super::{Choice, Grouping, Layout, LinkChoice, Model, Ordering, View, choices, link_choices};
+use super::{Choice, Grouping, Layout, LinkChoice, Model, Ordering, View, link_choices};
 
 /// Nodes shown for a typed query.
 const FOUND: usize = 20;
@@ -373,7 +373,7 @@ impl Model {
         let key = Some(row.key.clone());
         let mut out = Vec::new();
         let mut decided = false;
-        for c in choices(row.kind, row.state) {
+        for c in self.choices(row.kind, row.state) {
             let primary = c.decides && !matches!(c.to, State::Rejected | State::Retired);
             let shortcut = if c.always {
                 Some("S")

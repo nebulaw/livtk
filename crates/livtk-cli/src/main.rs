@@ -378,7 +378,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Reject { key } => moved(ws, &key, State::Rejected, by, json),
         Cmd::Retire { key } => moved(ws, &key, State::Retired, by, json),
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
-        Cmd::Inbox => output::inbox(&ws.inbox()?, json),
+        Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
         Cmd::List { kind, state, all } => {
             let states: Vec<State> = if !state.is_empty() {
                 state

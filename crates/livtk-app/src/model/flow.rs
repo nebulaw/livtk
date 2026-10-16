@@ -2,10 +2,10 @@
 //! rejected) beside it, and for a node in a given state which of them it can move to. The state
 //! menu on rows and cards and the flow in the detail panel both draw this.
 
-use livtk_core::{Kind, State};
+use livtk_core::{Gate, Kind, State};
 use uuid::Uuid;
 
-use super::{Choice, Model, choices};
+use super::{Choice, Model, choices_with};
 
 /// One state of a kind's flow, as seen from the state a node is in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,7 +65,12 @@ pub fn flow_of(kind: Kind) -> (&'static [State], &'static [State]) {
 
 /// Every state of `kind`'s flow, seen from `state`: which is current, which can be reached.
 pub fn steps(kind: Kind, state: State) -> Vec<Step> {
-    let moves = choices(kind, state);
+    steps_with(kind, state, &[])
+}
+
+/// `steps`, with the gates a project's config adds marked as the human's decisions.
+pub fn steps_with(kind: Kind, state: State, gates: &[Gate]) -> Vec<Step> {
+    let moves = choices_with(kind, state, gates);
     let (main, side) = flow_of(kind);
     main.iter()
         .map(|&s| (s, true))
@@ -94,7 +99,12 @@ pub enum Arrow {
 /// The arrows between the main path's states, one for each gap: those a move from `state`
 /// passes along are lit and point its way, the human's decision winning where moves overlap.
 pub fn arrows(kind: Kind, state: State) -> Vec<Arrow> {
-    let all = steps(kind, state);
+    arrows_with(kind, state, &[])
+}
+
+/// `arrows`, with the gates a project's config adds.
+pub fn arrows_with(kind: Kind, state: State, gates: &[Gate]) -> Vec<Arrow> {
+    let all = steps_with(kind, state, gates);
     let main: Vec<&Step> = all.iter().filter(|s| s.main).collect();
     let mut out = vec![Arrow::Idle; main.len().saturating_sub(1)];
     let Some(here) = main.iter().position(|s| s.current) else {

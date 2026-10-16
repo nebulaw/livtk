@@ -43,6 +43,85 @@ pub struct Config {
     pub hooks: Hooks,
     #[serde(default, skip_serializing_if = "Memory::is_default")]
     pub memory: Memory,
+    #[serde(default, skip_serializing_if = "Gates::is_default")]
+    pub gates: Gates,
+}
+
+/// Moves this project keeps for the human, beyond the built-in ones (acknowledging, and
+/// deciding what binds). The file is in the repository, where Claude could change it, so it can
+/// only add gates: an edit to it can make Claude stricter, never freer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Gates {
+    /// Each `kind: from -> to`, or `kind: -> to` for a move into `to` from anywhere.
+    pub human: Vec<String>,
+}
+
+impl Gates {
+    fn is_default(&self) -> bool {
+        self.human.is_empty()
+    }
+
+    /// The gates, read; an entry that names no legal move is an error, so a typo never
+    /// silently gates nothing.
+    pub fn parse(&self) -> std::result::Result<Vec<Gate>, String> {
+        self.human.iter().map(|e| Gate::parse(e)).collect()
+    }
+}
+
+/// One move kept for the human by the project's config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gate {
+    pub kind: Kind,
+    /// `None`: from any state.
+    pub from: Option<State>,
+    pub to: State,
+}
+
+impl Gate {
+    fn parse(entry: &str) -> std::result::Result<Gate, String> {
+        let form = || format!("`{entry}`: write it as `kind: from -> to`, or `kind: -> to`");
+        let (kind, mv) = entry.split_once(':').ok_or_else(form)?;
+        let (from, to) = mv.split_once("->").ok_or_else(form)?;
+        let kind: Kind = kind
+            .trim()
+            .parse()
+            .map_err(|_| format!("`{entry}`: no kind `{}`", kind.trim()))?;
+        let state = |s: &str| -> std::result::Result<State, String> {
+            match s.parse::<State>() {
+                Ok(st) if kind.states().contains(&st) => Ok(st),
+                _ => Err(format!(
+                    "`{entry}`: a {kind} has no state `{s}`; its states: {}",
+                    names(kind.states())
+                )),
+            }
+        };
+        let to = state(to.trim())?;
+        let from = match from.trim() {
+            "" => None,
+            f => Some(state(f)?),
+        };
+        match from {
+            Some(f) if !kind.can_move(f, to) => Err(format!(
+                "`{entry}`: a {kind} cannot move from {f} to {to}; from {f} it can move to: {}",
+                names(kind.next_states(f))
+            )),
+            None if !kind.states().iter().any(|f| kind.can_move(*f, to)) => {
+                Err(format!("`{entry}`: no {kind} ever moves to {to}"))
+            }
+            _ => Ok(Gate { kind, from, to }),
+        }
+    }
+
+    /// Whether this gate keeps moving a `kind` from `from` to `to` for the human.
+    pub fn holds(&self, kind: Kind, from: State, to: State) -> bool {
+        self.kind == kind && self.to == to && self.from.is_none_or(|f| f == from)
+    }
+}
+
+fn names(states: &[State]) -> String {
+    let names: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
+    names.join(", ")
 }
 
 /// Memory settings. Every field is optional.
@@ -201,6 +280,8 @@ pub struct Links {
 pub struct Workspace {
     dir: PathBuf,
     config: Config,
+    /// The config's gates, read.
+    gates: Vec<Gate>,
     log: Log,
     store: Store,
     warnings: Vec<String>,
@@ -253,6 +334,7 @@ impl Workspace {
             prefix,
             hooks: Hooks::default(),
             memory: Memory::default(),
+            gates: Gates::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -277,9 +359,12 @@ impl Workspace {
     pub fn open_dir(dir: &Path) -> Result<Workspace> {
         let config = load_config(dir)?;
         let store = Store::open(&dir.join("livtk.db"))?;
+        // Checked as the config loaded.
+        let gates = config.gates.parse().unwrap_or_default();
         let mut ws = Workspace {
             dir: dir.to_path_buf(),
             config,
+            gates,
             log: Log::new(dir.join("events.jsonl")),
             store,
             warnings: Vec::new(),
@@ -306,6 +391,21 @@ impl Workspace {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Whether only a human may move a `kind` from `from` to `to` here: a built-in gate, or one
+    /// the project's config adds.
+    pub fn human_only(&self, kind: Kind, from: State, to: State) -> bool {
+        kind.human_only(from, to) || self.gate(kind, from, to).is_some()
+    }
+
+    /// The gates this project's config adds to the built-in ones.
+    pub fn gates(&self) -> &[Gate] {
+        &self.gates
+    }
+
+    fn gate(&self, kind: Kind, from: State, to: State) -> Option<&Gate> {
+        self.gates.iter().find(|g| g.holds(kind, from, to))
     }
 
     /// Bring the store up to date with the log, and say whether anything changed since this
@@ -483,6 +583,17 @@ impl Workspace {
         let mut out = self.store.list(Kind::Task, &[State::Planned])?;
         out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
+        // What waits on a gate the config adds; a gate from any state guards a move but makes
+        // nothing wait.
+        for g in &self.gates {
+            if let Some(from) = g.from {
+                for s in self.store.list(g.kind, &[from])? {
+                    if !out.iter().any(|o| o.id == s.id) {
+                        out.push(s);
+                    }
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -1028,6 +1139,12 @@ impl Workspace {
         if n.kind.human_only(from, to) && !by.is_human() {
             return Err(Error::Refused(human_only_reason(n)));
         }
+        if self.gate(n.kind, from, to).is_some() && !by.is_human() {
+            return Err(Error::Refused(format!(
+                "this project keeps moving a {} to {to} for the human ([gates] in .livtk/config.toml); ask the developer to run `livtk move {} {to}` or to do it in the app",
+                n.kind, n.key
+            )));
+        }
         if to == State::Doing {
             let (deps, _) = self.store.links(n.id, Rel::DependsOn)?;
             let waiting: Vec<String> = deps
@@ -1130,6 +1247,10 @@ fn load_config(dir: &Path) -> Result<Config> {
         )));
     }
     validate_project_prefix(&config.prefix).map_err(|e| bad(e.to_string()))?;
+    config
+        .gates
+        .parse()
+        .map_err(|e| bad(format!("[gates] human: {e}")))?;
     Ok(config)
 }
 

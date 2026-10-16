@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use livtk_core::event::Event;
-use livtk_core::{Actor, Brief, Command, Kind, Links, Node, Rel, State, Summary, Workspace};
+use livtk_core::{Actor, Brief, Command, Gate, Kind, Links, Node, Rel, State, Summary, Workspace};
 use uuid::Uuid;
 
 mod activity;
@@ -15,7 +15,10 @@ mod graph;
 mod palette;
 mod saved;
 pub use activity::{FeedRow, day_label, describe};
-pub use flow::{Arrow, Look, Step, arrows, flow_of, has_flow, state_name, state_short, steps};
+pub use flow::{
+    Arrow, Look, Step, arrows, arrows_with, flow_of, has_flow, state_name, state_short, steps,
+    steps_with,
+};
 pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, FIT_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,
@@ -377,6 +380,16 @@ impl Model {
         self.projects.get(self.current)
     }
 
+    /// The gates the open project's config adds to the built-in ones.
+    pub fn gates(&self) -> &[Gate] {
+        self.project().map_or(&[], |p| p.ws.gates())
+    }
+
+    /// The moves a `kind` in `state` can make in the open project, its gates counted.
+    pub fn choices(&self, kind: Kind, state: State) -> Vec<Choice> {
+        choices_with(kind, state, self.gates())
+    }
+
     pub fn select_project(&mut self, index: usize) {
         if index < self.projects.len() && index != self.current {
             self.current = index;
@@ -529,7 +542,7 @@ impl Model {
     pub fn decide(&mut self) {
         let choice = self
             .acted_on()
-            .map(|r| choices(r.kind, r.state))
+            .map(|r| self.choices(r.kind, r.state))
             .and_then(|c| {
                 c.into_iter()
                     .find(|c| c.decides && !matches!(c.to, State::Rejected | State::Retired))
@@ -1023,9 +1036,14 @@ pub fn drop_allowed(kind: Kind, state: State, priority: u8, target: GroupKey) ->
 
 /// What the human can do with a node of `kind` in `state`, most important first.
 pub fn choices(kind: Kind, state: State) -> Vec<Choice> {
+    choices_with(kind, state, &[])
+}
+
+/// `choices`, with the gates a project's config adds counted as the human's decisions.
+pub fn choices_with(kind: Kind, state: State, gates: &[Gate]) -> Vec<Choice> {
     let mut out = Vec::new();
     for &to in kind.next_states(state) {
-        let decides = kind.human_only(state, to);
+        let decides = kind.human_only(state, to) || gates.iter().any(|g| g.holds(kind, state, to));
         let label = match (kind, to) {
             (Kind::Task, State::Acked) if state == State::Planned => "Acknowledge",
             (Kind::Task, State::Acked) => "Pause",
@@ -1097,7 +1115,7 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
     .filter(|g| !g.briefs.is_empty())
     .collect();
     Ok(Detail {
-        choices: choices(node.kind, node.state),
+        choices: choices_with(node.kind, node.state, ws.gates()),
         links,
         history: ws.history(Some(&key))?,
         replaces,

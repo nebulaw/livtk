@@ -6,7 +6,7 @@ use std::io::Write as _;
 
 use anyhow::Result;
 use livtk_core::event::{Event, Op};
-use livtk_core::{Hit, Kind, Node, Rel, State, Summary, Workspace};
+use livtk_core::{Gate, Hit, Kind, Node, Rel, State, Summary, Workspace};
 use serde::Serialize;
 use serde_json::json;
 
@@ -235,7 +235,7 @@ pub fn moved(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Res
     Ok(())
 }
 
-pub fn inbox(items: &[Summary], json: bool) -> Result<()> {
+pub fn inbox(items: &[Summary], gates: &[Gate], json: bool) -> Result<()> {
     if json {
         return print_json(&items);
     }
@@ -246,11 +246,21 @@ pub fn inbox(items: &[Summary], json: bool) -> Result<()> {
     let width = items.iter().map(|t| t.key.len()).max().unwrap_or(0);
     let mut text = String::new();
     for t in items {
+        // What it waits on a project's gate for: `move to done`, say.
+        let gated: Vec<&str> = gates
+            .iter()
+            .filter(|g| g.kind == t.kind && g.from == Some(t.state))
+            .map(|g| g.to.as_str())
+            .collect();
+        let moves;
         let action = match t.kind {
-            Kind::Task => "ack",
-            Kind::Lesson => "ratify or reject",
-            Kind::Decision => "accept or reject",
-            Kind::Finding => "",
+            Kind::Task if t.state == State::Planned => "ack",
+            Kind::Lesson if t.state == State::Proposed => "ratify or reject",
+            Kind::Decision if t.state == State::Proposed => "accept or reject",
+            _ => {
+                moves = format!("move to {}", gated.join(" or "));
+                &moves
+            }
         };
         writeln!(text, "  {:width$}  {:<16}  {}", t.key, action, t.title)?;
     }

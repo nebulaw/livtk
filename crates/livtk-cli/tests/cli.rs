@@ -282,6 +282,40 @@ fn any_link_from_the_command_line_read_from_either_end() {
 }
 
 #[test]
+fn a_gate_in_the_config_keeps_a_move_for_the_human() {
+    let dir = project();
+    let d = dir.path();
+    let config = d.join(".livtk/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text + "\n[gates]\nhuman = [\"task: review -> done\"]\n",
+    )
+    .unwrap();
+    ok(d, As::Claude, &["new", "a"]);
+    ok(d, As::Claude, &["move", "1", "planned"]);
+    ok(d, As::Human, &["ack", "1"]);
+    ok(d, As::Claude, &["start", "1"]);
+    ok(d, As::Claude, &["move", "1", "review"]);
+    assert_eq!(
+        json(d, &["inbox"]).as_array().unwrap()[0]["key"],
+        "LIV-1",
+        "waiting for the human"
+    );
+    let inbox = ok(d, As::Human, &["inbox"]);
+    assert!(inbox.contains("LIV-1  move to done"), "{inbox}");
+    let refused = livtk(d, As::Claude, &["done", "1"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "a gate refusal exits with 3"
+    );
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("[gates]"));
+    ok(d, As::Human, &["done", "1"]);
+    assert_eq!(json(d, &["show", "1"])["node"]["state"], "done");
+}
+
+#[test]
 fn errors_are_one_line_with_a_hint() {
     let dir = tempfile::tempdir().unwrap();
     let out = livtk(dir.path(), As::Claude, &["list"]);

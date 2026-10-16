@@ -25,8 +25,8 @@ use uuid::Uuid;
 use crate::model::{
     Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
     Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Saved,
-    SavedWindow, Step, View, arrows, choices, describe, drop_allowed, has_flow, link_choices,
-    link_curve, state_name, state_short, steps, visible_runs,
+    SavedWindow, Step, View, arrows_with, describe, drop_allowed, has_flow, link_choices,
+    link_curve, state_name, state_short, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -714,7 +714,7 @@ impl LivtkApp {
         let found = self
             .model
             .selected()
-            .map(|r| choices(r.kind, r.state))
+            .map(|r| self.model.choices(r.kind, r.state))
             .and_then(|c| c.into_iter().find(|c| pick(c)));
         if let Some(c) = found {
             self.choose(&c, cx);
@@ -2123,7 +2123,7 @@ impl LivtkApp {
             );
         div().relative().flex_none().child(button).when(open, |d| {
             let mut panel = menu_panel(220.).debug_selector(|| "set-state-menu".into());
-            let all = steps(kind, state);
+            let all = steps_with(kind, state, self.model.gates());
             let mut side = false;
             for s in &all {
                 if !s.main && !side {
@@ -2204,13 +2204,13 @@ impl LivtkApp {
     /// off it below. Where it is now is filled; where it can go is outlined and clickable, in
     /// the accent when that move is the human's own decision; the rest is dim.
     fn state_flow(&self, id: Uuid, kind: Kind, state: State, cx: &mut Context<Self>) -> Div {
-        let all = steps(kind, state);
+        let all = steps_with(kind, state, self.model.gates());
         let mut path = div()
             .debug_selector(|| "state-flow".into())
             .w_full()
             .flex()
             .items_start();
-        let lit = arrows(kind, state);
+        let lit = arrows_with(kind, state, self.model.gates());
         for (i, s) in all.iter().filter(|s| s.main).enumerate() {
             if i > 0 {
                 path = path.child(flow_arrow(i - 1, lit[i - 1]));

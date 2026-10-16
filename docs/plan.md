@@ -871,6 +871,15 @@ Asked for while trying the app, and built in one batch:
   now treats it as one link whichever end made it: linking from the other end changes nothing,
   and unlinking works from either end. `show` lists related nodes, which it did not, and the
   panel's "Related from" group joined "Related to".
+- Human gates per project, as section 4 promised: `[gates] human = ["task: review -> done"]` in
+  `.livtk/config.toml`, each entry `kind: from -> to` or `kind: -> to` from any state. Decided
+  (developer, 2026-10-16): the config only adds gates, never removes the built-in ones, because
+  the file is in the repository and the text guard does not stop a `sed -i` on it; an edit can
+  only make Claude stricter. An entry naming no legal move is a config error. The core enforces
+  them on every move (`Workspace::human_only`); what waits on a gate from a state joins the
+  inbox, with its move in `livtk inbox`; the session brief names them; the app marks them as
+  the human's decisions and `a` takes them. The Bash guard stays a text check of the built-in
+  verbs, as the core refuses the rest.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

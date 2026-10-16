@@ -275,6 +275,13 @@ fn brief(ws: &Workspace, subagent: bool) -> Option<String> {
         ws,
         false,
     );
+    if !ws.config().gates.human.is_empty() {
+        let _ = writeln!(
+            b,
+            "This project also keeps these moves for the human: {}.",
+            ws.config().gates.human.join("; ")
+        );
+    }
     let lessons = inbox.iter().filter(|s| s.kind == Kind::Lesson).count();
     let decisions = inbox.iter().filter(|s| s.kind == Kind::Decision).count();
     if lessons + decisions > 0 {

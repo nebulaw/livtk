@@ -30,7 +30,17 @@ format = ["rustfmt", "--edition", "2024", "{file}"]   # after Claude edits a mat
 format_extensions = ["rs"]
 check = ["cargo", "check", "--quiet"]                 # before the implementer agent may stop
 check_agents = ["livtk:implementer"]
+
+[gates]
+human = ["task: review -> done", "task: -> canceled"]  # more moves only you may make
 ```
+
+Acknowledging a plan and deciding what binds (ratifying, accepting, rejecting, retiring) are
+always yours. `[gates]` can only add to them: the file is in the repository, where Claude could
+change it, so an edit to it can make Claude stricter, never freer. An entry is `kind: from ->
+to`, or `kind: -> to` from any state; one that names no legal move stops livtk with an error.
+What waits on a gate from a state shows in your inbox, and the app marks such moves as your
+decisions.
 
 ## Use
 

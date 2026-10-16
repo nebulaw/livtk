@@ -144,6 +144,28 @@ fn the_session_brief_shows_the_state_of_the_work() {
 }
 
 #[test]
+fn the_brief_names_the_moves_a_project_keeps_for_the_human() {
+    let dir = project();
+    let d = dir.path();
+    livtk(d, false, &["new", "draw a window"]);
+    let path = d.join(".livtk/config.toml");
+    let config = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        config + "\n[gates]\nhuman = [\"task: review -> done\"]\n",
+    )
+    .unwrap();
+    let input = json!({ "hook_event_name": "SessionStart", "source": "startup", "cwd": d });
+    let v = answer("session-start", &input).unwrap();
+    assert!(
+        context_of(&v)
+            .contains("This project also keeps these moves for the human: task: review -> done."),
+        "{}",
+        context_of(&v)
+    );
+}
+
+#[test]
 fn a_subagent_brief_is_short_and_says_it_is_signed() {
     let dir = project();
     livtk(dir.path(), false, &["new", "x"]);

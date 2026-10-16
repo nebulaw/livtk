@@ -130,6 +130,65 @@ fn ratifying_as_a_standing_rule_from_the_app() {
 }
 
 #[test]
+fn a_gate_the_project_adds_is_the_humans_decision_in_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = project(dir.path());
+    let k = planned(&mut ws, "ship it");
+    ws.execute(
+        Command::Move {
+            node: k.clone(),
+            to: State::Acked,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    for to in [State::Doing, State::Review] {
+        ws.execute(
+            Command::Move {
+                node: k.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    drop(ws);
+    let config = dir.path().join(".livtk/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text + "\n[gates]\nhuman = [\"task: review -> done\"]\n",
+    )
+    .unwrap();
+
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    assert_eq!(keys(&m), std::slice::from_ref(&k), "it waits in the inbox");
+    let done = m
+        .choices(Kind::Task, State::Review)
+        .into_iter()
+        .find(|c| c.to == State::Done)
+        .unwrap();
+    assert!(done.decides, "marked as the human's decision");
+    assert!(
+        !choices(Kind::Task, State::Review)
+            .into_iter()
+            .any(|c| c.decides),
+        "which the built-in gates alone do not make it"
+    );
+    let flow = livtk_app::model::steps_with(Kind::Task, State::Review, m.gates());
+    let step = flow.iter().find(|s| s.state == State::Done).unwrap();
+    assert_eq!(
+        step.look(),
+        livtk_app::model::Look::Decision,
+        "drawn as one"
+    );
+    m.decide();
+    assert!(m.notice.is_none(), "{:?}", m.notice);
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert_eq!(ws.node(&k).unwrap().state, State::Done, "and `a` takes it");
+}
+
+#[test]
 fn changes_from_elsewhere_arrive_on_the_next_tick_and_flash() {
     let dir = tempfile::tempdir().unwrap();
     let mut claude = project(dir.path());

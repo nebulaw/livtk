@@ -722,6 +722,46 @@ rows; they now act on the node open in the panel when no row is selected, which 
 palette act from the feed. When the human acts from the feed, their event lands on top and the
 highlight stays on the event it was on, one line lower.
 
+## 20. Milestone 5, part 3 in detail: the graph
+
+**Goal.** See how the work hangs together: every task, lesson, decision and finding and the
+links between them, laid out so dependencies read at a glance, and any node one click away.
+Built while the developer was away, on their instruction to finish the milestone; every step is
+tested and left for their review.
+
+**Behaviour**
+
+- A **Graph** view (`g r`) in the sidebar. Nodes are cards as in Linear: the state mark, the key
+  and the title; the selected one has an accent outline. Dismissed work is left out unless `h`
+  shows it, as in the lists.
+- **Links** are lines with an arrow: a dependency points from what must be done first to what
+  waits for it, so work flows along the arrows. Other links (relates, supersedes, learned from,
+  parent) are fainter. Selecting a node brings out its links and neighbours and dims the rest.
+- **Layout**: linked nodes by a force layout (spring along links, repulsion between nodes,
+  gravity to the centre), deterministic for the same graph; nodes without links sit in a tidy
+  grid beside it rather than as a cloud. When the graph changes, the layout starts from the old
+  positions, so nodes stay where the eye left them.
+- **Moving around**: drag the background to pan, scroll to pan, Ctrl+scroll to zoom at the
+  pointer, `+`/`-` to zoom, `0` to fit everything. Opening the view fits it. Zoomed far out,
+  cards shrink to dots.
+- **Selecting**: a click selects and opens the detail panel, whose actions act on the node;
+  `j`/`k` step through nodes in reading order; `Enter` opens; `Esc` closes.
+
+**Core.** `Workspace::edges()`: every link, cheap.
+
+**App.** The graph, its layout, the camera (pan, zoom at a point, fit) and the selection live in
+the model, tested in plain Rust. The view draws links on a canvas and nodes as elements, and only
+what is on screen.
+
+**Budget.** The layout of 1,000 nodes under 150 ms and of a real project's hundred or so under
+10 ms; a frame of 1,000 nodes drawn smoothly because only visible ones are.
+
+**Steps**, each its own commit: `edges()`; the model (graph, layout, camera, selection) with
+tests and a benchmark; the view with headless UI tests; README, plan and install.
+
+**Done when** the graph of a real project opens fitted, reads clearly, pans and zooms smoothly,
+and any node opens in a click.
+
 ## 18. Milestone 6 in outline: the team
 
 Decided (developer, 2026-10-16): after milestone 5. livtk becomes a team tool, Linear tailored to

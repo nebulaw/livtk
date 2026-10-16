@@ -2267,3 +2267,90 @@ fn a_checkout_is_caught_up_in_the_background_and_shown(cx: &mut TestAppContext) 
         "while it catches up, the sidebar says so"
     );
 }
+
+#[gpui_kit::test]
+fn ctrl_enter_in_the_new_tasks_body_creates_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("n");
+    cx.run_until_parked();
+    cx.simulate_input("with a plan");
+    click_on(cx, "new-task-body");
+    cx.simulate_input("goal: ship it");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("check: it runs");
+    cx.simulate_keystrokes("ctrl-enter");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(!a.form_open(), "created, the form closed")
+    });
+    let ws = Workspace::open(dir.path()).unwrap();
+    let created = ws
+        .tasks(&[])
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "with a plan")
+        .expect("created");
+    assert_eq!(
+        ws.node(&created.key).unwrap().body,
+        "goal: ship it\ncheck: it runs",
+        "Enter made a line; Ctrl+Enter only created it"
+    );
+}
+
+/// Whether the gliding highlight is nearer `from`'s line than `to`'s: where it starts.
+fn glide_starts_at(cx: &mut gpui_kit::VisualTestContext, from: &'static str, to: &'static str) {
+    let glide = cx
+        .debug_bounds("glide")
+        .expect("the highlight glides")
+        .center()
+        .y;
+    let from = cx.debug_bounds(from).unwrap().center().y;
+    let to = cx.debug_bounds(to).unwrap().center().y;
+    assert!(
+        (glide - from).abs() < (glide - to).abs(),
+        "it starts at the line it leaves: {glide:?}, from {from:?}, to {to:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_selection_glides_one_row_and_jumps_otherwise(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    cx.simulate_keystrokes("j");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().selected().unwrap().key, "LIV-2")
+    });
+    glide_starts_at(cx, "key-LIV-1", "key-LIV-2");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("glide").is_none(),
+        "done, the row draws its own highlight"
+    );
+
+    cx.simulate_keystrokes("k");
+    redraw(cx);
+    glide_starts_at(cx, "key-LIV-2", "key-LIV-1");
+    settle(cx);
+
+    click_on(cx, "key-LIV-2");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().selected().unwrap().key, "LIV-2")
+    });
+    assert!(cx.debug_bounds("glide").is_none(), "a click jumps");
+
+    // In the feed too, line by line.
+    cx.simulate_keystrokes("g a");
+    redraw(cx);
+    cx.simulate_keystrokes("j");
+    redraw(cx);
+    glide_starts_at(cx, "event-0", "event-1");
+    // Switching view while it glides drops it.
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    assert!(cx.debug_bounds("glide").is_none(), "a jump never glides");
+}

@@ -595,7 +595,8 @@ efficiency, one typeface, quiet borders, generous but tight spacing. Visual cues
 coloured state mark beside every key, priority as a small bar glyph, blocked work dimmed with a
 lock, what waits for the human highlighted in the accent colour. Transitions are short and
 purposeful (about 150 ms, ease out): the detail panel slides in, a row acknowledged from the
-Inbox fades away, the selection glides, new events from Claude flash once.
+Inbox fades away, the selection glides (built after milestone 5, section 21), new events from
+Claude flash once.
 
 **Not in v1** (milestone 5): the graph view, search and the command palette, the activity feed.
 
@@ -911,6 +912,20 @@ Asked for while trying the app, and built in one batch:
     `tokenizers`). An unmaintained direct dependency fails the check.
   - The database is fetched each run (about a second), the cached copy used offline. Each rule
     was seen to fail once on purpose.
+- The selection glides, as section 16 promised: `j` or `k` between two neighbouring lines of a
+  list (the views' lists, the inbox, the feed) slides the highlight there in 120 ms, ease out.
+  A click, a jump of more than one line, a band between the lines, the board and the graph do
+  not glide, and neither does a glide whose target is no longer selected. Lines paint top to
+  bottom, so a highlight sliding out of the lower line would cover the upper one's text. The
+  gliding highlight is therefore drawn by the upper of the two lines, under the lower one's
+  text, and handed back to the row when it ends.
+- A key renumbered after a merge shows the key it was created with in the app as well: "created
+  it as LIV-13" in the panel's timeline, "created as LIV-13" in the feed (`created_as`).
+- Ctrl+Enter in the new task's body created nothing and put in a line, the developer found. The
+  textarea takes Ctrl+Enter itself, so the form's binding never saw it. It reports it as a
+  secondary Enter, after putting in the newline Enter does. The form now listens for that, as
+  the detail panel's editor already did, and trims the newline. A test types a two-line plan and
+  creates the task with Ctrl+Enter, and fails without the fix.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

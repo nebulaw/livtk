@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use jiff::civil::date;
-use livtk_app::model::{FeedRow, Model, View, day_label, describe};
+use livtk_app::model::{FeedRow, Model, View, created_as, day_label, describe};
 use livtk_core::event::Op;
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
@@ -57,6 +57,53 @@ fn days_are_headed_as_linear_heads_them() {
     assert_eq!(day_label(date(2026, 10, 12), today), "Monday");
     assert_eq!(day_label(date(2026, 9, 3), today), "September 3");
     assert_eq!(day_label(date(2025, 12, 31), today), "December 31, 2025");
+}
+
+#[test]
+fn a_key_renumbered_by_a_merge_shows_the_key_it_was_created_with() {
+    let (ours, theirs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut ws = Workspace::init(ours.path(), Some("LIV")).unwrap();
+    create(&mut ws, "ours");
+    drop(ws);
+    let mut other = Workspace::init(theirs.path(), Some("LIV")).unwrap();
+    create(&mut other, "theirs");
+    drop(other);
+    // A merge of two branches that both created LIV-1: both lines kept, theirs the later.
+    let log = |d: &Path| d.join(".livtk/events.jsonl");
+    let mut merged = std::fs::read_to_string(log(ours.path())).unwrap();
+    merged.push_str(&std::fs::read_to_string(log(theirs.path())).unwrap());
+    std::fs::write(log(ours.path()), merged).unwrap();
+
+    let mut m = Model::open(&[ours.path().to_path_buf()]);
+    m.set_models_dir(None);
+    m.set_view(View::Activity);
+    let theirs = m
+        .activity
+        .iter()
+        .find(|a| a.node.as_ref().is_some_and(|n| n.title == "theirs"))
+        .unwrap();
+    assert_eq!(theirs.node.as_ref().unwrap().key, "LIV-2", "renumbered");
+    assert_eq!(
+        describe(theirs),
+        "created as LIV-1",
+        "the feed says what it was"
+    );
+    assert_eq!(
+        created_as(&theirs.event, "LIV-2"),
+        Some("LIV-1"),
+        "and so does the panel"
+    );
+    let ours = m
+        .activity
+        .iter()
+        .find(|a| a.node.as_ref().is_some_and(|n| n.title == "ours"))
+        .unwrap();
+    assert_eq!(
+        describe(ours),
+        "created",
+        "a key that stayed says nothing more"
+    );
+    assert_eq!(created_as(&ours.event, "LIV-1"), None);
 }
 
 #[test]

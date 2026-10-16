@@ -25,8 +25,8 @@ use uuid::Uuid;
 use crate::model::{
     Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
     Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Saved,
-    SavedWindow, Step, View, arrows_with, describe, drop_allowed, has_flow, link_choices,
-    link_curve, state_name, state_short, steps_with, visible_runs,
+    SavedWindow, Step, View, arrows_with, created_as, describe, drop_allowed, has_flow,
+    link_choices, link_curve, state_name, state_short, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -85,6 +85,8 @@ const FLASH: Duration = Duration::from_millis(900);
 /// The detail panel opening and closing: it grows from the right edge and the list makes room.
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
+/// The selection's highlight gliding to the next row or the one before.
+const GLIDE: Duration = Duration::from_millis(120);
 /// The detail panel's width: dragged by its left edge between these, never more than a share of
 /// the window. Where the content would be left narrower than `CONTENT_MIN`, it floats over it.
 const PANEL_WIDTH: f32 = 480.;
@@ -374,6 +376,9 @@ pub struct LivtkApp {
     /// Counts openings and closings, so each plays its animation once and switching rows in an
     /// open panel plays none.
     detail_epoch: usize,
+    /// The selection's highlight on its way from one row to the next, after `j` or `k`.
+    glide: Option<Glide>,
+    glide_epoch: usize,
     menu: Option<Menu>,
     /// The menu the mouse-down being dispatched closed, if any: see `toggle_menu`.
     menu_closed: Option<Menu>,
@@ -442,6 +447,8 @@ impl LivtkApp {
             last_detail: None,
             detail_leaving: None,
             detail_epoch: 0,
+            glide: None,
+            glide_epoch: 0,
             menu: None,
             menu_closed: None,
             _subscriptions: subscriptions,
@@ -705,6 +712,85 @@ impl LivtkApp {
         cx.notify();
     }
 
+    /// `j` or `k`: move the selection `by` one, its highlight gliding there when the two rows
+    /// are next to each other in a list (no band between them, not on the board or the graph).
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let before = self.spot();
+        self.model.select_by(by);
+        let after = self.spot();
+        self.glide = match (before, after) {
+            (Some((from, i)), Some((to, j))) if i.abs_diff(j) == 1 => {
+                self.glide_epoch += 1;
+                let epoch = self.glide_epoch;
+                // Done, the row draws its own highlight again.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(GLIDE).await;
+                    let _ = this.update(cx, |app, cx| {
+                        if app.glide.as_ref().is_some_and(|g| g.epoch == epoch) {
+                            app.glide = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                Some(Glide {
+                    from,
+                    to,
+                    down: j > i,
+                    epoch,
+                })
+            }
+            _ => None,
+        };
+        self.after_move(cx);
+    }
+
+    /// The selection as a list shows it: the name its line goes by, and the line's place.
+    fn spot(&self) -> Option<(String, usize)> {
+        match self.model.view {
+            View::Graph => None,
+            View::Tasks if self.model.layout == Layout::Board => None,
+            View::Activity => {
+                let i = self.model.activity_index;
+                let at = self
+                    .model
+                    .feed()
+                    .iter()
+                    .position(|r| *r == FeedRow::Event(i))?;
+                Some((format!("event-{i}"), at))
+            }
+            View::Inbox => {
+                let i = self.model.selected_index()?;
+                Some((self.model.rows.get(i)?.key.clone(), i))
+            }
+            _ => Some((self.model.selected()?.key.clone(), self.display_index()?)),
+        }
+    }
+
+    /// How the line named `name` draws the selection: its own highlight (when it is selected
+    /// and nothing glides), and a gliding one from and to these offsets, in rows. The glide is
+    /// drawn by the upper of its two lines, under the lower one's text: lines paint top to
+    /// bottom, so from the lower one it would cover the text above.
+    fn highlight(&self, name: &str, selected: bool) -> (bool, Option<(f32, f32, usize)>) {
+        let current = match self.model.view {
+            View::Activity => Some(format!("event-{}", self.model.activity_index)),
+            _ => self.model.selected().map(|r| r.key.clone()),
+        };
+        let Some(g) = self
+            .glide
+            .as_ref()
+            .filter(|g| Some(&g.to) == current.as_ref())
+        else {
+            return (selected, None);
+        };
+        let moving = match (g.down, name == g.from, name == g.to) {
+            (true, true, _) => Some((0., 1., g.epoch)),
+            (false, _, true) => Some((1., 0., g.epoch)),
+            _ => None,
+        };
+        (selected && name != g.to, moving)
+    }
+
     fn choose(&mut self, choice: &Choice, cx: &mut Context<Self>) {
         self.model.choose(choice);
         cx.notify();
@@ -735,6 +821,17 @@ impl LivtkApp {
             }
         });
         self._subscriptions.push(sub);
+        // The body's textarea takes Ctrl+Enter itself, so the form's binding never sees it: it
+        // reports it as a secondary Enter (after putting in the newline Enter does).
+        let sub = cx.subscribe_in(&body, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter {
+                secondary: true, ..
+            } = event
+            {
+                this.submit_form(window, cx);
+            }
+        });
+        self._subscriptions.push(sub);
         title.read(cx).focus_handle(cx).focus(window, cx);
         self.form = Some(NewTaskForm {
             title,
@@ -747,7 +844,8 @@ impl LivtkApp {
     fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = &self.form else { return };
         let title = form.title.read(cx).value().to_string();
-        let body = form.body.read(cx).value().to_string();
+        // Without the newline Ctrl+Enter leaves at the end.
+        let body = form.body.read(cx).value().trim_end().to_owned();
         if self.model.create_task(&title, &body, Some(form.priority)) {
             self.form = None;
             self.sync_filter(window, cx);
@@ -2916,17 +3014,20 @@ impl LivtkApp {
         let (key, title) = a.node.as_ref().map_or((String::new(), String::new()), |b| {
             (b.key.clone(), b.title.clone())
         });
+        let (own, moving) = self.highlight(&format!("event-{index}"), on);
         let line = div()
             .id(SharedString::from(format!("event-{index}")))
             .debug_selector(move || format!("event-{index}"))
+            .relative()
             .w_full()
             .h(px(ROW))
             .px_4()
             .flex()
             .items_center()
             .gap_2()
-            .when(on, |d| d.bg(color(SELECTED)))
+            .when(own, |d| d.bg(color(SELECTED)))
             .when(!on, |d| d.hover(|s| s.bg(color(HOVER))))
+            .children(moving.map(|(from, to, epoch)| glide_highlight(from, to, epoch)))
             .child(
                 div()
                     .size(px(6.))
@@ -3130,8 +3231,10 @@ impl LivtkApp {
         let id = r.id;
         let flash = self.model.flashed.get(&id).copied();
         let blocked = r.blocked && !r.state.is_closed();
+        let (own, moving) = self.highlight(&r.key, selected);
         let mut row = div()
             .id(SharedString::from(format!("row-{}", r.key)))
+            .relative()
             .w_full()
             .h(px(ROW))
             .flex_none()
@@ -3141,9 +3244,10 @@ impl LivtkApp {
             .gap_3()
             .border_b_1()
             .border_color(color(CONTENT))
-            .when(selected, |d| d.bg(color(SELECTED)))
+            .when(own, |d| d.bg(color(SELECTED)))
             .when(!selected, |d| d.hover(|s| s.bg(color(HOVER))))
-            .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }));
+            .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }))
+            .children(moving.map(|(from, to, epoch)| glide_highlight(from, to, epoch)));
         // Every row leads with the same slot, so keys, states and titles line up whatever the
         // kind: a task's priority, else the kind's icon.
         row = if r.kind == Kind::Task {
@@ -3511,7 +3615,7 @@ impl LivtkApp {
         let body = self.detail_body(n, cx);
         let mut timeline = div().flex().flex_col().gap_3();
         for e in d.history.iter().rev() {
-            timeline = timeline.child(event_line(e));
+            timeline = timeline.child(event_line(e, &n.key));
         }
         div()
             .id(SharedString::from(format!("detail-{}", n.key)))
@@ -3699,12 +3803,15 @@ impl LivtkApp {
             // Flush with the card's edge, as the breadcrumb above them is.
             .child(flush_input(Input::new(&form.title).text_lg(), 32.))
             .child(
-                div().mx(-TEXTAREA_PX).child(
-                    Textarea::new(&form.body)
-                        .appearance(false)
-                        .xsmall()
-                        .text_sm(),
-                ),
+                div()
+                    .debug_selector(|| "new-task-body".into())
+                    .mx(-TEXTAREA_PX)
+                    .child(
+                        Textarea::new(&form.body)
+                            .appearance(false)
+                            .xsmall()
+                            .text_sm(),
+                    ),
             )
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
@@ -4121,14 +4228,8 @@ impl Render for LivtkApp {
             .min_h_0()
             .key_context(NAV)
             .track_focus(&self.nav)
-            .on_action(cx.listener(|this, _: &Down, _, cx| {
-                this.model.select_by(1);
-                this.after_move(cx);
-            }))
-            .on_action(cx.listener(|this, _: &Up, _, cx| {
-                this.model.select_by(-1);
-                this.after_move(cx);
-            }))
+            .on_action(cx.listener(|this, _: &Down, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &Up, _, cx| this.step(-1, cx)))
             .on_action(cx.listener(|this, _: &Open, _, cx| {
                 this.model.open_detail();
                 cx.notify();
@@ -4300,6 +4401,33 @@ enum Menu {
     Standing,
     /// The projects, from the collapsed sidebar's rail.
     Projects,
+}
+
+/// The selection's highlight gliding between two neighbouring lines, named as `spot` names them.
+struct Glide {
+    from: String,
+    to: String,
+    /// Towards the end of the list.
+    down: bool,
+    epoch: usize,
+}
+
+/// The highlight on its way between two lines, drawn by the upper one: from and to offsets in
+/// rows below it.
+fn glide_highlight(from: f32, to: f32, epoch: usize) -> AnyElement {
+    div()
+        .debug_selector(|| "glide".into())
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(ROW))
+        .bg(color(SELECTED))
+        .with_animation(
+            SharedString::from(format!("glide-{epoch}")),
+            Animation::new(GLIDE).with_easing(ease_out_cubic),
+            move |el, t| el.top(px((from + (to - from) * t) * ROW)),
+        )
+        .into_any_element()
 }
 
 /// An edge the human drags to resize: the sidebar's right, the detail panel's left.
@@ -4814,10 +4942,14 @@ fn who(by: &str) -> &str {
     if by == "human" { "you" } else { by }
 }
 
-fn event_line(e: &Event) -> Div {
+/// One event of the timeline of the node keyed `key` now.
+fn event_line(e: &Event, key: &str) -> Div {
     let when = ago(&e.at);
     let what = match &e.op {
-        Op::NodeCreate { .. } => "created it".to_owned(),
+        Op::NodeCreate { .. } => match created_as(e, key) {
+            Some(first) => format!("created it as {first}"),
+            None => "created it".to_owned(),
+        },
         Op::NodeSet { data, .. } => {
             let mut parts = Vec::new();
             if let Some(s) = data.state {

@@ -3,7 +3,7 @@
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use livtk_core::event::Op;
+use livtk_core::event::{Event, Op};
 use livtk_core::{Activity, Actor};
 use uuid::Uuid;
 
@@ -148,10 +148,22 @@ pub fn day_label(day: Date, today: Date) -> String {
     }
 }
 
+/// The key a node was created with, when `e` creates it and it is keyed otherwise now: two
+/// branches created the same key, and replay gave this node the next free one.
+pub fn created_as<'a>(e: &'a Event, key_now: &str) -> Option<&'a str> {
+    match &e.op {
+        Op::NodeCreate { data, .. } if data.key != key_now => Some(&data.key),
+        _ => None,
+    }
+}
+
 /// What an event did, in a few words, for its line in the feed.
 pub fn describe(a: &Activity) -> String {
     match &a.event.op {
-        Op::NodeCreate { .. } => "created".to_owned(),
+        Op::NodeCreate { .. } => match a.node.as_ref().and_then(|n| created_as(&a.event, &n.key)) {
+            Some(first) => format!("created as {first}"),
+            None => "created".to_owned(),
+        },
         Op::NodeSet { data, .. } => {
             let mut parts = Vec::new();
             if let Some(s) = data.state {

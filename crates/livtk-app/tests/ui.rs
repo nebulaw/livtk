@@ -489,3 +489,29 @@ fn the_detail_panel_slides_out_before_it_goes(cx: &mut TestAppContext) {
         "gone once it has"
     );
 }
+
+#[gpui_kit::test]
+fn editing_keeps_the_shape_of_what_is_edited(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    open_detail(cx);
+    let view = cx.debug_bounds("detail-title").expect("drawn");
+    double_click_on(cx, "detail-title");
+    let editor = cx.debug_bounds("title-editor").expect("editing");
+    assert_eq!(
+        (view.origin, view.size),
+        (editor.origin, editor.size),
+        "the title editor takes the title's place exactly"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    let view = cx.debug_bounds("detail-body").expect("drawn");
+    click_on(cx, "detail-body");
+    let editor = cx.debug_bounds("body-editor").expect("editing");
+    assert_eq!(
+        view.origin, editor.origin,
+        "the body editor starts where the body was"
+    );
+    assert_eq!(view.size.width, editor.size.width);
+}

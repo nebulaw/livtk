@@ -68,6 +68,10 @@ const FLASH: Duration = Duration::from_millis(900);
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
 const DETAIL_WIDTH: f32 = 480.;
+/// The detail title's line, shared by the title and its editor.
+const TITLE_LINE: f32 = 28.;
+/// The horizontal padding GPUI Component gives an extra-small textarea.
+const TEXTAREA_PX: Pixels = px(4.);
 
 /// Quick to start, gentle to land: the panel opening.
 fn ease_out_cubic(t: f32) -> f32 {
@@ -545,21 +549,25 @@ impl LivtkApp {
         }) = &self.editing
             && *node == n.id
         {
+            // The same box as the title it replaces, so the text does not move: the input's own
+            // padding is dropped and its line height matches.
             return div()
                 .debug_selector(|| "title-editor".into())
                 .mx(px(-8.))
                 .px(px(8.))
+                .py(px(2.))
                 .rounded_xl()
                 .bg(color(HOVER))
                 .on_action(
                     cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
                 )
-                .child(
+                .child(flush_input(
                     Input::new(state)
-                        .appearance(false)
+                        .line_height(px(TITLE_LINE))
                         .text_xl()
                         .font_weight(FontWeight::SEMIBOLD),
-                )
+                    TITLE_LINE,
+                ))
                 .into_any_element();
         }
         div()
@@ -571,6 +579,7 @@ impl LivtkApp {
             .rounded_xl()
             .cursor_text()
             .hover(|s| s.bg(color(HOVER)))
+            .line_height(px(TITLE_LINE))
             .text_xl()
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(color(TEXT))
@@ -596,10 +605,10 @@ impl LivtkApp {
                 .debug_selector(|| "body-editor".into())
                 .key_context(FORM)
                 .mx(px(-8.))
-                .p(px(8.))
-                .flex()
-                .flex_col()
-                .gap_2()
+                // The view's 8 px all round, less the textarea's own padding (4 px across at
+                // this size, none down), so the text stays where it was.
+                .px(px(8.) - TEXTAREA_PX)
+                .py(px(8.))
                 .rounded_xl()
                 .bg(color(HOVER))
                 .on_action(
@@ -609,13 +618,7 @@ impl LivtkApp {
                 .on_action(
                     cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
                 )
-                .child(Textarea::new(state).appearance(false))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(color(TEXT_4))
-                        .child("Ctrl ↵ to save · Esc to cancel"),
-                )
+                .child(Textarea::new(state).appearance(false).xsmall().text_sm())
                 .into_any_element();
         }
         let empty = n.body.trim().is_empty();
@@ -1793,7 +1796,7 @@ impl LivtkApp {
         for e in d.history.iter().rev() {
             timeline = timeline.child(event_line(e));
         }
-        let panel = div()
+        div()
             .id(SharedString::from(format!("detail-{}", n.key)))
             .debug_selector(|| "detail-body-panel".into())
             .w(px(DETAIL_WIDTH))
@@ -1858,8 +1861,7 @@ impl LivtkApp {
                     .border_t_1()
                     .border_color(color(BORDER))
                     .child(Input::new(&self.note)),
-            );
-        panel
+            )
     }
 
     // ---- rendering: overlays ------------------------------------------------------------------
@@ -1960,8 +1962,16 @@ impl LivtkApp {
                     .child("New task")
                     .child(div().text_color(color(TEXT_4)).child("· starts in Backlog")),
             )
-            .child(Input::new(&form.title).appearance(false).text_lg())
-            .child(Textarea::new(&form.body).appearance(false))
+            // Flush with the card's edge, as the breadcrumb above them is.
+            .child(flush_input(Input::new(&form.title).text_lg(), 32.))
+            .child(
+                div().mx(-TEXTAREA_PX).child(
+                    Textarea::new(&form.body)
+                        .appearance(false)
+                        .xsmall()
+                        .text_sm(),
+                ),
+            )
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
                 div()
@@ -2328,6 +2338,13 @@ fn menu_divider() -> Div {
 }
 
 /// A row of a menu: what it is, from the left edge, with no empty slot before it.
+/// A single-line input with no frame and no padding of its own, `height` tall, so its text sits
+/// exactly where the surrounding layout puts it. Input's own `h` sets only a multi-line
+/// height, hence `Styled::h`.
+fn flush_input(input: Input, height: f32) -> Input {
+    Styled::h(input.appearance(false).px_0().py_0(), px(height))
+}
+
 fn option_row(id: SharedString) -> Stateful<Div> {
     div()
         .id(id)

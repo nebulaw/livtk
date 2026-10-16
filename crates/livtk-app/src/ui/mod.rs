@@ -302,6 +302,10 @@ impl LivtkApp {
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
+            // Focus can end up nowhere: the focused input was in a panel that closed, or an
+            // editor that was dropped. Keys would then reach none of the app's handlers, so it
+            // goes back to where the human is working.
+            cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)),
         ];
         // Claude, the CLI and git change the log from outside; look every 200 ms.
         let poll = cx.spawn(async move |this, cx| {
@@ -421,6 +425,20 @@ impl LivtkApp {
             }
             InputEvent::PressEnter { .. } => self.run_palette(None, window, cx),
             _ => {}
+        }
+    }
+
+    /// Give the keys to what is in front: the new-task form, the palette, else the list.
+    fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(form) = &self.form {
+            form.title.read(cx).focus_handle(cx).focus(window, cx);
+        } else if self.model.palette.is_some() {
+            self.palette_input
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        } else {
+            self.nav.focus(window, cx);
         }
     }
 
@@ -2107,6 +2125,7 @@ impl LivtkApp {
                     .child(
                         div()
                             .id("close-detail")
+                            .debug_selector(|| "close-detail".into())
                             .h(px(24.))
                             .px_2()
                             .flex()

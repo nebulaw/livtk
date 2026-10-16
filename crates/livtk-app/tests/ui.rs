@@ -714,3 +714,41 @@ fn feed_lines_span_the_feed_as_list_rows_do(cx: &mut TestAppContext) {
         "a line runs the feed's whole width"
     );
 }
+
+#[gpui_kit::test]
+fn the_keys_still_work_when_focus_was_lost(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    // Focus can end up nowhere: an input that blurs itself, a panel that closed under it.
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-?");
+    app.read_with(cx, |a, _| {
+        assert!(a.help_open(), "Ctrl+? works from anywhere")
+    });
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().selected().unwrap().key,
+            "LIV-2",
+            "and so do the list's keys"
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn closing_the_panel_under_the_note_field_leaves_the_keys_working(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("c");
+    settle(cx);
+    cx.simulate_input("half a note");
+    click_on(cx, "close-detail");
+    settle(cx);
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
+    cx.simulate_keystrokes("ctrl-?");
+    app.read_with(cx, |a, _| assert!(a.help_open()));
+}

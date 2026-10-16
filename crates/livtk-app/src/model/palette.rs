@@ -291,7 +291,7 @@ impl Model {
 
     /// What can be done to the selected node: its legal moves, then priority and editing.
     fn node_actions(&self) -> Vec<Action> {
-        let Some(row) = self.selected() else {
+        let Some(row) = self.acted_on() else {
             return Vec::new();
         };
         let key = Some(row.key.clone());
@@ -356,6 +356,7 @@ impl Model {
         out.push(plain("New task", Some("N"), Run::Ask(Ask::NewTask)));
         for (v, keys) in [
             (View::Inbox, "G I"),
+            (View::Activity, "G A"),
             (View::Tasks, "G T"),
             (View::Lessons, "G L"),
             (View::Decisions, "G D"),
@@ -410,7 +411,7 @@ impl Model {
                 out.push(plain(label, None, Run::Order(o)));
             }
         }
-        if self.view != View::Inbox {
+        if !matches!(self.view, View::Inbox | View::Activity) {
             let label = if self.show_all {
                 "Hide dismissed work"
             } else {

@@ -9,13 +9,17 @@ use livtk_core::event::Event;
 use livtk_core::{Actor, Brief, Command, Kind, Links, Node, Rel, State, Summary, Workspace};
 use uuid::Uuid;
 
+mod activity;
 mod palette;
+pub use activity::{FeedRow, day_label};
 pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
 
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum View {
     Inbox,
+    /// Every change in the project, newest first.
+    Activity,
     Tasks,
     Lessons,
     Decisions,
@@ -23,8 +27,9 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 5] = [
+    pub const ALL: [View; 6] = [
         View::Inbox,
+        View::Activity,
         View::Tasks,
         View::Lessons,
         View::Decisions,
@@ -34,6 +39,7 @@ impl View {
     pub const fn title(self) -> &'static str {
         match self {
             View::Inbox => "Inbox",
+            View::Activity => "Activity",
             View::Tasks => "Tasks",
             View::Lessons => "Lessons",
             View::Decisions => "Decisions",
@@ -41,10 +47,10 @@ impl View {
         }
     }
 
-    /// The kind a view lists; the inbox mixes kinds.
+    /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
-            View::Inbox => None,
+            View::Inbox | View::Activity => None,
             View::Tasks => Some(Kind::Task),
             View::Lessons => Some(Kind::Lesson),
             View::Decisions => Some(Kind::Decision),
@@ -92,7 +98,7 @@ impl Display {
         Display {
             filter: String::new(),
             priorities: Vec::new(),
-            grouping: if view == View::Inbox {
+            grouping: if matches!(view, View::Inbox | View::Activity) {
                 Grouping::None
             } else {
                 Grouping::State
@@ -139,6 +145,8 @@ pub struct Project {
     pub name: String,
     pub dir: PathBuf,
     pub inbox: usize,
+    /// Events by others since the human last looked at the activity feed, up to a cap.
+    pub unseen: usize,
     ws: Workspace,
 }
 
@@ -178,6 +186,14 @@ pub struct Model {
     pub notice: Option<String>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
+    /// The activity feed's events, newest first, as far as its pages are loaded.
+    pub activity: Vec<livtk_core::Activity>,
+    /// Whether older events wait for "Show older".
+    pub activity_more: bool,
+    /// The highlighted event of the feed.
+    pub activity_index: usize,
+    /// The mark as it was when the feed was opened: what came after it is new on this visit.
+    activity_seen_before: Option<Uuid>,
     selected: Option<Uuid>,
     /// Everything the view holds, before display options.
     all: Vec<Summary>,
@@ -209,6 +225,7 @@ impl Model {
                         name,
                         dir: root,
                         inbox: 0,
+                        unseen: 0,
                         ws,
                     });
                 }
@@ -229,6 +246,10 @@ impl Model {
             leaving: Vec::new(),
             notice,
             palette: None,
+            activity: Vec::new(),
+            activity_more: false,
+            activity_index: 0,
+            activity_seen_before: None,
             selected: None,
             all: Vec::new(),
             displays: HashMap::new(),
@@ -276,6 +297,7 @@ impl Model {
             self.detail = None;
             self.leaving.clear();
             self.flashed.clear();
+            self.enter_activity();
             self.reload();
         }
     }
@@ -286,6 +308,7 @@ impl Model {
             self.selected = None;
             self.detail = None;
             self.leaving.clear();
+            self.enter_activity();
             self.reload();
         }
     }
@@ -329,6 +352,10 @@ impl Model {
 
     /// Move the selection by `delta` rows, stopping at the ends.
     pub fn select_by(&mut self, delta: isize) {
+        if self.view == View::Activity {
+            self.activity_select_by(delta);
+            return;
+        }
         if self.rows.is_empty() {
             return;
         }
@@ -340,9 +367,33 @@ impl Model {
         self.select(id);
     }
 
+    /// The node actions act on: the selected row, or, where no row is selected (the activity
+    /// feed), the node open in the detail panel.
+    pub fn acted_on(&self) -> Option<Summary> {
+        if let Some(row) = self.selected() {
+            return Some(row.clone());
+        }
+        let n = &self.detail.as_ref()?.node;
+        Some(Summary {
+            id: n.id,
+            key: n.key.clone(),
+            kind: n.kind,
+            title: n.title.clone(),
+            state: n.state,
+            priority: n.priority,
+            updated: n.updated.clone(),
+            blocked: n.blocked,
+            standing: n.props.get("scope").and_then(|v| v.as_str()) == Some("always"),
+        })
+    }
+
     // ---- the detail panel ---------------------------------------------------------------------
 
     pub fn open_detail(&mut self) {
+        if self.view == View::Activity {
+            // The feed's highlighted event opens its node, and the feed stays.
+            self.selected = self.activity_node();
+        }
         let Some(id) = self.selected else { return };
         let Some(project) = self.projects.get(self.current) else {
             return;
@@ -361,7 +412,7 @@ impl Model {
 
     /// Take a choice on the selected node.
     pub fn choose(&mut self, choice: &Choice) {
-        let Some(row) = self.selected().cloned() else {
+        let Some(row) = self.acted_on() else {
             return;
         };
         let cmd = if choice.to == State::Ratified {
@@ -381,7 +432,7 @@ impl Model {
     /// The first choice that decides (acknowledge, ratify, accept), for the one-key shortcut.
     pub fn decide(&mut self) {
         let choice = self
-            .selected()
+            .acted_on()
             .map(|r| choices(r.kind, r.state))
             .and_then(|c| {
                 c.into_iter()
@@ -393,7 +444,7 @@ impl Model {
     }
 
     pub fn set_priority(&mut self, priority: u8) {
-        let Some(row) = self.selected().cloned() else {
+        let Some(row) = self.acted_on() else {
             return;
         };
         if row.kind == Kind::Task {
@@ -421,7 +472,7 @@ impl Model {
     }
 
     pub fn add_note(&mut self, text: &str) {
-        let Some(row) = self.selected().cloned() else {
+        let Some(row) = self.acted_on() else {
             return;
         };
         if !text.trim().is_empty() {
@@ -469,6 +520,8 @@ impl Model {
 
     fn run(&mut self, cmd: Command, row: Option<Summary>) {
         let index = self.selected_index();
+        // Only a row that was on screen can fade out of it.
+        let row = row.filter(|r| self.rows.iter().any(|x| x.id == r.id));
         let Some(project) = self.projects.get_mut(self.current) else {
             return;
         };
@@ -517,8 +570,15 @@ impl Model {
             .iter()
             .map(|r| (r.id, r.updated.clone()))
             .collect();
+        let newest = self.activity.first().map(|a| a.event.id);
         self.reload();
         let now = Instant::now();
+        // Events that arrived while the feed is open flash once, as changed rows do.
+        for a in &self.activity {
+            if newest.is_some_and(|n| a.event.id > n) {
+                self.flashed.insert(a.event.id, now);
+            }
+        }
         for r in &self.rows {
             if before.get(&r.id) != Some(&r.updated) {
                 self.flashed.insert(r.id, now);
@@ -722,14 +782,19 @@ impl Model {
     }
 
     fn reload(&mut self) {
+        if self.view == View::Activity {
+            self.load_activity();
+        }
         for p in &mut self.projects {
             p.inbox = p.ws.inbox().map(|i| i.len()).unwrap_or(0);
+            p.unseen = p.ws.unseen_activity().unwrap_or(0);
         }
         let Some(project) = self.projects.get(self.current) else {
             self.rows.clear();
             return;
         };
         let rows = match self.view.kind() {
+            None if self.view == View::Activity => Ok(Vec::new()),
             None => project.ws.inbox(),
             Some(kind) => {
                 let states: Vec<State> = if self.show_all {

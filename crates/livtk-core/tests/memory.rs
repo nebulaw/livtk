@@ -640,3 +640,48 @@ fn with_a_missing_model_search_falls_back_to_keywords() {
         "a missing model is not a problem, only an absence"
     );
 }
+
+#[test]
+#[ignore = "needs the model: LIVTK_TEST_MODELS=<dir> cargo test -- --ignored"]
+fn with_model_a_write_by_another_process_refreshes_the_kept_vectors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ws, keys) = with_rules(dir.path());
+    ws.search("anything at all", Scope::All, 5).unwrap();
+    let before = ws.embedded();
+    ws.search("something else", Scope::All, 5).unwrap();
+    assert_eq!(ws.embedded(), before, "kept vectors serve the next search");
+
+    let mut other = Workspace::open(dir.path()).unwrap();
+    other.set_models_dir(None);
+    other
+        .execute(
+            Command::Edit {
+                node: keys[0].clone(),
+                title: None,
+                body: Some("a reason written by another process".into()),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    ws.search("anything at all", Scope::All, 5).unwrap();
+    assert_eq!(
+        ws.embedded(),
+        before + 1,
+        "the other process's edit is seen and only that text re-embeds"
+    );
+}
+
+#[test]
+#[ignore = "needs the model: LIVTK_TEST_MODELS=<dir> cargo test -- --ignored"]
+fn with_model_find_brings_no_noise_for_a_half_typed_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ws, _) = with_rules(dir.path());
+    assert!(
+        !ws.search("zq", Scope::All, 5).unwrap().is_empty(),
+        "search ranks everything by meaning, however weakly"
+    );
+    assert!(
+        ws.find("zq", 5).unwrap().is_empty(),
+        "find keeps only what clears the relevance bar"
+    );
+}

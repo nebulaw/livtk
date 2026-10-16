@@ -144,6 +144,15 @@ pub fn fts_query(terms: &[String]) -> Option<String> {
     })
 }
 
+/// As [`fts_query`], for a query still being typed: its last term, the word under the cursor,
+/// also matches as a prefix (`"resi"*` finds "resize").
+pub fn fts_query_typing(terms: &[String]) -> Option<String> {
+    let (last, rest) = terms.split_last()?;
+    let mut parts: Vec<String> = rest.iter().map(|t| format!("\"{t}\"")).collect();
+    parts.push(format!("\"{last}\"*"));
+    Some(parts.join(" OR "))
+}
+
 /// How many of `terms` appear in `text`, comparing rough word stems.
 pub fn matched_terms(terms: &[String], text: &str) -> usize {
     let stems: Vec<String> = words(text).map(|w| stem(&w)).collect();

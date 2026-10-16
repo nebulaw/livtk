@@ -630,7 +630,10 @@ and run any action, without the mouse.
 meaning reads every node's text and vector from SQLite on each call (10,000 vectors of 2 KB is
 20 MB), fine for a prompt hook's small recall set but likely too slow per keystroke. Step 1
 measures a warm search in release; if it misses the budget, the workspace keeps vectors in memory
-(checked by the same text hash as the stored ones).
+(checked by the same text hash as the stored ones). Measured (release, 10,000 nodes): keywords only 1.1 ms per keystroke;
+with the model 29 ms, then **4.3 ms** once the workspace keeps the vectors (20 MB in memory),
+valid while the store's log mark stays put, so any write by any process refreshes them. The first
+search, which loads the model and embeds all 10,000 nodes, takes 0.29 s once.
 
 **Behaviour**
 

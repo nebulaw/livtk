@@ -19,8 +19,8 @@ use crate::model::{
 #[cfg(feature = "embed")]
 use crate::search::Model;
 use crate::search::{
-    CANDIDATES, DEFAULT_MODEL, Embed, Hit, cosine, cosine_bar, fts_query, fuse, matched_terms,
-    models_dir, query_terms, text_hash,
+    CANDIDATES, DEFAULT_MODEL, Embed, Hit, cosine, cosine_bar, fts_query, fts_query_typing, fuse,
+    matched_terms, models_dir, query_terms, text_hash,
 };
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
 
@@ -198,6 +198,17 @@ pub struct Workspace {
     /// writes to the shared store, so "the store had to catch up" says nothing about whether this
     /// reader has seen them; this does.
     seen: Mark,
+    /// The vectors search ranks meaning with, as of a store mark: a search per keystroke must
+    /// not re-read every text and vector (10,000 nodes cost 29 ms that way, 20 MB read).
+    vectors: Option<Vectors>,
+}
+
+/// Vectors for one scope and model, valid while the store stays at `mark`.
+struct Vectors {
+    mark: Mark,
+    recall_only: bool,
+    model: String,
+    by_node: Vec<(Uuid, Vec<f32>)>,
 }
 
 impl Workspace {
@@ -261,6 +272,7 @@ impl Workspace {
             model: None,
             embedded: 0,
             seen: Mark::default(),
+            vectors: None,
         };
         if !ws.store.has_current_schema()? {
             let _lock = ws.lock()?;
@@ -419,6 +431,7 @@ impl Workspace {
     pub fn set_models_dir(&mut self, dir: Option<PathBuf>) {
         self.models_dir = dir;
         self.model = None;
+        self.vectors = None;
     }
 
     /// The model search ranks meaning with, and whether it is installed and loads.
@@ -440,20 +453,80 @@ impl Workspace {
     /// Ranked search: keywords and meaning, fused. Embeds any node whose text is new or changed
     /// since it was last embedded, and keeps the vectors.
     pub fn search(&mut self, query: &str, scope: Scope, limit: usize) -> Result<Vec<Hit>> {
+        self.ranked(query, scope, limit, false)
+    }
+
+    /// Search as it is typed, for the command palette. A query that is a key (`LIV-12`,
+    /// `liv-12`, `12`) brings that node first. The word being typed matches as a prefix, unless
+    /// the query ends in a space. Meaning ranks only what clears the model's relevance bar, so a
+    /// half-typed word brings no noise.
+    pub fn find(&mut self, query: &str, limit: usize) -> Result<Vec<Hit>> {
+        let mut hits = Vec::new();
+        if let Ok(id) = self.resolve(query)
+            && let Some(n) = self.store.node(id)?
+        {
+            hits.push(Hit {
+                id,
+                key: n.key,
+                kind: n.kind,
+                state: n.state,
+                title: n.title,
+                // Above any fused score, which stays under 1.
+                score: 1.0,
+                cosine: None,
+                terms: 0,
+            });
+        }
+        let typing = !query.ends_with(char::is_whitespace);
+        for h in self.ranked(query, Scope::All, limit, typing)? {
+            if !hits.iter().any(|k| k.id == h.id) {
+                hits.push(h);
+            }
+        }
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    /// Keywords and meaning, fused. `typing` reads the last word as a prefix and keeps only
+    /// confident meaning matches.
+    fn ranked(
+        &mut self,
+        query: &str,
+        scope: Scope,
+        limit: usize,
+        typing: bool,
+    ) -> Result<Vec<Hit>> {
         let terms = query_terms(query);
         let recall_only = scope == Scope::Recall;
-        let keyword = match fts_query(&terms) {
+        let fts = if typing {
+            fts_query_typing(&terms)
+        } else {
+            fts_query(&terms)
+        };
+        let keyword = match fts {
             Some(q) => self.store.keyword(&q, recall_only, CANDIDATES)?,
             None => Vec::new(),
         };
         let model = self.take_model();
         let ranked = model
             .as_deref()
+            // A letter or two typed so far carries no meaning worth ranking.
+            .filter(|_| !typing || !terms.is_empty())
             .map(|m| self.rank_by_meaning(m, query, recall_only))
             .transpose();
         self.model = Some(model);
         let cosines = ranked?.unwrap_or_default();
-        let dense: Vec<Uuid> = cosines.iter().take(CANDIDATES).map(|(id, _)| *id).collect();
+        let bar = if typing {
+            cosine_bar(&self.config.memory.model)
+        } else {
+            f32::NEG_INFINITY
+        };
+        let dense: Vec<Uuid> = cosines
+            .iter()
+            .filter(|(_, c)| *c >= bar)
+            .take(CANDIDATES)
+            .map(|(id, _)| *id)
+            .collect();
         let mut hits = Vec::new();
         for (id, score) in fuse(&[&keyword, &dense]).into_iter().take(limit) {
             let Some(n) = self.store.node(id)? else {
@@ -493,6 +566,39 @@ impl Workspace {
         query: &str,
         recall_only: bool,
     ) -> Result<Vec<(Uuid, f32)>> {
+        // Any write, by any process, moves the mark; vectors themselves never do.
+        let mark = self.store.applied()?.mark;
+        let vectors = match self.vectors.take() {
+            Some(v)
+                if v.mark == mark && v.recall_only == recall_only && v.model == model.name() =>
+            {
+                v
+            }
+            _ => Vectors {
+                mark,
+                recall_only,
+                model: model.name().to_owned(),
+                by_node: self.current_vectors(model, recall_only)?,
+            },
+        };
+        let q = model.embed(&[query.to_owned()])?.pop().unwrap_or_default();
+        let mut cosines: Vec<(Uuid, f32)> = vectors
+            .by_node
+            .iter()
+            .map(|(id, v)| (*id, cosine(&q, v)))
+            .collect();
+        self.vectors = Some(vectors);
+        cosines.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(cosines)
+    }
+
+    /// Every node's vector in the scope: stored ones whose text is unchanged, the rest embedded
+    /// now and stored.
+    fn current_vectors(
+        &mut self,
+        model: &dyn Embed,
+        recall_only: bool,
+    ) -> Result<Vec<(Uuid, Vec<f32>)>> {
         let texts = self.store.texts(recall_only)?;
         let stored = self.store.vectors(recall_only)?;
         let mut vectors: Vec<(Uuid, Vec<f32>)> = Vec::with_capacity(texts.len());
@@ -515,11 +621,7 @@ impl Workspace {
             self.store.put_vectors(&rows)?;
             vectors.extend(rows.into_iter().map(|(id, _, v)| (id, v)));
         }
-        let q = model.embed(&[query.to_owned()])?.pop().unwrap_or_default();
-        let mut cosines: Vec<(Uuid, f32)> =
-            vectors.iter().map(|(id, v)| (*id, cosine(&q, v))).collect();
-        cosines.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        Ok(cosines)
+        Ok(vectors)
     }
 
     /// The loaded model, loading it on first use. The caller puts it back in `self.model`.

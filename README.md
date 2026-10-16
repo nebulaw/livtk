@@ -90,8 +90,10 @@ The human's control surface: an Inbox of everything waiting for you, tasks as a 
 lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
 Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette.
 As in Linear, the Filter menu (`/`) narrows by title, key or priority, and the Display menu
-groups by state or priority, orders by priority, last update or creation, and shows dismissed
-work; groups are solid bands that collapse on a click. Drag a row
+holds Grouping (state, priority) and Ordering (priority, last update, creation), each its own
+menu, and whether dismissed work shows; groups are solid bands that collapse on a click.
+Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter for the body)
+or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
 Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `h`.
 `Ctrl+?` lists every shortcut; the ones used most:

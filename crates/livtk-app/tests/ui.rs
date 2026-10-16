@@ -173,25 +173,42 @@ fn click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
 }
 
 #[gpui_kit::test]
-fn the_display_menu_sets_grouping_and_closes_on_a_click_outside(cx: &mut TestAppContext) {
+fn grouping_and_ordering_are_menus_of_their_own_in_display(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
     click_on(cx, "display-button");
     app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("display")));
+    assert!(
+        cx.debug_bounds("group-priority").is_none(),
+        "grouping waits in its own menu"
+    );
+
+    click_on(cx, "grouping-select");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("grouping")));
     click_on(cx, "group-priority");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().display().grouping, Grouping::Priority);
-        assert_eq!(a.menu_open(), Some("display"), "a choice keeps it open");
+        assert_eq!(
+            a.menu_open(),
+            Some("display"),
+            "a choice closes only its menu"
+        );
     });
+
+    click_on(cx, "ordering-select");
     click_on(cx, "order-created");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().display().ordering, Ordering::Created)
     });
-    cx.simulate_click(
-        gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(400.)),
-        gpui_kit::Modifiers::default(),
-    );
+
+    // Outside everything: an open submenu closes first, then Display.
+    let outside = gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(400.));
+    click_on(cx, "ordering-select");
+    cx.simulate_click(outside, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("display")));
+    cx.simulate_click(outside, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None, "outside closed it")
@@ -201,6 +218,40 @@ fn the_display_menu_sets_grouping_and_closes_on_a_click_outside(cx: &mut TestApp
     click_on(cx, "display-button");
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None, "its button closes it too")
+    });
+}
+
+#[gpui_kit::test]
+fn the_new_task_takes_its_priority_from_a_menu(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("n");
+    cx.run_until_parked();
+    click_on(cx, "priority-select");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("priority")));
+    click_on(cx, "priority-1");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None);
+        assert!(a.form_open(), "choosing kept the form open");
+    });
+    cx.simulate_input("urgent work");
+    click_on(cx, "create-task");
+    let ws = Workspace::open(dir.path()).unwrap();
+    let created = ws
+        .tasks(&[])
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "urgent work")
+        .expect("created");
+    assert_eq!(created.priority, 1);
+
+    // Esc closes the menu before the form.
+    cx.simulate_keystrokes("n");
+    click_on(cx, "priority-select");
+    cx.simulate_keystrokes("escape");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None);
+        assert!(a.form_open());
     });
 }
 
@@ -291,5 +342,146 @@ fn the_create_button_sits_inside_the_new_task_card(cx: &mut TestAppContext) {
             && button.bottom() <= card.bottom()
             && button.left() >= card.left(),
         "the button {button:?} spills out of the card {card:?}"
+    );
+}
+
+fn double_click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    let at = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    for click_count in [1, 2] {
+        cx.simulate_event(gpui_kit::MouseDownEvent {
+            position: at,
+            modifiers: gpui_kit::Modifiers::default(),
+            button: gpui_kit::MouseButton::Left,
+            click_count,
+            first_mouse: false,
+        });
+        cx.simulate_event(gpui_kit::MouseUpEvent {
+            position: at,
+            modifiers: gpui_kit::Modifiers::default(),
+            button: gpui_kit::MouseButton::Left,
+            click_count,
+        });
+    }
+    cx.run_until_parked();
+}
+
+/// Open the detail panel and let it finish sliding in: clicks land only once it has room.
+fn open_detail(cx: &mut gpui_kit::VisualTestContext) {
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+}
+
+/// Let the panel's slide finish. GPUI animations run on the wall clock, its timers on the test
+/// executor's, so both have to move.
+fn settle(cx: &mut gpui_kit::VisualTestContext) {
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+}
+
+fn node_of(dir: &std::path::Path, key: &str) -> livtk_core::Node {
+    Workspace::open(dir).unwrap().node(key).unwrap()
+}
+
+#[gpui_kit::test]
+fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    open_detail(cx);
+    click_on(cx, "detail-title");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.editing(), None, "one click does not edit")
+    });
+
+    double_click_on(cx, "detail-title");
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("title")));
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("renamed plan");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(node_of(dir.path(), "LIV-1").title, "renamed plan");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.editing(), None);
+        assert_eq!(
+            a.model().detail.as_ref().unwrap().node.title,
+            "renamed plan"
+        );
+    });
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().selected().unwrap().key,
+            "LIV-2",
+            "the keys are back on the list"
+        )
+    });
+
+    cx.simulate_keystrokes("escape");
+    open_detail(cx);
+    double_click_on(cx, "detail-title");
+    cx.simulate_input(" and more");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        node_of(dir.path(), "LIV-2").title,
+        "second",
+        "Esc saved nothing"
+    );
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
+}
+
+#[gpui_kit::test]
+fn the_body_is_edited_in_place_and_saved_with_ctrl_enter(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    open_detail(cx);
+    // An empty body offers itself with one click.
+    click_on(cx, "detail-body");
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
+    cx.simulate_input("goal: ship it");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("check: it runs");
+    cx.simulate_keystrokes("ctrl-enter");
+    cx.run_until_parked();
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        "goal: ship it\ncheck: it runs"
+    );
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
+
+    double_click_on(cx, "detail-body");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.editing(),
+            Some("body"),
+            "a body is edited by double-click"
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn the_detail_panel_slides_out_before_it_goes(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("detail-panel").is_some());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
+    assert!(
+        cx.debug_bounds("detail-panel").is_some(),
+        "still drawn while it animates out"
+    );
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "gone once it has"
     );
 }

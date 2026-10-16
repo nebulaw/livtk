@@ -20,7 +20,8 @@ use livtk_core::{Brief, Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Choice, Display, GroupKey, Grouping, Layout, Model, Ordering, View, choices, drop_allowed,
+    Choice, Detail, Display, GroupKey, Grouping, Layout, Model, Ordering, View, choices,
+    drop_allowed,
 };
 use theme::*;
 
@@ -63,7 +64,15 @@ const FORM: &str = "LivtkForm";
 const POLL: Duration = Duration::from_millis(200);
 const FADE: Duration = Duration::from_millis(180);
 const FLASH: Duration = Duration::from_millis(900);
-const SLIDE: Duration = Duration::from_millis(160);
+/// The detail panel opening and closing: it grows from the right edge and the list makes room.
+const SLIDE: Duration = Duration::from_millis(240);
+const SLIDE_OUT: Duration = Duration::from_millis(200);
+const DETAIL_WIDTH: f32 = 480.;
+
+/// Quick to start, gentle to land: the panel opening.
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
 
 /// Every shortcut, in the order the shortcuts modal shows them: (section, keys, what it does).
 /// In `keys`, the words "then", "or" and "+" are separators; everything else is a key cap.
@@ -195,7 +204,7 @@ impl Render for Dragged {
             .px_3()
             .py_2()
             .w(px(320.))
-            .rounded_md()
+            .rounded_lg()
             .bg(color(LIFTED))
             .border_1()
             .border_color(color(BORDER_STRONG))
@@ -209,6 +218,19 @@ impl Render for Dragged {
             .child(div().text_color(color(TEXT_3)).child(self.key.clone()))
             .child(div().truncate().child(self.title.clone()))
     }
+}
+
+/// A title or body being edited in the detail panel, for the node it belongs to.
+struct Editing {
+    node: Uuid,
+    field: Field,
+    /// Saves when the field loses focus; dropped with the edit, so a cancel saves nothing.
+    _subscription: Subscription,
+}
+
+enum Field {
+    Title(Entity<InputState>),
+    Body(Entity<TextareaState>),
 }
 
 struct NewTaskForm {
@@ -225,7 +247,17 @@ pub struct LivtkApp {
     note: Entity<InputState>,
     form: Option<NewTaskForm>,
     help: bool,
+    editing: Option<Editing>,
+    /// The detail panel's last frame while open, kept to animate it out after it closes.
+    last_detail: Option<Detail>,
+    /// The panel closing, drawn until its animation ends.
+    detail_leaving: Option<Detail>,
+    /// Counts openings and closings, so each plays its animation once and switching rows in an
+    /// open panel plays none.
+    detail_epoch: usize,
     menu: Option<Menu>,
+    /// A menu opened from inside `menu`: Display's Grouping or Ordering.
+    sub: Option<Menu>,
     /// The menu the mouse-down being dispatched closed, if any: see `toggle_menu`.
     menu_closed: Option<Menu>,
     _subscriptions: Vec<Subscription>,
@@ -267,7 +299,12 @@ impl LivtkApp {
             note,
             form: None,
             help: false,
+            editing: None,
+            last_detail: None,
+            detail_leaving: None,
+            detail_epoch: 0,
             menu: None,
+            sub: None,
             menu_closed: None,
             _subscriptions: subscriptions,
             _poll: poll,
@@ -286,10 +323,14 @@ impl LivtkApp {
         self.form.is_some()
     }
 
+    /// The innermost open menu.
     pub fn menu_open(&self) -> Option<&'static str> {
-        self.menu.map(|m| match m {
+        self.sub.or(self.menu).map(|m| match m {
             Menu::Filter => "filter",
             Menu::Display => "display",
+            Menu::Grouping => "grouping",
+            Menu::Ordering => "ordering",
+            Menu::Priority => "priority",
         })
     }
 
@@ -407,7 +448,206 @@ impl LivtkApp {
         }
     }
 
+    pub fn editing(&self) -> Option<&'static str> {
+        self.editing.as_ref().map(|e| match e.field {
+            Field::Title(_) => "title",
+            Field::Body(_) => "body",
+        })
+    }
+
+    /// Edit the open node's title or body in place, as in Linear: Enter (Ctrl+Enter for the
+    /// body) or clicking away saves, Esc cancels.
+    fn start_edit(&mut self, body: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(node) = self.model.detail.as_ref().map(|d| d.node.clone()) else {
+            return;
+        };
+        let (field, focus, subscription) = if body {
+            let state = cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .placeholder("Add a description…")
+                    .auto_grow(4, 24)
+                    .default_value(node.body.clone())
+            });
+            // The textarea takes Ctrl+Enter itself and reports it as a secondary Enter.
+            let sub = cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
+                match event {
+                    InputEvent::PressEnter {
+                        secondary: true, ..
+                    } => this.save_edit(true, window, cx),
+                    InputEvent::Blur => this.save_edit(false, window, cx),
+                    _ => {}
+                }
+            });
+            let focus = state.read(cx).focus_handle(cx);
+            (Field::Body(state), focus, sub)
+        } else {
+            let state = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Title")
+                    .default_value(node.title.clone())
+            });
+            let sub = cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
+                match event {
+                    InputEvent::PressEnter { .. } => this.save_edit(true, window, cx),
+                    InputEvent::Blur => this.save_edit(false, window, cx),
+                    _ => {}
+                }
+            });
+            let focus = state.read(cx).focus_handle(cx);
+            (Field::Title(state), focus, sub)
+        };
+        // Whatever was being edited before is saved first.
+        self.save_edit(false, window, cx);
+        focus.focus(window, cx);
+        self.editing = Some(Editing {
+            node: node.id,
+            field,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Save the edit, if any; `refocus` gives the keys back to the list.
+    fn save_edit(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.editing.take() else {
+            return;
+        };
+        match &edit.field {
+            Field::Title(state) => {
+                let title = state.read(cx).value().to_string();
+                self.model.edit(edit.node, Some(&title), None);
+            }
+            Field::Body(state) => {
+                // Trailing blank lines carry nothing (Ctrl+Enter itself adds one).
+                let body = state.read(cx).value().trim_end().to_owned();
+                self.model.edit(edit.node, None, Some(&body));
+            }
+        }
+        if refocus {
+            self.nav.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.take().is_some() {
+            self.nav.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The open node's title: double-click to edit.
+    fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(Editing {
+            node,
+            field: Field::Title(state),
+            ..
+        }) = &self.editing
+            && *node == n.id
+        {
+            return div()
+                .debug_selector(|| "title-editor".into())
+                .mx(px(-8.))
+                .px(px(8.))
+                .rounded_xl()
+                .bg(color(HOVER))
+                .on_action(
+                    cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
+                )
+                .child(
+                    Input::new(state)
+                        .appearance(false)
+                        .text_xl()
+                        .font_weight(FontWeight::SEMIBOLD),
+                )
+                .into_any_element();
+        }
+        div()
+            .id("detail-title")
+            .debug_selector(|| "detail-title".into())
+            .mx(px(-8.))
+            .px(px(8.))
+            .py(px(2.))
+            .rounded_xl()
+            .cursor_text()
+            .hover(|s| s.bg(color(HOVER)))
+            .text_xl()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(color(TEXT))
+            .child(n.title.clone())
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                if e.click_count() >= 2 {
+                    this.start_edit(false, window, cx);
+                }
+            }))
+            .into_any_element()
+    }
+
+    /// The open node's body as markdown: double-click to edit; when empty, one click.
+    fn detail_body(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(Editing {
+            node,
+            field: Field::Body(state),
+            ..
+        }) = &self.editing
+            && *node == n.id
+        {
+            return div()
+                .debug_selector(|| "body-editor".into())
+                .key_context(FORM)
+                .mx(px(-8.))
+                .p(px(8.))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .rounded_xl()
+                .bg(color(HOVER))
+                .on_action(
+                    cx.listener(|this, _: &Submit, window, cx| this.save_edit(true, window, cx)),
+                )
+                .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel_edit(window, cx)))
+                .on_action(
+                    cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
+                )
+                .child(Textarea::new(state).appearance(false))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child("Ctrl ↵ to save · Esc to cancel"),
+                )
+                .into_any_element();
+        }
+        let empty = n.body.trim().is_empty();
+        div()
+            .id("detail-body")
+            .debug_selector(|| "detail-body".into())
+            .mx(px(-8.))
+            .p(px(8.))
+            .rounded_xl()
+            .cursor_text()
+            .hover(|s| s.bg(color(HOVER)))
+            .text_color(color(TEXT_2))
+            .when(empty, |d| {
+                d.text_color(color(TEXT_4)).child("Add a description…")
+            })
+            .when(!empty, |d| {
+                d.child(TextView::markdown(
+                    SharedString::from(format!("body-{}", n.key)),
+                    n.body.clone(),
+                ))
+            })
+            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                if empty || e.click_count() >= 2 {
+                    this.start_edit(true, window, cx);
+                }
+            }))
+            .into_any_element()
+    }
+
     fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.sub = None;
         self.form = None;
         self.help = false;
         self.nav.focus(window, cx);
@@ -497,7 +737,7 @@ impl LivtkApp {
                 .h(px(28.))
                 .flex()
                 .items_center()
-                .rounded_md()
+                .rounded_lg()
                 .text_color(color(TEXT_4))
                 .cursor_pointer()
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
@@ -526,7 +766,7 @@ impl LivtkApp {
                 .flex()
                 .items_center()
                 .gap_2()
-                .rounded_md()
+                .rounded_lg()
                 .text_xs()
                 .text_color(color(TEXT_4))
                 .cursor_pointer()
@@ -596,7 +836,7 @@ impl LivtkApp {
                 .flex()
                 .items_center()
                 .gap_2()
-                .rounded_md()
+                .rounded_lg()
                 .bg(color(ACCENT))
                 .text_color(color(TEXT))
                 .font_weight(FontWeight::MEDIUM)
@@ -612,11 +852,13 @@ impl LivtkApp {
     /// reads as a click outside it, which closes it; that must not reopen it.
     fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let just_closed = self.menu_closed.take() == Some(menu);
-        if just_closed || self.menu == Some(menu) {
-            self.menu = None;
-            self.nav.focus(window, cx);
+        if menu.is_sub() {
+            self.sub = (!just_closed && self.sub != Some(menu)).then_some(menu);
+        } else if just_closed || self.menu == Some(menu) {
+            self.close_menu(window, cx);
         } else {
             self.menu = Some(menu);
+            self.sub = None;
             if menu == Menu::Filter {
                 self.filter.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -624,12 +866,131 @@ impl LivtkApp {
         cx.notify();
     }
 
+    /// Close every menu and give the keys back to where they were: the form, or the list.
     fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.menu.is_some() {
-            self.menu = None;
-            self.nav.focus(window, cx);
-            cx.notify();
+        if self.menu.is_none() {
+            return;
         }
+        self.menu = None;
+        self.sub = None;
+        match &self.form {
+            Some(form) => form.title.read(cx).focus_handle(cx).focus(window, cx),
+            None => self.nav.focus(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Esc closes the innermost thing open: a submenu, a menu, then a modal.
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sub.take().is_some() {
+            cx.notify();
+        } else if self.menu.is_some() {
+            self.close_menu(window, cx);
+        } else {
+            self.close_overlays(window, cx);
+        }
+    }
+
+    /// A mouse-down outside `menu`. A submenu closes alone; its parent stays open for the next
+    /// choice, as in Linear. The flag lives only for this mouse-down: see `toggle_menu`.
+    fn clicked_outside(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
+        let sub_closing = self.menu_closed.is_some_and(Menu::is_sub);
+        if !menu.is_sub() && (self.sub.is_some() || sub_closing) {
+            return;
+        }
+        self.menu_closed = Some(menu);
+        cx.defer_in(window, |this, _, _| this.menu_closed = None);
+        if menu.is_sub() {
+            self.sub = None;
+            cx.notify();
+        } else {
+            self.close_menu(window, cx);
+        }
+    }
+
+    /// `panel` as `menu`'s popover: anchored `top` below its button's left or right edge, and
+    /// drawn above everything, submenus above their menu.
+    fn popover(
+        &self,
+        menu: Menu,
+        right: bool,
+        top: f32,
+        panel: Div,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .absolute()
+            .top(px(top))
+            .when(right, |a| a.right_0())
+            .when(!right, |a| a.left_0())
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(if right {
+                            Anchor::TopRight
+                        } else {
+                            Anchor::TopLeft
+                        })
+                        .snap_to_window_with_margin(px(8.))
+                        .child(
+                            panel
+                                .occlude()
+                                .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                                    this.clicked_outside(menu, window, cx)
+                                }))
+                                .with_animation(
+                                    SharedString::from(format!("menu-{menu:?}")),
+                                    Animation::new(Duration::from_millis(120))
+                                        .with_easing(ease_out_quint()),
+                                    |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
+                                ),
+                        ),
+                )
+                .with_priority(if menu.is_sub() { 2 } else { 1 }),
+            )
+    }
+
+    /// A button that opens a menu of choices, showing the current one, as Linear's selects do.
+    fn select(
+        &self,
+        menu: Menu,
+        id: &'static str,
+        current: Div,
+        panel: impl FnOnce(&Self, &mut Context<Self>) -> Div,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.sub == Some(menu) || self.menu == Some(menu);
+        let button = div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .h(px(28.))
+            .pl_2()
+            .pr(px(6.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .border_1()
+            .cursor_pointer()
+            .text_color(color(TEXT_2))
+            .when(open, |b| {
+                b.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
+            })
+            .when(!open, |b| {
+                b.border_color(color(BORDER))
+                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
+            })
+            .child(current)
+            .child(div().text_xs().text_color(color(TEXT_4)).child("▾"))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
+            );
+        let right = menu.is_sub();
+        div().relative().child(button).when(open, |d| {
+            let panel = panel(self, cx);
+            d.child(self.popover(menu, right, 32., panel, cx))
+        })
     }
 
     /// The row under the header: Filter on the left with what it filters, Display on the right.
@@ -709,7 +1070,7 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
-            .rounded_md()
+            .rounded_lg()
             .border_1()
             .cursor_pointer()
             .when(open || active, |b| {
@@ -732,51 +1093,12 @@ impl LivtkApp {
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
             );
-        let anchor = if menu == Menu::Filter {
-            Anchor::TopLeft
-        } else {
-            Anchor::TopRight
-        };
         div().relative().child(button).when(open, |d| {
             let panel = match menu {
                 Menu::Filter => self.filter_menu(cx),
-                Menu::Display => self.display_menu(cx),
+                _ => self.display_menu(cx),
             };
-            d.child(
-                div()
-                    .absolute()
-                    .top(px(32.))
-                    .when(menu == Menu::Filter, |a| a.left_0())
-                    .when(menu == Menu::Display, |a| a.right_0())
-                    .child(
-                        deferred(
-                            anchored()
-                                .anchor(anchor)
-                                .snap_to_window_with_margin(px(8.))
-                                .child(
-                                    panel
-                                        .occlude()
-                                        .on_mouse_down_out(cx.listener(
-                                            move |this, _, window, cx| {
-                                                // Only for this mouse-down: forgotten once it is dispatched.
-                                                this.menu_closed = Some(menu);
-                                                cx.defer_in(window, |this, _, _| {
-                                                    this.menu_closed = None
-                                                });
-                                                this.close_menu(window, cx);
-                                            },
-                                        ))
-                                        .with_animation(
-                                            SharedString::from(format!("menu-{id}")),
-                                            Animation::new(Duration::from_millis(120))
-                                                .with_easing(ease_out_quint()),
-                                            |el, t| el.opacity(t).mt(px(-4.0 * (1.0 - t))),
-                                        ),
-                                ),
-                        )
-                        .with_priority(1),
-                    ),
-            )
+            d.child(self.popover(menu, menu == Menu::Display, 32., panel, cx))
         })
     }
 
@@ -787,13 +1109,20 @@ impl LivtkApp {
             .on_action(
                 cx.listener(|this, _: &input::Escape, window, cx| this.close_menu(window, cx)),
             )
-            .child(div().p_1().child(Input::new(&self.filter).small()))
+            .child(
+                div()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .child(Input::new(&self.filter).appearance(false).small()),
+            )
             .child(menu_divider())
             .child(menu_heading("Priority"));
         for p in 1..=4u8 {
             let on = d.priorities.contains(&p);
             panel = panel.child(
-                menu_row(SharedString::from(format!("filter-priority-{p}")), on)
+                option_row(SharedString::from(format!("filter-priority-{p}")))
+                    .child(checkbox(on))
                     .child(priority_mark(p))
                     .child(PRIORITY_NAMES[usize::from(p - 1)])
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -804,7 +1133,7 @@ impl LivtkApp {
         }
         if !d.priorities.is_empty() || !d.filter.trim().is_empty() {
             panel = panel.child(menu_divider()).child(
-                menu_row("clear-filters".into(), false)
+                option_row("clear-filters".into())
                     .text_color(color(TEXT_3))
                     .child("Clear filters")
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -820,56 +1149,115 @@ impl LivtkApp {
         panel
     }
 
+    /// Grouping and Ordering, each its own menu, and whether dismissed work shows.
     fn display_menu(&self, cx: &mut Context<Self>) -> Div {
         let d = self.model.display();
-        let board = self.model.view == View::Tasks && self.model.layout == Layout::Board;
-        let mut panel = menu_panel(240.)
+        let grouping = GROUPINGS
+            .iter()
+            .find(|g| g.2 == d.grouping)
+            .map_or("State", |g| g.1);
+        let ordering = ORDERINGS
+            .iter()
+            .find(|o| o.2 == d.ordering)
+            .map_or("Priority", |o| o.1);
+        let mut panel = menu_panel(272.)
             .debug_selector(|| "display-menu".into())
-            .child(menu_heading("Grouping"));
-        for (id, label, g) in [
-            ("group-state", "State", Grouping::State),
-            ("group-priority", "Priority", Grouping::Priority),
-            ("group-none", "No grouping", Grouping::None),
-        ] {
-            // A board needs columns: as in Linear, it is never ungrouped.
-            if board && g == Grouping::None {
-                continue;
-            }
-            panel = panel.child(
-                menu_row(id.into(), d.grouping == g)
-                    .debug_selector(move || id.into())
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.set_grouping(g);
-                        cx.notify();
-                    })),
-            );
-        }
-        panel = panel.child(menu_divider()).child(menu_heading("Ordering"));
-        for (id, label, o) in [
-            ("order-priority", "Priority", Ordering::Priority),
-            ("order-updated", "Last updated", Ordering::Updated),
-            ("order-created", "Created", Ordering::Created),
-        ] {
-            panel = panel.child(
-                menu_row(id.into(), d.ordering == o)
-                    .debug_selector(move || id.into())
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.set_ordering(o);
-                        cx.notify();
-                    })),
-            );
-        }
+            .child(display_field(
+                "Grouping",
+                self.select(
+                    Menu::Grouping,
+                    "grouping-select",
+                    div().child(grouping),
+                    Self::grouping_menu,
+                    cx,
+                ),
+            ))
+            .child(display_field(
+                "Ordering",
+                self.select(
+                    Menu::Ordering,
+                    "ordering-select",
+                    div().child(ordering),
+                    Self::ordering_menu,
+                    cx,
+                ),
+            ));
         if self.model.view != View::Inbox {
             let on = self.model.show_all;
             panel = panel.child(menu_divider()).child(
-                menu_row("show-dismissed".into(), false)
+                option_row("show-dismissed".into())
+                    .debug_selector(|| "show-dismissed".into())
                     .child(div().flex_1().child("Show dismissed"))
                     .child(switch(on))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.toggle_show_all();
                         cx.notify();
+                    })),
+            );
+        }
+        panel
+    }
+
+    fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
+        let current = self.model.display().grouping;
+        // A board needs columns: as in Linear, it is never ungrouped.
+        let board = self.model.view == View::Tasks && self.model.layout == Layout::Board;
+        let mut panel = menu_panel(180.).debug_selector(|| "grouping-menu".into());
+        for &(id, label, g) in GROUPINGS {
+            if board && g == Grouping::None {
+                continue;
+            }
+            panel = panel.child(
+                option_row(id.into())
+                    .debug_selector(move || id.into())
+                    .child(label)
+                    .child(check(current == g))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.set_grouping(g);
+                        this.sub = None;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel
+    }
+
+    fn ordering_menu(&self, cx: &mut Context<Self>) -> Div {
+        let current = self.model.display().ordering;
+        let mut panel = menu_panel(180.).debug_selector(|| "ordering-menu".into());
+        for &(id, label, o) in ORDERINGS {
+            panel = panel.child(
+                option_row(id.into())
+                    .debug_selector(move || id.into())
+                    .child(label)
+                    .child(check(current == o))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.set_ordering(o);
+                        this.sub = None;
+                        cx.notify();
+                    })),
+            );
+        }
+        panel
+    }
+
+    /// The new task's priority, chosen from a menu as in Linear's issue composer.
+    fn priority_menu(&self, cx: &mut Context<Self>) -> Div {
+        let current = self.form.as_ref().map_or(3, |f| f.priority);
+        let mut panel = menu_panel(180.).debug_selector(|| "priority-menu".into());
+        for p in 1..=4u8 {
+            let id = PRIORITY_IDS[usize::from(p - 1)];
+            panel = panel.child(
+                option_row(id.into())
+                    .debug_selector(move || id.into())
+                    .child(priority_mark(p))
+                    .child(PRIORITY_NAMES[usize::from(p - 1)])
+                    .child(check(current == p))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(f) = &mut this.form {
+                            f.priority = p;
+                        }
+                        this.close_menu(window, cx);
                     })),
             );
         }
@@ -1158,7 +1546,7 @@ impl LivtkApp {
                 .flex_col()
                 .gap_2()
                 .p_2()
-                .rounded_lg()
+                .rounded_xl()
                 .bg(color(SURFACE))
                 .border_1()
                 .border_color(color(BORDER))
@@ -1204,7 +1592,7 @@ impl LivtkApp {
                 let card = div()
                     .id(SharedString::from(format!("card-{}", r.key)))
                     .p_3()
-                    .rounded_md()
+                    .rounded_lg()
                     .bg(color(if sel { SELECTED } else { CONTENT }))
                     .border_1()
                     .border_color(color(if sel { BORDER_STRONG } else { BORDER }))
@@ -1254,8 +1642,70 @@ impl LivtkApp {
 
     // ---- rendering: the detail panel ----------------------------------------------------------
 
+    /// Notice the panel opening or closing since the last frame.
+    fn track_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match (&self.model.detail, self.last_detail.is_some()) {
+            (Some(d), was_open) => {
+                if !was_open {
+                    self.detail_epoch += 1;
+                    self.detail_leaving = None;
+                }
+                self.last_detail = Some(d.clone());
+            }
+            (None, true) => {
+                self.detail_epoch += 1;
+                self.detail_leaving = self.last_detail.take();
+                let epoch = self.detail_epoch;
+                cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(SLIDE_OUT).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.detail_epoch == epoch {
+                            this.detail_leaving = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            (None, false) => {}
+        }
+    }
+
+    /// The detail panel, sliding in when it opens and out when it closes. Its width animates,
+    /// so the list beside it makes room smoothly instead of jumping.
     fn detail(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let d = self.model.detail.clone()?;
+        let (d, closing) = match (&self.model.detail, &self.detail_leaving) {
+            (Some(d), _) => (d.clone(), false),
+            (None, Some(d)) => (d.clone(), true),
+            (None, None) => return None,
+        };
+        let panel = self.detail_panel(&d, cx);
+        let (id, duration) = if closing {
+            (format!("detail-out-{}", self.detail_epoch), SLIDE_OUT)
+        } else {
+            (format!("detail-in-{}", self.detail_epoch), SLIDE)
+        };
+        let easing: fn(f32) -> f32 = if closing { ease_in_out } else { ease_out_cubic };
+        Some(
+            div()
+                .debug_selector(|| "detail-panel".into())
+                .flex_none()
+                .h_full()
+                .overflow_hidden()
+                .child(panel)
+                .with_animation(
+                    SharedString::from(id),
+                    Animation::new(duration).with_easing(easing),
+                    move |el, t| {
+                        let open = if closing { 1.0 - t } else { t };
+                        el.w(px(DETAIL_WIDTH * open)).opacity(0.3 + 0.7 * open)
+                    },
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn detail_panel(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {
         let n = &d.node;
         let mut choice_row = div().flex().flex_wrap().gap_2();
         for (i, c) in d.choices.iter().enumerate() {
@@ -1275,7 +1725,7 @@ impl LivtkApp {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .rounded_md()
+                    .rounded_lg()
                     .cursor_pointer()
                     .when(primary, |d| {
                         d.bg(color(ACCENT))
@@ -1337,13 +1787,15 @@ impl LivtkApp {
                 links = links.child(link_group(label, briefs));
             }
         }
+        let title = self.detail_title(n, cx);
+        let body = self.detail_body(n, cx);
         let mut timeline = div().flex().flex_col().gap_3();
         for e in d.history.iter().rev() {
             timeline = timeline.child(event_line(e));
         }
         let panel = div()
             .id(SharedString::from(format!("detail-{}", n.key)))
-            .w(px(480.))
+            .w(px(DETAIL_WIDTH))
             .flex_none()
             .h_full()
             .bg(color(SURFACE))
@@ -1370,7 +1822,7 @@ impl LivtkApp {
                             .px_2()
                             .flex()
                             .items_center()
-                            .rounded_md()
+                            .rounded_lg()
                             .text_color(color(TEXT_4))
                             .cursor_pointer()
                             .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
@@ -1390,21 +1842,10 @@ impl LivtkApp {
                     .flex()
                     .flex_col()
                     .gap_5()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(color(TEXT))
-                            .child(n.title.clone()),
-                    )
+                    .child(title)
                     .when(!d.choices.is_empty(), |d| d.child(choice_row))
                     .child(props)
-                    .when(!n.body.is_empty(), |d| {
-                        d.child(div().text_color(color(TEXT_2)).child(TextView::markdown(
-                            SharedString::from(format!("body-{}", n.key)),
-                            n.body.clone(),
-                        )))
-                    })
+                    .child(body)
                     .child(links)
                     .child(section_label("Activity"))
                     .child(timeline),
@@ -1417,15 +1858,7 @@ impl LivtkApp {
                     .border_color(color(BORDER))
                     .child(Input::new(&self.note)),
             );
-        Some(
-            panel
-                .with_animation(
-                    SharedString::from(format!("slide-{}", n.key)),
-                    Animation::new(SLIDE).with_easing(ease_out_quint()),
-                    |el, t| el.opacity(t).ml(px(24.0 * (1.0 - t))),
-                )
-                .into_any_element(),
-        )
+        div().child(panel)
     }
 
     // ---- rendering: overlays ------------------------------------------------------------------
@@ -1437,10 +1870,8 @@ impl LivtkApp {
             .absolute()
             .inset_0()
             .key_context(FORM)
-            .on_action(cx.listener(|this, _: &Cancel, window, cx| this.close_overlays(window, cx)))
-            .on_action(
-                cx.listener(|this, _: &input::Escape, window, cx| this.close_overlays(window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| this.escape(window, cx)))
+            .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &Submit, window, cx| this.submit_form(window, cx)))
             .bg(with_alpha(0x000000, 0.6))
             .flex()
@@ -1453,7 +1884,7 @@ impl LivtkApp {
             )
             .child(
                 card.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .rounded_lg()
+                    .rounded_xl()
                     .bg(color(SURFACE))
                     .border_1()
                     .border_color(color(BORDER_STRONG))
@@ -1469,43 +1900,18 @@ impl LivtkApp {
 
     fn form_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.as_ref()?;
-        // Compact, as in Linear: every priority as its mark; the chosen one also by name. The
-        // picker yields space first, so the Create button always fits inside the card.
-        let mut priorities = div().flex_1().min_w_0().flex().items_center().gap_1();
-        for p in 1..=4u8 {
-            let on = form.priority == p;
-            priorities = priorities.child(
-                div()
-                    .id(SharedString::from(format!("prio-{p}")))
-                    .h(px(28.))
-                    .px_2()
-                    .flex_none()
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .border_1()
-                    .when(on, |s| {
-                        s.bg(color(SELECTED))
-                            .border_color(color(BORDER_STRONG))
-                            .text_color(color(TEXT))
-                            .child(priority_mark(p))
-                            .child(PRIORITY_NAMES[usize::from(p - 1)])
-                    })
-                    .when(!on, |s| {
-                        s.border_color(color(BORDER))
-                            .hover(|h| h.bg(color(HOVER)))
-                            .child(priority_mark(p))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(f) = &mut this.form {
-                            f.priority = p;
-                        }
-                        cx.notify();
-                    })),
-            );
-        }
+        let priority = self.select(
+            Menu::Priority,
+            "priority-select",
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(priority_mark(form.priority))
+                .child(PRIORITY_NAMES[usize::from(form.priority.clamp(1, 4) - 1)]),
+            Self::priority_menu,
+            cx,
+        );
         let create = div()
             .id("create-task")
             .debug_selector(|| "create-task".into())
@@ -1515,7 +1921,7 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
-            .rounded_md()
+            .rounded_lg()
             .bg(color(ACCENT))
             .text_color(color(TEXT))
             .font_weight(FontWeight::MEDIUM)
@@ -1562,7 +1968,8 @@ impl LivtkApp {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(priorities)
+                    .child(priority)
+                    .child(div().flex_1())
                     .child(create),
             );
         Some(self.modal("new-task-modal", card, cx))
@@ -1651,7 +2058,7 @@ impl LivtkApp {
                 .right(px(16.))
                 .max_w(px(520.))
                 .p_3()
-                .rounded_lg()
+                .rounded_xl()
                 .bg(color(LIFTED))
                 .border_1()
                 .border_color(with_alpha(RED, 0.5))
@@ -1669,6 +2076,7 @@ impl Render for LivtkApp {
         let header = self.header(cx).into_any_element();
         let toolbar = self.toolbar(cx).into_any_element();
         let content = self.content(window, cx);
+        self.track_detail(window, cx);
         let detail = self.detail(cx);
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
@@ -1692,7 +2100,7 @@ impl Render for LivtkApp {
             }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if this.menu.is_some() {
-                    this.close_menu(window, cx);
+                    this.escape(window, cx);
                 } else if this.help || this.form.is_some() {
                     this.close_overlays(window, cx);
                 } else {
@@ -1712,6 +2120,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
                 this.menu = Some(Menu::Filter);
+                this.sub = None;
                 this.filter.read(cx).focus_handle(cx).focus(window, cx);
                 cx.notify();
             }))
@@ -1774,7 +2183,7 @@ impl Render for LivtkApp {
                     div()
                         .size_full()
                         .flex()
-                        .rounded_lg()
+                        .rounded_xl()
                         .border_1()
                         .border_color(color(BORDER))
                         .bg(color(CONTENT))
@@ -1808,7 +2217,33 @@ fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
 enum Menu {
     Filter,
     Display,
+    /// Opened from Display.
+    Grouping,
+    /// Opened from Display.
+    Ordering,
+    /// The new task's priority, in the form.
+    Priority,
 }
+
+impl Menu {
+    fn is_sub(self) -> bool {
+        matches!(self, Menu::Grouping | Menu::Ordering)
+    }
+}
+
+const GROUPINGS: &[(&str, &str, Grouping)] = &[
+    ("group-state", "State", Grouping::State),
+    ("group-priority", "Priority", Grouping::Priority),
+    ("group-none", "No grouping", Grouping::None),
+];
+
+const ORDERINGS: &[(&str, &str, Ordering)] = &[
+    ("order-priority", "Priority", Ordering::Priority),
+    ("order-updated", "Last updated", Ordering::Updated),
+    ("order-created", "Created", Ordering::Created),
+];
+
+const PRIORITY_IDS: [&str; 4] = ["priority-1", "priority-2", "priority-3", "priority-4"];
 
 enum Item {
     Band(usize),
@@ -1834,7 +2269,7 @@ fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Statef
         .id(id)
         .px_2()
         .h(px(28.))
-        .rounded_md()
+        .rounded_lg()
         .flex()
         .items_center()
         .cursor_pointer()
@@ -1868,7 +2303,7 @@ fn menu_panel(width: f32) -> Div {
         .p_1()
         .flex()
         .flex_col()
-        .rounded_lg()
+        .rounded_xl()
         .bg(color(SURFACE))
         .border_1()
         .border_color(color(BORDER_STRONG))
@@ -1891,32 +2326,61 @@ fn menu_divider() -> Div {
     div().my_1().h(px(1.)).bg(color(BORDER))
 }
 
-/// A menu row with a check slot on the left, filled when `checked`.
-fn menu_row(id: SharedString, checked: bool) -> Stateful<Div> {
+/// A row of a menu: what it is, from the left edge, with no empty slot before it.
+fn option_row(id: SharedString) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(30.))
-        .px_2()
+        .px(px(6.))
         .flex()
         .items_center()
         .gap_2()
-        .rounded_md()
+        .rounded_lg()
         .cursor_pointer()
         .text_color(color(TEXT_2))
         .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-        .child(
-            div()
-                .size(px(14.))
-                .flex_none()
-                .rounded(px(3.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(10.))
-                .when(checked, |c| {
-                    c.bg(color(ACCENT)).text_color(color(TEXT)).child("✓")
-                }),
-        )
+}
+
+/// The mark of the chosen option in a menu that picks one, at the row's right end.
+fn check(on: bool) -> Div {
+    div()
+        .ml_auto()
+        .pl_2()
+        .text_xs()
+        .text_color(color(TEXT))
+        .when(on, |d| d.child("✓"))
+}
+
+/// A box in a menu that picks several: an outline when off, filled and ticked when on.
+fn checkbox(on: bool) -> Div {
+    div()
+        .size(px(14.))
+        .flex_none()
+        .rounded(px(3.))
+        .border_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(10.))
+        .when(on, |c| {
+            c.bg(color(ACCENT))
+                .border_color(color(ACCENT))
+                .text_color(color(TEXT))
+                .child("✓")
+        })
+        .when(!on, |c| c.border_color(color(TEXT_4)))
+}
+
+/// A labelled setting in the Display menu: the name on the left, its select on the right.
+fn display_field(label: &'static str, select: Div) -> Div {
+    div()
+        .h(px(36.))
+        .px(px(6.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(div().text_color(color(TEXT_3)).child(label))
+        .child(select)
 }
 
 fn switch(on: bool) -> Div {
@@ -1946,7 +2410,7 @@ fn chip(
         .flex()
         .items_center()
         .gap_1()
-        .rounded_md()
+        .rounded_lg()
         .bg(color(SURFACE))
         .border_1()
         .border_color(color(BORDER_STRONG))
@@ -1971,7 +2435,7 @@ fn segments() -> Div {
         .flex()
         .p(px(2.))
         .gap(px(2.))
-        .rounded_md()
+        .rounded_lg()
         .bg(color(WINDOW))
         .border_1()
         .border_color(color(BORDER))
@@ -1984,7 +2448,7 @@ fn segment(id: &'static str, label: &'static str, on: bool) -> Stateful<Div> {
         .px_2()
         .flex()
         .items_center()
-        .rounded(px(4.))
+        .rounded(px(6.))
         .text_xs()
         .cursor_pointer()
         .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
@@ -2020,7 +2484,7 @@ fn kbd(k: &str) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(px(6.))
         .bg(color(LIFTED))
         .border_1()
         .border_color(color(BORDER_STRONG))
@@ -2095,7 +2559,7 @@ fn link_group(label: &str, briefs: &[Brief]) -> Div {
                 .flex()
                 .items_center()
                 .gap_2()
-                .rounded_md()
+                .rounded_lg()
                 .bg(color(CONTENT))
                 .border_1()
                 .border_color(color(BORDER))
@@ -2208,7 +2672,7 @@ fn event_line(e: &Event) -> Div {
             div()
                 .ml(px(26.))
                 .p_3()
-                .rounded_md()
+                .rounded_lg()
                 .bg(color(CONTENT))
                 .border_1()
                 .border_color(color(BORDER))

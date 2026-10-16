@@ -393,6 +393,19 @@ impl Model {
         }
     }
 
+    /// Change a node's title or body. A changed plan that was acknowledged, or a changed rule,
+    /// goes back for approval: the core's rule, as from the CLI.
+    pub fn edit(&mut self, id: Uuid, title: Option<&str>, body: Option<&str>) {
+        self.run(
+            Command::Edit {
+                node: id.to_string(),
+                title: title.map(str::to_owned),
+                body: body.map(str::to_owned),
+            },
+            None,
+        );
+    }
+
     pub fn add_note(&mut self, text: &str) {
         let Some(row) = self.selected().cloned() else {
             return;

@@ -229,6 +229,8 @@ pub fn link_choices(kind: Kind) -> Vec<LinkChoice> {
         Kind::Task => vec![
             c("Waits for…", Rel::DependsOn, true),
             c("Blocks…", Rel::DependsOn, false),
+            c("Part of…", Rel::Parent, true),
+            c("Add sub-task…", Rel::Parent, false),
         ],
         Kind::Lesson | Kind::Decision => vec![
             c("Learned from…", Rel::LearnedFrom, true),
@@ -1069,7 +1071,10 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
     let node = ws.node(&key)?;
     let (replaces, replaced_by) = ws.related(&key, Rel::Supersedes)?;
     let (learned_from, taught) = ws.related(&key, Rel::LearnedFrom)?;
+    let (part_of, parts) = ws.related(&key, Rel::Parent)?;
     let (relates_to, related_by) = ws.related(&key, Rel::Relates)?;
+    // Relating has no direction, and the core removes it from either end.
+    let related: Vec<Brief> = relates_to.into_iter().chain(related_by).collect();
     let links = ws.links(&key)?;
     let group = |label, rel, outgoing, briefs: &Vec<Brief>| LinkGroup {
         label,
@@ -1078,10 +1083,11 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         briefs: briefs.clone(),
     };
     let link_groups: Vec<LinkGroup> = [
+        group("Part of", Rel::Parent, true, &part_of),
+        group("Sub-tasks", Rel::Parent, false, &parts),
         group("Waits for", Rel::DependsOn, true, &links.depends_on),
         group("Blocks", Rel::DependsOn, false, &links.blocks),
-        group("Related to", Rel::Relates, true, &relates_to),
-        group("Related from", Rel::Relates, false, &related_by),
+        group("Related to", Rel::Relates, true, &related),
         group("Replaces", Rel::Supersedes, true, &replaces),
         group("Replaced by", Rel::Supersedes, false, &replaced_by),
         group("Learned from", Rel::LearnedFrom, true, &learned_from),

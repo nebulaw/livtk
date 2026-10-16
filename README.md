@@ -38,6 +38,9 @@ check_agents = ["livtk:implementer"]
 livtk init                          # once per project: creates .livtk/, commit it
 livtk new "Draw the first window" -p 2
 livtk new "Simple compositor" --after LIV-1 --body - < plan.md
+livtk new "Damage tracking" --parent LIV-2   # a sub-task
+livtk link 3 relates 1              # also waits-for, blocks, learned-from, supersedes,
+                                    # part-of, has-part; `livtk unlink` takes the same words
 livtk list                          # open tasks by state (aliases: ls, board)
 livtk move 1 planned                # Claude proposes the plan
 livtk ack 1                         # you acknowledge it (human only)
@@ -115,8 +118,8 @@ the states as a flow from left to right: where it is now tinted in its colour, w
 ringed and clickable (a dotted accent ring when the move is your decision), the rest faded, and
 only the arrows of moves from here lit, pointing the way they go; ratifying offers the standing
 rule.
-Links are added from the detail panel (+ Add link: waits for, blocks, related to, learned from,
-supersedes) or the palette ("Add link: …"), picking the other end by search, and removed with
+Links are added from the detail panel (+ Add link: waits for, blocks, part of, add sub-task,
+related to, learned from, supersedes) or the palette ("Add link: …"), picking the other end by search, and removed with
 their ×. On the board the wheel scrolls a column and Shift+wheel scrolls across.
 `Ctrl+K` opens the command palette: type a few letters to run any action that is legal from
 where you stand (acknowledge, move, set priority, go to a view, group, order, new task), or to

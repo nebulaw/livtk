@@ -70,7 +70,16 @@ fn select(m: &mut Model, dir: &Path, key: &str) {
 #[test]
 fn each_kind_offers_the_links_it_can_have() {
     let labels = |k| -> Vec<&str> { link_choices(k).iter().map(|c| c.label).collect() };
-    assert_eq!(labels(Kind::Task), ["Waits for…", "Blocks…", "Related to…"]);
+    assert_eq!(
+        labels(Kind::Task),
+        [
+            "Waits for…",
+            "Blocks…",
+            "Part of…",
+            "Add sub-task…",
+            "Related to…"
+        ]
+    );
     assert_eq!(
         labels(Kind::Lesson),
         ["Learned from…", "Supersedes…", "Related to…"]
@@ -88,7 +97,7 @@ fn links_are_added_both_ways_shown_in_groups_and_removed() {
     let d = dir.path();
     let mut m = app(d);
     select(&mut m, d, "LIV-2");
-    let [waits, blocks, related] = link_choices(Kind::Task)[..] else {
+    let [waits, blocks, _, _, related] = link_choices(Kind::Task)[..] else {
         panic!()
     };
     m.link(id(d, "LIV-2"), waits, id(d, "LIV-1"));
@@ -127,6 +136,66 @@ fn links_are_added_both_ways_shown_in_groups_and_removed() {
     m.unlink(Rel::Relates, true, "FND-1");
     assert_eq!(edges(d), [("LIV-2".into(), Rel::DependsOn, "LIV-1".into())]);
     assert_eq!(m.detail.as_ref().unwrap().link_groups.len(), 1);
+}
+
+#[test]
+fn sub_tasks_are_linked_from_either_end_and_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let mut m = app(d);
+    let [_, _, part_of, add_sub, related] = link_choices(Kind::Task)[..] else {
+        panic!()
+    };
+    m.link(id(d, "LIV-2"), part_of, id(d, "LIV-1"));
+    m.link(id(d, "LIV-1"), add_sub, id(d, "LIV-3"));
+    let mut got = edges(d);
+    got.sort_by_key(|(s, r, d)| (s.clone(), r.as_str(), d.clone()));
+    assert_eq!(
+        got,
+        [
+            ("LIV-2".into(), Rel::Parent, "LIV-1".into()),
+            ("LIV-3".into(), Rel::Parent, "LIV-1".into()),
+        ],
+        "Add sub-task… makes the other one a part"
+    );
+    select(&mut m, d, "LIV-1");
+    let groups = |m: &Model| -> Vec<(&'static str, Vec<String>)> {
+        m.detail
+            .as_ref()
+            .unwrap()
+            .link_groups
+            .iter()
+            .map(|g| (g.label, g.briefs.iter().map(|b| b.key.clone()).collect()))
+            .collect()
+    };
+    assert_eq!(
+        groups(&m),
+        [("Sub-tasks", vec!["LIV-2".to_owned(), "LIV-3".to_owned()])]
+    );
+    m.link(id(d, "LIV-1"), part_of, id(d, "LIV-2"));
+    assert!(
+        m.notice.as_deref().is_some_and(|n| n.contains("cycle")),
+        "a task cannot be part of its own part: {:?}",
+        m.notice
+    );
+
+    m.unlink(Rel::Parent, false, "LIV-3");
+    assert_eq!(groups(&m), [("Sub-tasks", vec!["LIV-2".to_owned()])]);
+    select(&mut m, d, "LIV-2");
+    assert_eq!(groups(&m), [("Part of", vec!["LIV-1".to_owned()])]);
+
+    // Related from the other end shows in the same group and is removed from there.
+    m.link(id(d, "LIV-3"), related, id(d, "LIV-2"));
+    select(&mut m, d, "LIV-2");
+    assert_eq!(
+        groups(&m),
+        [
+            ("Part of", vec!["LIV-1".to_owned()]),
+            ("Related to", vec!["LIV-3".to_owned()])
+        ]
+    );
+    m.unlink(Rel::Relates, true, "LIV-3");
+    assert_eq!(groups(&m), [("Part of", vec!["LIV-1".to_owned()])]);
 }
 
 #[test]

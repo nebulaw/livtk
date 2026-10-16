@@ -32,7 +32,10 @@ acknowledging, then to stop.
 
    Priority: 1 urgent, 2 high, 3 medium, 4 low.
 4. **Add dependencies** where one task needs another first: `livtk dep add KEY --on OTHER`
-   (or `--after OTHER` when creating).
+   (or `--after OTHER` when creating). When a goal is too big for one task, keep it as a parent
+   task and create its parts as sub-tasks with `--parent KEY`; each part is planned and
+   acknowledged on its own. `livtk link KEY relates OTHER` notes a connection that is not an
+   order.
 5. **Move each task to planned:** `livtk move KEY planned`.
 6. **Stop and ask.** Show the human the plan (`livtk list`, plus anything they need to judge it)
    and ask them to acknowledge with `livtk ack KEY` or in the app. You cannot acknowledge, and you

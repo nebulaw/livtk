@@ -188,6 +188,99 @@ fn dependencies_from_the_command_line() {
     );
 }
 
+/// The keys `show --json` lists under `field`.
+fn shown(d: &Path, key: &str, field: &str) -> Vec<String> {
+    let v = json(d, &["show", key]);
+    let list = match field {
+        "depends_on" | "blocks" => &v["links"][field],
+        _ => &v[field],
+    };
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["key"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn any_link_from_the_command_line_read_from_either_end() {
+    let dir = project();
+    let d = dir.path();
+    ok(d, As::Claude, &["new", "the feature"]);
+    assert_eq!(
+        ok(d, As::Claude, &["new", "a part", "--parent", "LIV-1"]),
+        "LIV-2 created: a part\n  is part of LIV-1\n"
+    );
+    ok(d, As::Claude, &["new", "another part"]);
+    assert_eq!(
+        ok(d, As::Claude, &["link", "1", "has-part", "3"]),
+        "LIV-1 has-part LIV-3: linked\n"
+    );
+    assert_eq!(shown(d, "1", "sub_tasks"), ["LIV-2", "LIV-3"]);
+    assert_eq!(
+        shown(d, "3", "part_of"),
+        ["LIV-1"],
+        "the same link from below"
+    );
+    assert_eq!(
+        ok(d, As::Claude, &["link", "3", "part-of", "1"]),
+        "LIV-3 part-of LIV-1: already linked\n"
+    );
+    let show = ok(d, As::Claude, &["show", "1"]);
+    assert!(show.contains("sub-task  LIV-2"), "{show}");
+
+    ok(d, As::Claude, &["link", "2", "blocks", "3"]);
+    assert_eq!(shown(d, "3", "depends_on"), ["LIV-2"]);
+    ok(d, As::Claude, &["link", "3", "relates", "2"]);
+    assert_eq!(
+        shown(d, "2", "related"),
+        ["LIV-3"],
+        "relating shows at both ends"
+    );
+    assert_eq!(shown(d, "3", "related"), ["LIV-2"]);
+
+    ok(d, As::Claude, &["lesson", "keep parts small"]);
+    ok(d, As::Claude, &["link", "LES-1", "learned-from", "LIV-2"]);
+    assert_eq!(shown(d, "LES-1", "learned_from"), ["LIV-2"]);
+    ok(d, As::Claude, &["lesson", "keep parts very small"]);
+    ok(d, As::Claude, &["link", "LES-2", "supersedes", "LES-1"]);
+    assert_eq!(shown(d, "LES-2", "supersedes"), ["LES-1"]);
+
+    let wrong = livtk(d, As::Claude, &["link", "LES-1", "part-of", "LIV-1"]);
+    assert!(!wrong.status.success());
+    assert!(
+        String::from_utf8_lossy(&wrong.stderr).contains("cannot have a `parent` link"),
+        "{}",
+        String::from_utf8_lossy(&wrong.stderr)
+    );
+    let cycle = livtk(d, As::Claude, &["link", "1", "part-of", "2"]);
+    assert_eq!(cycle.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("cycle"));
+    let unknown = livtk(d, As::Claude, &["link", "1", "owns", "2"]);
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("part-of"),
+        "names the words"
+    );
+
+    assert_eq!(
+        ok(d, As::Claude, &["unlink", "1", "has-part", "2"]),
+        "LIV-1 has-part LIV-2: unlinked\n"
+    );
+    assert_eq!(shown(d, "1", "sub_tasks"), ["LIV-3"]);
+    assert_eq!(
+        ok(d, As::Claude, &["link", "2", "relates", "3"]),
+        "LIV-2 relates LIV-3: already linked\n",
+        "relating has no direction"
+    );
+    ok(d, As::Claude, &["unlink", "2", "relates", "3"]);
+    assert!(
+        shown(d, "3", "related").is_empty(),
+        "so it is removed from either end"
+    );
+    let gone = livtk(d, As::Claude, &["unlink", "2", "relates", "3"]);
+    assert!(!gone.status.success());
+}
+
 #[test]
 fn errors_are_one_line_with_a_hint() {
     let dir = tempfile::tempdir().unwrap();

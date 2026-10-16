@@ -940,7 +940,10 @@ impl Workspace {
                 if s.id == d.id {
                     return Err(Error::Invalid(format!("{} cannot link to itself", s.key)));
                 }
-                if self.store.edge_exists(s.id, rel, d.id)? {
+                // Relating has no direction: made from either end, it is the same link.
+                if self.store.edge_exists(s.id, rel, d.id)?
+                    || (rel == Rel::Relates && self.store.edge_exists(d.id, rel, s.id)?)
+                {
                     return Ok(Vec::new());
                 }
                 check_link(s.kind, rel, &d)?;
@@ -979,7 +982,14 @@ impl Workspace {
                 }])
             }
             Command::Unlink { src, rel, dst } => {
-                let (s, d) = (self.node(&src)?, self.node(&dst)?);
+                let (mut s, mut d) = (self.node(&src)?, self.node(&dst)?);
+                // Relating has no direction: removed from either end.
+                if rel == Rel::Relates
+                    && !self.store.edge_exists(s.id, rel, d.id)?
+                    && self.store.edge_exists(d.id, rel, s.id)?
+                {
+                    std::mem::swap(&mut s, &mut d);
+                }
                 if !self.store.edge_exists(s.id, rel, d.id)? {
                     return Err(Error::Invalid(format!(
                         "{} has no `{rel}` link to {}",

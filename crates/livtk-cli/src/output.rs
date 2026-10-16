@@ -124,11 +124,16 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     let history = ws.history(Some(key))?;
     let (replaces, replaced_by) = ws.related(key, Rel::Supersedes)?;
     let (learned_from, taught) = ws.related(key, Rel::LearnedFrom)?;
+    let (part_of, parts) = ws.related(key, Rel::Parent)?;
+    let (relates, related_by) = ws.related(key, Rel::Relates)?;
+    // Relating has no direction worth showing: both ends list the other.
+    let related: Vec<_> = relates.into_iter().chain(related_by).collect();
     if json {
         return print_json(&json!({
             "node": node, "links": links, "history": history,
             "supersedes": replaces, "superseded_by": replaced_by,
             "learned_from": learned_from, "taught": taught,
+            "part_of": part_of, "sub_tasks": parts, "related": related,
         }));
     }
     println!("{}  {}", node.key, node.title);
@@ -147,8 +152,11 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     }
     println!("{}", facts.join(" · "));
     for (label, briefs) in [
+        ("part of", &part_of),
+        ("sub-task", &parts),
         ("waits for", &links.depends_on),
         ("blocks", &links.blocks),
+        ("related", &related),
         ("replaces", &replaces),
         ("replaced by", &replaced_by),
         ("from", &learned_from),
@@ -292,6 +300,29 @@ pub fn linked(
         (true, true) => println!("{s} already waits for {d}"),
         (false, _) => println!("{s} no longer waits for {d}"),
     }
+    Ok(())
+}
+
+/// What `link` or `unlink` did, in the words it was given: `LIV-4 part-of LIV-1: linked`.
+pub fn link_changed(
+    ws: &Workspace,
+    key: &str,
+    rel: &str,
+    other: &str,
+    add: bool,
+    events: &[Event],
+    json: bool,
+) -> Result<()> {
+    if json {
+        return print_json(&events);
+    }
+    let (k, o) = (ws.node(key)?.key, ws.node(other)?.key);
+    let what = match (add, events.is_empty()) {
+        (true, false) => "linked",
+        (true, true) => "already linked",
+        (false, _) => "unlinked",
+    };
+    println!("{k} {rel} {o}: {what}");
     Ok(())
 }
 

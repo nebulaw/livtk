@@ -861,6 +861,16 @@ Asked for while trying the app, and built in one batch:
   without reloading: reloading for the label alone cost the tick 16 ms. Two limits remain: an
   action taken while a job runs waits for its lock, and opening a project whose store is stale
   still catches up before the first frame.
+- Every link from the command line: `livtk link KEY REL OTHER` and `livtk unlink`, with `REL`
+  one of `waits-for`, `blocks`, `relates`, `learned-from`, `supersedes`, `part-of`, `has-part`
+  (`blocks` and `has-part` read the link from its other end); `dep` stays as the shortcut.
+  The core's rules give every refusal. Sub-tasks: the `parent` link, in the core since
+  milestone 1 but made by nothing, is `livtk new --parent KEY`, "Part of…" and "Add sub-task…"
+  in the panel and the palette, and "Part of" and "Sub-tasks" groups in the panel and in
+  `show`. A parent's state is not tied to its parts'. Relating has no direction, so the core
+  now treats it as one link whichever end made it: linking from the other end changes nothing,
+  and unlinking works from either end. `show` lists related nodes, which it did not, and the
+  panel's "Related from" group joined "Related to".
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

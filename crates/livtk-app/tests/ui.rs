@@ -1176,6 +1176,39 @@ fn a_link_is_added_from_the_panel_and_removed_with_its_cross(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn a_sub_task_is_added_from_the_panel_and_removed_with_its_cross(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-1")
+    });
+    click_on(cx, "add-link");
+    click_on(cx, "link-choice-3");
+    app.read_with(cx, |a, _| {
+        let p = a
+            .model()
+            .palette
+            .as_ref()
+            .expect("the palette picks the part");
+        assert_eq!(p.link.as_ref().unwrap().choice.label, "Add sub-task…");
+    });
+    cx.simulate_input("second");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let (part_of, _) = ws.related("LIV-2", livtk_core::Rel::Parent).unwrap();
+    assert_eq!(part_of[0].key, "LIV-1", "LIV-2 is part of LIV-1");
+    redraw(cx);
+    click_on(cx, "unlink-sub-tasks-LIV-2");
+    let ws = Workspace::open(dir.path()).unwrap();
+    let (_, parts) = ws.related("LIV-1", livtk_core::Rel::Parent).unwrap();
+    assert!(parts.is_empty(), "the cross removed it");
+}
+
+#[gpui_kit::test]
 fn the_palette_adds_a_link_from_its_actions(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());

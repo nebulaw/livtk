@@ -56,6 +56,9 @@ enum Cmd {
         /// A task this one waits for. Repeatable.
         #[arg(long, value_name = "KEY")]
         after: Vec<String>,
+        /// The task this one is part of: a sub-task.
+        #[arg(long, value_name = "KEY")]
+        parent: Option<String>,
     },
     /// Propose a lesson: a rule learned from experience. It binds once the human ratifies it.
     Lesson {
@@ -160,6 +163,19 @@ enum Cmd {
         #[command(subcommand)]
         action: DepAction,
     },
+    /// Link two nodes: KEY waits for, blocks, relates to, was learned from, supersedes, is part
+    /// of or has as a part OTHER.
+    Link {
+        key: String,
+        rel: LinkRel,
+        other: String,
+    },
+    /// Remove a link: the same words as `link`.
+    Unlink {
+        key: String,
+        rel: LinkRel,
+        other: String,
+    },
     /// Add a note to a task's history: what was tried, what failed, what was learned.
     Note {
         key: String,
@@ -195,6 +211,46 @@ enum DepAction {
     Add(DepArgs),
     /// KEY no longer waits for the task given with --on.
     Rm(DepArgs),
+}
+
+/// A link as `livtk link` names it, read from KEY's side: `blocks` and `has-part` are
+/// `waits-for` and `part-of` seen from the other end.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum LinkRel {
+    WaitsFor,
+    Blocks,
+    Relates,
+    LearnedFrom,
+    Supersedes,
+    PartOf,
+    HasPart,
+}
+
+impl LinkRel {
+    /// The core's link: its source, relation and destination.
+    fn edge(self, key: String, other: String) -> (String, Rel, String) {
+        match self {
+            LinkRel::WaitsFor => (key, Rel::DependsOn, other),
+            LinkRel::Blocks => (other, Rel::DependsOn, key),
+            LinkRel::Relates => (key, Rel::Relates, other),
+            LinkRel::LearnedFrom => (key, Rel::LearnedFrom, other),
+            LinkRel::Supersedes => (key, Rel::Supersedes, other),
+            LinkRel::PartOf => (key, Rel::Parent, other),
+            LinkRel::HasPart => (other, Rel::Parent, key),
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            LinkRel::WaitsFor => "waits-for",
+            LinkRel::Blocks => "blocks",
+            LinkRel::Relates => "relates",
+            LinkRel::LearnedFrom => "learned-from",
+            LinkRel::Supersedes => "supersedes",
+            LinkRel::PartOf => "part-of",
+            LinkRel::HasPart => "has-part",
+        }
+    }
 }
 
 #[derive(Args)]
@@ -273,8 +329,13 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             body,
             priority,
             after,
+            parent,
         } => {
-            let links = after.into_iter().map(|k| (Rel::DependsOn, k)).collect();
+            let links = after
+                .into_iter()
+                .map(|k| (Rel::DependsOn, k))
+                .chain(parent.map(|k| (Rel::Parent, k)))
+                .collect();
             let body = read_body(body)?.unwrap_or_default();
             create(ws, Kind::Task, title, body, priority, links, by, json)
         }
@@ -391,6 +452,8 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             let events = ws.execute(cmd, by)?;
             output::linked(ws, &src, &dst, add, &events, json)
         }
+        Cmd::Link { key, rel, other } => link(ws, key, rel, other, true, by, json),
+        Cmd::Unlink { key, rel, other } => link(ws, key, rel, other, false, by, json),
         Cmd::Note { key, text } => {
             let text = read_body(Some(text))?.unwrap_or_default();
             let events = ws.execute(
@@ -421,6 +484,34 @@ fn moved(ws: &mut Workspace, key: &str, to: State, by: &Actor, json: bool) -> Re
         by,
     )?;
     output::moved(ws, &before, &events, json)
+}
+
+/// `link` (`add`) or `unlink`: KEY `rel` OTHER, turned into the core's link.
+fn link(
+    ws: &mut Workspace,
+    key: String,
+    rel: LinkRel,
+    other: String,
+    add: bool,
+    by: &Actor,
+    json: bool,
+) -> Result<()> {
+    let (src, edge, dst) = rel.edge(key.clone(), other.clone());
+    let cmd = if add {
+        Command::Link {
+            src,
+            rel: edge,
+            dst,
+        }
+    } else {
+        Command::Unlink {
+            src,
+            rel: edge,
+            dst,
+        }
+    };
+    let events = ws.execute(cmd, by)?;
+    output::link_changed(ws, &key, rel.word(), &other, add, &events, json)
 }
 
 #[allow(clippy::too_many_arguments)] // one call site per kind; a struct would only rename them

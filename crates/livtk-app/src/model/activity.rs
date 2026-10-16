@@ -3,6 +3,7 @@
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
+use livtk_core::event::Op;
 use livtk_core::{Activity, Actor};
 use uuid::Uuid;
 
@@ -145,4 +146,61 @@ pub fn day_label(day: Date, today: Date) -> String {
         _ if day.year() == today.year() => day.strftime("%B %-d").to_string(),
         _ => day.strftime("%B %-d, %Y").to_string(),
     }
+}
+
+/// What an event did, in a few words, for its line in the feed.
+pub fn describe(a: &Activity) -> String {
+    match &a.event.op {
+        Op::NodeCreate { .. } => "created".to_owned(),
+        Op::NodeSet { data, .. } => {
+            let mut parts = Vec::new();
+            if let Some(s) = data.state {
+                parts.push(format!("moved to {}", capitalised(s.as_str())));
+            }
+            if data.title.is_some() {
+                parts.push("renamed".to_owned());
+            }
+            if data.body.is_some() {
+                parts.push("edited the plan".to_owned());
+            }
+            if let Some(p) = data.priority {
+                let name =
+                    ["urgent", "high", "medium", "low"][usize::from(p.get().clamp(1, 4) - 1)];
+                parts.push(format!("set priority to {name}"));
+            }
+            if data.props.is_some() {
+                parts.push("changed the scope".to_owned());
+            }
+            if parts.is_empty() {
+                "changed".to_owned()
+            } else {
+                parts.join(", ")
+            }
+        }
+        Op::NodeNote { data, .. } => {
+            let first = data.text.lines().next().unwrap_or_default();
+            let short: String = first.chars().take(80).collect();
+            let more = short.len() < first.len() || data.text.lines().nth(1).is_some();
+            format!("noted “{short}{}”", if more { "…" } else { "" })
+        }
+        Op::EdgeAdd { data } | Op::EdgeRemove { data } => {
+            let verb = if matches!(a.event.op, Op::EdgeAdd { .. }) {
+                "linked"
+            } else {
+                "unlinked"
+            };
+            let other = a
+                .other
+                .as_ref()
+                .map_or("a removed node", |b| b.key.as_str());
+            format!("{verb}: {} {other}", data.rel.as_str().replace('_', " "))
+        }
+    }
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }

@@ -651,3 +651,51 @@ fn the_palette_field_sits_centred_in_its_row(cx: &mut TestAppContext) {
     let below = row.bottom() - input.bottom();
     assert_eq!(above, below, "as much room above the field as below it");
 }
+
+#[gpui_kit::test]
+fn g_a_opens_the_feed_and_enter_and_a_decide_from_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().projects[0].unseen, 5, "Claude's five events")
+    });
+    cx.simulate_keystrokes("g a");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Activity);
+        assert_eq!(a.model().projects[0].unseen, 0, "looking clears the badge");
+    });
+    assert!(cx.debug_bounds("event-0").is_some(), "the lines are drawn");
+
+    // Newest first: the lesson, then the second plan's move.
+    cx.simulate_keystrokes("j");
+    open_detail(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Activity, "the feed stays");
+        assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2");
+    });
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    assert_eq!(
+        state_of(dir.path(), "LIV-2"),
+        State::Acked,
+        "a decided the open plan"
+    );
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_line_opens_its_node(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g a");
+    cx.run_until_parked();
+    click_on(cx, "event-4");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().activity_index, 4);
+        assert_eq!(
+            a.model().detail.as_ref().unwrap().node.key,
+            "LIV-1",
+            "the oldest event"
+        );
+    });
+}

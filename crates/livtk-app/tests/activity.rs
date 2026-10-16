@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use jiff::civil::date;
-use livtk_app::model::{FeedRow, Model, View, day_label};
+use livtk_app::model::{FeedRow, Model, View, day_label, describe};
 use livtk_core::event::Op;
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
@@ -211,4 +211,55 @@ fn the_palette_goes_to_the_feed_and_acts_on_the_node_open_there() {
     m.palette_run();
     let ws = Workspace::open(dir.path()).unwrap();
     assert_eq!(ws.node("LIV-1").unwrap().state, State::Acked);
+}
+
+#[test]
+fn each_event_reads_as_a_few_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::init(dir.path(), Some("LIV")).unwrap();
+    let a = create(&mut ws, "first");
+    let b = create(&mut ws, "second");
+    plan(&mut ws, &a);
+    ws.execute(
+        Command::SetPriority {
+            node: a.clone(),
+            priority: 1,
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    ws.execute(
+        Command::Link {
+            src: b.clone(),
+            rel: livtk_core::Rel::DependsOn,
+            dst: a.clone(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    ws.execute(
+        Command::Note {
+            node: a,
+            text: "winit panics on resize\nmore below".into(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let words: Vec<String> = ws
+        .activity(None, 10)
+        .unwrap()
+        .iter()
+        .map(describe)
+        .collect();
+    assert_eq!(
+        words,
+        [
+            "noted “winit panics on resize…”",
+            "linked: depends on LIV-1",
+            "set priority to urgent",
+            "moved to Planned",
+            "created",
+            "created",
+        ]
+    );
 }

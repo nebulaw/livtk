@@ -20,8 +20,8 @@ use livtk_core::{Brief, Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Ask, Choice, Detail, Display, GroupKey, Grouping, Item as PaletteItem, Layout, Model, Ordering,
-    View, choices, drop_allowed,
+    Ask, Choice, Detail, Display, FeedRow, GroupKey, Grouping, Item as PaletteItem, Layout, Model,
+    Ordering, View, choices, describe, drop_allowed,
 };
 use theme::*;
 
@@ -39,6 +39,7 @@ actions!(
         ToggleLayout,
         ToggleAll,
         GoInbox,
+        GoActivity,
         GoTasks,
         GoLessons,
         GoDecisions,
@@ -97,6 +98,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["Enter"], "Open the detail panel"),
     ("Navigate", &["Esc"], "Close the panel or a modal"),
     ("Navigate", &["G", "then", "I"], "Inbox"),
+    ("Navigate", &["G", "then", "A"], "Activity"),
     ("Navigate", &["G", "then", "T"], "Tasks"),
     ("Navigate", &["G", "then", "L"], "Lessons"),
     ("Navigate", &["G", "then", "D"], "Decisions"),
@@ -166,6 +168,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("o", OpenFolder, nav),
         KeyBinding::new("/", FocusFilter, nav),
         KeyBinding::new("g i", GoInbox, nav),
+        KeyBinding::new("g a", GoActivity, nav),
         KeyBinding::new("g t", GoTasks, nav),
         KeyBinding::new("g l", GoLessons, nav),
         KeyBinding::new("g d", GoDecisions, nav),
@@ -504,7 +507,16 @@ impl LivtkApp {
     }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
-        if let Some(i) = self.display_index() {
+        if self.model.view == View::Activity {
+            let at = self
+                .model
+                .feed()
+                .iter()
+                .position(|r| *r == FeedRow::Event(self.model.activity_index));
+            if let Some(i) = at {
+                self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+            }
+        } else if let Some(i) = self.display_index() {
             self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
         }
         cx.notify();
@@ -861,8 +873,13 @@ impl LivtkApp {
         );
         side = side.child(div().h(px(14.))).child(section_label("Views"));
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
+        let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
         for view in View::ALL {
-            let count = if view == View::Inbox { inbox } else { 0 };
+            let count = match view {
+                View::Inbox => inbox,
+                View::Activity => unseen,
+                _ => 0,
+            };
             side = side.child(
                 nav_item(
                     SharedString::from(format!("view-{}", view.title())),
@@ -916,7 +933,15 @@ impl LivtkApp {
             .child(
                 div()
                     .text_color(color(TEXT_4))
-                    .child(format!("{}", m.filtered.len())),
+                    .child(if m.view == View::Activity {
+                        format!(
+                            "{}{}",
+                            m.activity.len(),
+                            if m.activity_more { "+" } else { "" }
+                        )
+                    } else {
+                        format!("{}", m.filtered.len())
+                    }),
             )
             .child(div().flex_1());
         if m.view == View::Tasks {
@@ -1389,12 +1414,152 @@ impl LivtkApp {
         }
         match (self.model.view, self.model.layout) {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
+            (View::Activity, _) => self.feed(cx),
             (View::Tasks, Layout::Board) => self.board(cx).into_any_element(),
             _ => self.list(window, cx).into_any_element(),
         }
     }
 
     // ---- rendering: lists ---------------------------------------------------------------------
+
+    /// The activity feed: day headings and one line per event, newest first, virtualised as the
+    /// lists are; "Show older" ends it while more pages wait.
+    fn feed(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.model.activity.is_empty() {
+            return div()
+                .size_full()
+                .child(empty(
+                    "No activity yet",
+                    "What Claude and you do in this project shows up here, newest first.",
+                ))
+                .into_any_element();
+        }
+        let rows = self.model.feed();
+        let count = rows.len() + usize::from(self.model.activity_more);
+        uniform_list(
+            "feed",
+            count,
+            cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                range
+                    .map(|i| match rows.get(i) {
+                        Some(FeedRow::Day(label)) => div()
+                            .h(px(ROW))
+                            .px_4()
+                            .flex()
+                            .items_end()
+                            .pb_1()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(color(TEXT_4))
+                            .child(label.clone())
+                            .into_any_element(),
+                        Some(FeedRow::Event(e)) => this.feed_line(*e, cx),
+                        None => div()
+                            .id("show-older")
+                            .debug_selector(|| "show-older".into())
+                            .h(px(ROW))
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .text_color(color(TEXT_4))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(color(TEXT_2)))
+                            .child("Show older")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.model.activity_older();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(&self.list_scroll)
+        .size_full()
+        .into_any_element()
+    }
+
+    /// One event: a dot if it is new on this visit, who, what, the node, and when.
+    fn feed_line(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(a) = self.model.activity.get(index) else {
+            return div().into_any_element();
+        };
+        let on = index == self.model.activity_index;
+        let new = self.model.is_new(a);
+        let human = a.event.by == "human";
+        let (key, title) = a.node.as_ref().map_or((String::new(), String::new()), |b| {
+            (b.key.clone(), b.title.clone())
+        });
+        let line = div()
+            .id(SharedString::from(format!("event-{index}")))
+            .debug_selector(move || format!("event-{index}"))
+            .h(px(ROW))
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .when(on, |d| d.bg(color(SELECTED)))
+            .when(!on, |d| d.hover(|s| s.bg(color(HOVER))))
+            .child(
+                div()
+                    .size(px(6.))
+                    .flex_none()
+                    .rounded_full()
+                    .when(new, |d| d.bg(color(ACCENT))),
+            )
+            .child(
+                div()
+                    .size(px(18.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(color(if human { ACCENT } else { BORDER_STRONG }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(10.))
+                    .text_color(color(TEXT))
+                    .child(if human { "Y" } else { "C" }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(if new { TEXT } else { TEXT_2 }))
+                    .child(who(&a.event.by).to_owned()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .max_w(px(320.))
+                    .truncate()
+                    .text_color(color(TEXT_3))
+                    .child(describe(a)),
+            )
+            .child(div().flex_none().text_color(color(TEXT_4)).child(key))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(color(TEXT_2))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child(ago(&a.event.at)),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.model.activity_select(index);
+                this.model.open_detail();
+                cx.notify();
+            }));
+        let flash = self.model.flashed.get(&a.event.id).copied();
+        flashing(line, &a.event.id.to_string(), flash)
+    }
 
     /// The inbox: a short list, so rows can fade and collapse when the human acts on them.
     fn inbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2369,7 +2534,8 @@ impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(window, cx).into_any_element();
         let header = self.header(cx).into_any_element();
-        let toolbar = self.toolbar(cx).into_any_element();
+        let toolbar =
+            (self.model.view != View::Activity).then(|| self.toolbar(cx).into_any_element());
         let content = self.content(window, cx);
         self.track_detail(window, cx);
         let detail = self.detail(cx);
@@ -2438,6 +2604,7 @@ impl Render for LivtkApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &GoInbox, w, cx| this.go(View::Inbox, w, cx)))
+            .on_action(cx.listener(|this, _: &GoActivity, w, cx| this.go(View::Activity, w, cx)))
             .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
             .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
             .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
@@ -2495,7 +2662,7 @@ impl Render for LivtkApp {
                                 .flex()
                                 .flex_col()
                                 .child(header)
-                                .child(toolbar)
+                                .children(toolbar)
                                 .child(list_area),
                         )
                         .children(detail),
@@ -2592,7 +2759,12 @@ fn nav_item(id: SharedString, label: &str, active: bool, count: usize) -> Statef
                     .bg(color(ACCENT))
                     .text_color(color(TEXT))
                     .text_xs()
-                    .child(format!("{count}")),
+                    // The unseen count stops at its cap; past 99 a badge says so.
+                    .child(if count > 99 {
+                        "99+".to_owned()
+                    } else {
+                        format!("{count}")
+                    }),
             )
         })
 }

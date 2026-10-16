@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 mod activity;
 mod palette;
-pub use activity::{FeedRow, day_label};
+pub use activity::{FeedRow, day_label, describe};
 pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
 
 /// The views in the sidebar, in order.

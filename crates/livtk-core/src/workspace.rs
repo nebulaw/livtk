@@ -456,6 +456,18 @@ impl Workspace {
         self.ranked(query, scope, limit, false)
     }
 
+    /// Load the model and the vectors search ranks with, ahead of the first query: the command
+    /// palette does this as it opens, so typing never waits for them.
+    pub fn prepare_search(&mut self) -> Result<()> {
+        let model = self.take_model();
+        let prepared = model
+            .as_deref()
+            .map(|m| self.rank_by_meaning(m, "", false))
+            .transpose();
+        self.model = Some(model);
+        prepared.map(|_| ())
+    }
+
     /// Search as it is typed, for the command palette. A query that is a key (`LIV-12`,
     /// `liv-12`, `12`) brings that node first. The word being typed matches as a prefix, unless
     /// the query ends in a space. Meaning ranks only what clears the model's relevance bar, so a

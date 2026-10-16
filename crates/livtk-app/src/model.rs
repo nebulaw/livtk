@@ -9,6 +9,9 @@ use livtk_core::event::Event;
 use livtk_core::{Actor, Brief, Command, Kind, Links, Node, Rel, State, Summary, Workspace};
 use uuid::Uuid;
 
+mod palette;
+pub use palette::{Action, Ask, Found, Item, Palette, Run, fuzzy};
+
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum View {
@@ -173,6 +176,8 @@ pub struct Model {
     pub leaving: Vec<(Summary, usize, Instant)>,
     /// The last thing worth telling the human: a refusal, an error.
     pub notice: Option<String>,
+    /// The command palette, while it is open.
+    pub palette: Option<Palette>,
     selected: Option<Uuid>,
     /// Everything the view holds, before display options.
     all: Vec<Summary>,
@@ -223,6 +228,7 @@ impl Model {
             flashed: HashMap::new(),
             leaving: Vec::new(),
             notice,
+            palette: None,
             selected: None,
             all: Vec::new(),
             displays: HashMap::new(),
@@ -248,6 +254,14 @@ impl Model {
         } else {
             self.notice = more.notice;
             false
+        }
+    }
+
+    /// Rank search by meaning with models from `dir`, in every open project; `None` ranks by
+    /// keywords only.
+    pub fn set_models_dir(&mut self, dir: Option<PathBuf>) {
+        for p in &mut self.projects {
+            p.ws.set_models_dir(dir.clone());
         }
     }
 

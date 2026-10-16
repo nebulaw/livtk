@@ -1,0 +1,236 @@
+//! The command palette without a window: what it offers, and what choosing does.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
+
+use std::path::Path;
+
+use livtk_app::model::{Ask, Grouping, Item, Model, View, fuzzy};
+use livtk_core::{Actor, Command, Kind, State, Workspace};
+
+const CLAUDE: Actor = Actor::Claude { agent: None };
+
+fn create(ws: &mut Workspace, kind: Kind, title: &str, to: Option<State>) -> String {
+    let e = ws
+        .execute(
+            Command::Create {
+                kind,
+                title: title.into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    let key = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+    if let Some(to) = to {
+        ws.execute(
+            Command::Move {
+                node: key.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    key
+}
+
+/// Two plans in the inbox, a task in the backlog, a canceled one and a lesson; keywords only.
+fn app(dir: &Path) -> Model {
+    let mut ws = Workspace::init(dir, Some("LIV")).unwrap();
+    create(
+        &mut ws,
+        Kind::Task,
+        "Resize the window without flicker",
+        Some(State::Planned),
+    );
+    create(&mut ws, Kind::Task, "Second plan", Some(State::Planned));
+    create(&mut ws, Kind::Task, "Handle two monitors", None);
+    create(
+        &mut ws,
+        Kind::Task,
+        "Old idea nobody wants",
+        Some(State::Canceled),
+    );
+    create(
+        &mut ws,
+        Kind::Lesson,
+        "Run cargo check before reporting done",
+        None,
+    );
+    drop(ws);
+    let mut m = Model::open(&[dir.to_path_buf()]);
+    m.set_models_dir(None);
+    m
+}
+
+fn labels(m: &Model) -> Vec<String> {
+    m.palette
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| match i {
+            Item::Action(a) => a.label.clone(),
+            Item::Node(n) => n.key.clone(),
+        })
+        .collect()
+}
+
+fn state(dir: &Path, key: &str) -> State {
+    Workspace::open(dir).unwrap().node(key).unwrap().state
+}
+
+#[test]
+fn fuzzy_prefers_word_starts_and_runs() {
+    assert!(fuzzy("ack", "Acknowledge") > fuzzy("ack", "Back to backlog"));
+    assert!(fuzzy("gtl", "Go to Lessons").is_some());
+    assert!(fuzzy("go les", "Go to Lessons") > fuzzy("go les", "Order by last updated"));
+    assert_eq!(fuzzy("zz", "Acknowledge"), None);
+    assert_eq!(fuzzy("", "anything"), Some(0));
+}
+
+#[test]
+fn empty_it_offers_what_the_selected_node_can_do_then_recent_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    let shown = labels(&m);
+    assert_eq!(
+        shown[0], "Acknowledge",
+        "the selected plan's decision comes first"
+    );
+    let p = m.palette.as_ref().unwrap();
+    match &p.items[0] {
+        Item::Action(a) => {
+            assert_eq!(a.context.as_deref(), Some("LIV-1"));
+            assert_eq!(a.shortcut, Some("A"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(shown.contains(&"Set priority: Urgent".to_owned()));
+    assert!(
+        shown.contains(&"LES-1".to_owned()) && shown.contains(&"LIV-3".to_owned()),
+        "recent nodes follow: {shown:?}"
+    );
+    assert!(
+        !shown.contains(&"LIV-4".to_owned()),
+        "dismissed work is not recent work"
+    );
+}
+
+#[test]
+fn typing_matches_actions_by_letters_and_nodes_by_words_and_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    m.palette_query("ack");
+    assert_eq!(labels(&m)[0], "Acknowledge");
+
+    m.palette_query("monit");
+    assert_eq!(labels(&m), ["LIV-3"], "the word being typed is a prefix");
+
+    m.palette_query("LIV-2");
+    assert_eq!(labels(&m).first().map(String::as_str), Some("LIV-2"));
+    m.palette_query("2");
+    assert_eq!(labels(&m).first().map(String::as_str), Some("LIV-2"));
+
+    m.palette_query("go les");
+    assert_eq!(labels(&m)[0], "Go to Lessons");
+}
+
+#[test]
+fn enter_runs_the_highlighted_action_and_closes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    m.palette_query("ack");
+    assert_eq!(m.palette_run(), None, "the model did it itself");
+    assert!(m.palette.is_none());
+    assert_eq!(state(dir.path(), "LIV-1"), State::Acked);
+
+    m.open_palette();
+    m.palette_query("group by prio");
+    m.palette_run();
+    assert_eq!(m.display().grouping, Grouping::Priority);
+}
+
+#[test]
+fn the_highlight_moves_and_wraps_and_the_pointer_sets_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    let n = m.palette.as_ref().unwrap().items.len();
+    m.palette_move(-1);
+    assert_eq!(
+        m.palette.as_ref().unwrap().selected,
+        n - 1,
+        "up from the top wraps"
+    );
+    m.palette_move(1);
+    assert_eq!(m.palette.as_ref().unwrap().selected, 0);
+    m.palette_highlight(2);
+    assert_eq!(m.palette.as_ref().unwrap().selected, 2);
+    m.palette_query("set priority: low");
+    assert_eq!(
+        m.palette.as_ref().unwrap().selected,
+        0,
+        "a new query starts at the top"
+    );
+}
+
+#[test]
+fn choosing_a_node_goes_to_it_wherever_it_hides() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+
+    m.set_view(View::Tasks);
+    m.open_palette();
+    m.palette_query("cargo");
+    m.palette_run();
+    assert_eq!(m.view, View::Lessons);
+    assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LES-1"));
+    assert_eq!(
+        m.detail.as_ref().map(|d| d.node.key.as_str()),
+        Some("LES-1")
+    );
+
+    // Canceled, behind a filter that excludes it: the palette still gets there.
+    m.set_view(View::Tasks);
+    m.set_filter("resize");
+    m.open_palette();
+    m.palette_query("nobody");
+    m.palette_run();
+    assert!(m.show_all, "dismissed work is shown to show it");
+    assert_eq!(m.display().filter, "", "the filter that hid it is cleared");
+    assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-4"));
+    assert!(m.detail.is_some());
+}
+
+#[test]
+fn a_node_waiting_in_the_inbox_opens_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    m.palette_query("second");
+    m.palette_run();
+    assert_eq!(m.view, View::Inbox, "it is already in view");
+    assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-2"));
+}
+
+#[test]
+fn what_only_the_view_can_do_comes_back_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    for (query, ask) in [
+        ("new task", Ask::NewTask),
+        ("add a note", Ask::AddNote),
+        ("edit title", Ask::EditTitle),
+        ("keyboard shortcuts", Ask::Help),
+    ] {
+        m.open_palette();
+        m.palette_query(query);
+        assert_eq!(m.palette_run(), Some(ask), "{query}");
+        assert!(m.palette.is_none());
+    }
+}

@@ -685,3 +685,19 @@ fn with_model_find_brings_no_noise_for_a_half_typed_word() {
         "find keeps only what clears the relevance bar"
     );
 }
+
+#[test]
+#[ignore = "needs the model: LIVTK_TEST_MODELS=<dir> cargo test -- --ignored"]
+fn with_model_prepared_search_leaves_typing_nothing_to_embed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut ws, _) = with_rules(dir.path());
+    ws.prepare_search().unwrap();
+    let prepared = ws.embedded();
+    assert!(prepared > 0, "preparing embedded the project");
+    ws.find("cargo ch", 5).unwrap();
+    assert_eq!(
+        ws.embedded(),
+        prepared,
+        "the first keystroke embedded nothing"
+    );
+}

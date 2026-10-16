@@ -96,10 +96,15 @@ Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter f
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
 Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `h`.
-`Ctrl+?` lists every shortcut; the ones used most:
+`Ctrl+K` opens the command palette: type a few letters to run any action that is legal from
+where you stand (acknowledge, move, set priority, go to a view, group, order, new task), or to
+find any task, lesson, decision or finding by key (`LIV-12`, `12`), by words as you type them,
+and by meaning when the model is installed; `Enter` takes you there. `Ctrl+?` lists every
+shortcut; the ones used most:
 
 | Keys | |
 |---|---|
+| `Ctrl+K` | command palette and search |
 | `j` `k` | move |
 | `Enter` `Esc` | open, close the detail panel |
 | `a` | decide: acknowledge, ratify, accept |

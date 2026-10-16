@@ -1,6 +1,7 @@
 # livtk: plan
 
-Status: milestones 1 to 4 done; milestone 5 (graph, search, palette, activity) waits for the developer's go.
+Status: milestones 1 to 4 done; milestone 5 part 1, the command palette and search, done
+(section 17); the activity feed and the graph wait for the developer's go.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -672,6 +673,13 @@ once (80 ms), when the palette first opens.
 
 **Done when** from anywhere, `Ctrl+K`, a few letters and `Enter` reach any node or run any legal
 action, and the budget holds on 10,000 nodes.
+
+**What building it found.** GPUI Component's input binds the arrow keys in its own key context,
+the deepest, so the palette binds Up and Down under `LivtkPalette > Input`, after the component's
+bindings: at equal depth the later binding wins. Kept vectors cost 20 MB at 10,000 nodes. A new
+lesson is proposed, so it waits in the Inbox, and the palette opens it there rather than
+switching views. Opening the palette prepares search on the UI thread: about 0.3 s once in a
+10,000-node project that was never embedded, nothing after.
 
 ## 18. Milestone 6 in outline: the team
 

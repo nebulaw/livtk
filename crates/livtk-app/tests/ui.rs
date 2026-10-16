@@ -638,3 +638,16 @@ fn a_click_runs_an_item_and_new_task_opens_the_form(cx: &mut TestAppContext) {
         )
     });
 }
+
+#[gpui_kit::test]
+fn the_palette_field_sits_centred_in_its_row(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    let row = cx.debug_bounds("palette-field").expect("drawn");
+    let input = cx.debug_bounds("palette-input").expect("drawn");
+    let above = input.top() - row.top();
+    let below = row.bottom() - input.bottom();
+    assert_eq!(above, below, "as much room above the field as below it");
+}

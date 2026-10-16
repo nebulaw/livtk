@@ -2137,10 +2137,7 @@ impl LivtkApp {
                     .child("Nothing matches"),
             );
         }
-        let context = self
-            .model
-            .selected()
-            .map(|r| format!("{} · {}", r.key, r.title));
+        let context = self.model.selected().map(|r| r.key.clone());
         let card = div()
             .debug_selector(|| "palette".into())
             .key_context(PALETTE)
@@ -2149,26 +2146,41 @@ impl LivtkApp {
             .flex_col()
             .on_action(cx.listener(|this, _: &PaletteUp, _, cx| this.move_palette(-1, cx)))
             .on_action(cx.listener(|this, _: &PaletteDown, _, cx| this.move_palette(1, cx)))
+            // One row, the field centred in it, with what the actions apply to at its end.
             .child(
                 div()
+                    .debug_selector(|| "palette-field".into())
+                    .h(px(52.))
                     .px_4()
-                    .pt_3()
                     .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when_some(context, |d, c| {
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .debug_selector(|| "palette-input".into())
+                            .flex_1()
+                            .min_w_0()
+                            .child(flush_input(
+                                Input::new(&self.palette_input).text_base(),
+                                28.,
+                            )),
+                    )
+                    .when_some(context, |d, key| {
                         d.child(
                             div()
-                                .truncate()
+                                .flex_none()
+                                .h(px(22.))
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(color(BORDER_STRONG))
                                 .text_xs()
-                                .text_color(color(TEXT_4))
-                                .child(c),
+                                .text_color(color(TEXT_3))
+                                .child(key),
                         )
-                    })
-                    .child(div().h(px(40.)).flex().items_center().child(flush_input(
-                        Input::new(&self.palette_input).text_base(),
-                        28.,
-                    ))),
+                    }),
             )
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(results)

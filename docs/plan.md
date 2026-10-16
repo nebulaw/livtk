@@ -681,6 +681,40 @@ lesson is proposed, so it waits in the Inbox, and the palette opens it there rat
 switching views. Opening the palette prepares search on the UI thread: about 0.3 s once in a
 10,000-node project that was never embedded, nothing after.
 
+## 19. Milestone 5, part 2 in detail: the activity feed
+
+**Goal.** See what happened while you were away: every change in the project, newest first,
+with what is new since you last looked marked, and the node one key away.
+
+**Behaviour**
+
+- An **Activity** view under Inbox (`g a`): one line per event, grouped by day. Who (you, Claude,
+  or which agent), what (created, moved to a state, renamed, edited the plan, set priority,
+  noted, linked), the node's key and title, and when.
+- **New since you last looked:** events by anyone but you, after the mark, carry an accent dot,
+  and the sidebar counts them. Opening the view moves the mark to the newest event. The mark
+  lives in the store's `meta` table, which a rebuild keeps.
+- `j`/`k` move, `Enter` opens the node in the detail panel without leaving the feed, and the
+  panel's actions act on it there. A click does the same.
+- Changes from Claude appear at the top while the feed is open, and flash once.
+- 200 events a page, newest first; "Show older" loads the next page.
+
+**Core.** `Workspace::activity(before, limit)`: events newest first with the nodes they are
+about; `activity_seen`, `set_activity_seen` and `unseen_activity` for the mark.
+
+**App.** The feed's rows, the mark, and acting on the open node live in the model. Actions that
+acted on the selected row now act on the node open in the panel when no row is selected, which is
+what the feed needs.
+
+**Budget.** A page of 200 under 10 ms on a log of 100,000 events; counting what is unseen under
+1 ms, as it runs on every refresh.
+
+**Steps**, each its own commit: the core with tests and a benchmark; the model with tests; the
+view with headless UI tests; README, plan and install.
+
+**Done when** after a session of Claude's work, the sidebar says how much happened, the feed
+shows it newest first, and any line opens its node.
+
 ## 18. Milestone 6 in outline: the team
 
 Decided (developer, 2026-10-16): after milestone 5. livtk becomes a team tool, Linear tailored to

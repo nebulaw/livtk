@@ -284,6 +284,10 @@ Each one ends with something you can use, and starts only after your acknowledge
 | 3 | Memory: lessons, decisions, findings, recall, embeddings | A ratified rule shows up when a matching prompt is typed; recall stays within budget |
 | 4 | App v1: inbox, list, board, detail, ack and ratify | You run a whole day of work from the app |
 | 5 | App v2: graph, search, palette, activity feed | Graph of a real project renders smoothly |
+| 6 | Team: keys that never change, who did what, hosted (section 18) | Two people create tasks at once and every key stays as created |
+
+Milestone 5 is built in parts, each acknowledged: the command palette and search first
+(section 17), then the activity feed, then the graph.
 
 Later, only when needed: `livtk compact`, prebuilt binaries, cross-project views, an MCP server.
 
@@ -293,7 +297,7 @@ Later, only when needed: `livtk compact`, prebuilt binaries, cross-project views
 |---|---|
 | GPUI breaks between versions | Pinned revision; UI isolated in `livtk-app` |
 | Event log grows | Compaction is designed (section 5) |
-| Keys renumbered after a merge | Deterministic renumbering; the first key stays in the log |
+| Keys renumbered after a merge | Deterministic renumbering; the first key stays in the log. Fine for one person; for a team it is the main risk, solved in milestone 6 |
 | Claude bypasses a human gate | Gate in core, guard hook, and the human as root of trust |
 | Static embeddings recall poorly | Hybrid with BM25; the embedder is swappable |
 
@@ -616,3 +620,71 @@ reads `human`.
 
 **Done when** you run your day's acknowledging and ratifying from the app, and Claude's changes
 show up in it while it is open.
+
+## 17. Milestone 5, part 1 in detail: the command palette and search
+
+**Goal.** One keyboard surface, as Linear's Cmd+K: find any task, lesson, decision or finding,
+and run any action, without the mouse.
+
+**Measure first.** Search over every node has not been measured at 10,000 nodes. Ranking by
+meaning reads every node's text and vector from SQLite on each call (10,000 vectors of 2 KB is
+20 MB), fine for a prompt hook's small recall set but likely too slow per keystroke. Step 1
+measures a warm search in release; if it misses the budget, the workspace keeps vectors in memory
+(checked by the same text hash as the stored ones).
+
+**Behaviour**
+
+- `Ctrl+K` anywhere, inputs included (it is never text), opens a modal near the top: a query
+  field and results. `↑`/`↓` (and `Ctrl+N`/`Ctrl+P`) move, `Enter` runs, `Esc` or a click outside
+  closes; the mouse hovers and clicks. Typing never runs a command.
+- Results in two sections:
+  - **Actions**, offered only when legal: on the selected node (acknowledge, ratify, accept,
+    reject, move to a state, set priority, add a note, edit the title), navigation (each view,
+    each project), the view (list or board, grouping, ordering, show dismissed), and new task.
+    Matched by fuzzy subsequence on the label; each shows its shortcut.
+  - **Nodes** of the current project: state mark, key, title, kind. An exact key (`LIV-12`,
+    `12`) comes first; then the core's search, with the word being typed as a prefix (`resi`
+    finds "resize"), fused with meaning when the model is installed.
+- An empty query shows the actions for the selected node, then the nodes updated last.
+- Choosing a node opens its view, selects it and opens the detail panel, showing dismissed work
+  if it is dismissed.
+
+**Core.** `Workspace::find(query, limit)` for typing: a key match, then ranked search with the
+last word as a prefix (FTS5 `"word"*`). The current project only; across projects is milestone 6.
+
+**App.** The palette's state, the action catalogue and the fuzzy matcher live in the GPU-free
+model, tested in plain Rust; the modal is drawn in `ui`, as the new-task modal is.
+
+**Budget.** Results for a keystroke under 16 ms (one frame) warm on 10,000 nodes. The model loads
+once (80 ms), when the palette first opens.
+
+**Steps**, each its own commit:
+
+1. Measure; `Workspace::find` with key and prefix matching; core tests; an ignored benchmark with
+   the budget.
+2. The palette in the model: state, actions, fuzzy matching; model tests.
+3. The modal: keys, rendering; headless UI tests (`Ctrl+K` opens it, typing filters and runs
+   nothing, `Enter` opens a node and runs an action, `Esc` closes).
+4. README, this plan's status, install.
+
+**Done when** from anywhere, `Ctrl+K`, a few letters and `Enter` reach any node or run any legal
+action, and the budget holds on 10,000 nodes.
+
+## 18. Milestone 6 in outline: the team
+
+Decided (developer, 2026-10-16): after milestone 5. livtk becomes a team tool, Linear tailored to
+the team's needs and Claude's agentic flow. Outline only; detailed when it starts.
+
+- **Keys that never change.** Today two people who both create `LIV-13` on different branches get
+  `LIV-13` and `LIV-14` after the merge, deterministically, but one of them sees their key change
+  under them, and every mention of it (commits, chat, notes, bodies) then points at someone
+  else's task. Order is not at risk (views sort by priority and time, never by number); identity
+  is. As in Linear, the server assigns numbers: a node made offline carries a provisional label
+  until the server numbers it, the numbering is itself an event, and a key never changes after.
+- **Who did what.** Each human acts under their own name (from git or the livtk config), so the
+  log shows who acknowledged a plan or ratified a rule.
+- **Hosted.** A server process (`livtk serve`) runs the core against the project and serves the
+  app. A spike decides between GPUI's experimental web target, reusing this UI, and a separate
+  web front end. Claude Code keeps running on each developer's machine; how its events reach the
+  server (through git, or sent directly) is decided then.
+- **Sign-in**, so only the team reaches it, and the human gates know which human.

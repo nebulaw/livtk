@@ -794,6 +794,14 @@ Asked for while trying the app, and built in one batch:
 - Board columns scroll with the wheel; they did not, because cards shrank to fit instead of
   overflowing. Shift+wheel scrolls the board across, taken in the capture phase so no column
   sees it.
+- A state changes from a menu on its state icon in a row or on a card, showing every state of
+  the kind: the moves the node can make enabled, the human's decisions in the accent, the rest
+  greyed. The detail panel's row of buttons became a flow: the main path left to right with
+  arrows, the states off it (parked, canceled, rejected) below, the current one filled and the
+  reachable ones outlined; ratifying a lesson offers the standing rule. Both read the core's
+  transition table, so they never offer a move it would refuse. Changing a state from a row
+  leaves the selection where it is, and the row that leaves a view fades from its own place
+  (it used to take the selected row's).
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

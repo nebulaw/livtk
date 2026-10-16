@@ -23,8 +23,9 @@ use uuid::Uuid;
 
 use crate::model::{
     Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Model, Ordering, View, choices, describe,
-    drop_allowed, link_choices, link_curve, visible_runs,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Model, Ordering, Step, View, choices,
+    describe, drop_allowed, has_flow, link_choices, link_curve, state_name, state_short, steps,
+    visible_runs,
 };
 use theme::*;
 
@@ -404,6 +405,8 @@ impl LivtkApp {
             Menu::RowPriority(_) => "row-priority",
             Menu::DetailPriority => "detail-priority",
             Menu::AddLink => "add-link",
+            Menu::RowState(_) => "row-state",
+            Menu::Standing => "standing",
         })
     }
 
@@ -1531,6 +1534,315 @@ impl LivtkApp {
         })
     }
 
+    /// A node's state mark that opens the states of its kind, as Linear's status menu: the
+    /// moves it can make enabled, the human's own decisions in the accent, the rest greyed so
+    /// the whole flow shows. A press here neither selects the row nor starts a drag.
+    fn state_button(&self, id: Uuid, kind: Kind, state: State, cx: &mut Context<Self>) -> Div {
+        if !has_flow(kind) {
+            return div().flex_none().child(state_mark(kind, state));
+        }
+        let menu = Menu::RowState(id);
+        let open = self.menu == Some(menu);
+        let selector = format!("state-of-{id}");
+        let button = div()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .size(px(22.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .cursor_pointer()
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
+            .child(state_mark(kind, state))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_menu(menu, window, cx);
+                }),
+            );
+        div().relative().flex_none().child(button).when(open, |d| {
+            let mut panel = menu_panel(220.).debug_selector(|| "set-state-menu".into());
+            let all = steps(kind, state);
+            let mut side = false;
+            for s in &all {
+                if !s.main && !side {
+                    panel = panel.child(menu_divider());
+                    side = true;
+                }
+                panel = panel.child(self.state_option(
+                    id,
+                    kind,
+                    s,
+                    s.to.clone(),
+                    state_name(s.state),
+                    cx,
+                ));
+                if let Some(standing) = &s.standing {
+                    panel = panel.child(self.state_option(
+                        id,
+                        kind,
+                        s,
+                        Some(standing.clone()),
+                        "Ratified, as a standing rule",
+                        cx,
+                    ));
+                }
+            }
+            d.child(self.popover(menu, false, 26., panel, cx))
+        })
+    }
+
+    /// A state in the state menu: enabled when `to` is a move the node can make.
+    fn state_option(
+        &self,
+        id: Uuid,
+        kind: Kind,
+        s: &Step,
+        to: Option<Choice>,
+        label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let standing = to.as_ref().is_some_and(|c| c.always);
+        let row_id = format!(
+            "set-state-{}{}",
+            s.state.as_str(),
+            if standing { "-standing" } else { "" }
+        );
+        let decides = to.as_ref().is_some_and(|c| c.decides);
+        let row = div()
+            .id(SharedString::from(row_id.clone()))
+            .debug_selector(move || row_id.clone())
+            .h(px(30.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .child(state_mark(kind, s.state))
+            .child(label)
+            .child(check(s.current && !standing));
+        match to {
+            Some(choice) => row
+                .cursor_pointer()
+                .text_color(color(if decides { ACCENT_HOVER } else { TEXT_2 }))
+                .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.model.choose_on(id, &choice);
+                    this.close_menu(window, cx);
+                })),
+            // Not a move from here: shown, so the flow reads whole, but greyed.
+            None if s.current => row.text_color(color(TEXT)),
+            None => row.text_color(color(TEXT_4)).opacity(0.55),
+        }
+    }
+
+    /// The flow of the open node's states: the main path left to right with arrows, the states
+    /// off it below. Where it is now is filled; where it can go is outlined and clickable, in
+    /// the accent when that move is the human's own decision; the rest is dim.
+    fn state_flow(&self, id: Uuid, kind: Kind, state: State, cx: &mut Context<Self>) -> Div {
+        let all = steps(kind, state);
+        let mut path = div()
+            .debug_selector(|| "state-flow".into())
+            .w_full()
+            .flex()
+            .items_start();
+        for (i, s) in all.iter().filter(|s| s.main).enumerate() {
+            if i > 0 {
+                path = path.child(
+                    div()
+                        .flex_1()
+                        .min_w(px(10.))
+                        .h(px(26.))
+                        .flex()
+                        .items_center()
+                        .child(div().flex_1().h(px(1.)).bg(color(BORDER_STRONG)))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .line_height(px(11.))
+                                .text_color(color(TEXT_4))
+                                .child("›"),
+                        ),
+                );
+            }
+            path = path.child(self.flow_step(id, kind, s, cx));
+        }
+        let off: Vec<&Step> = all.iter().filter(|s| !s.main).collect();
+        let mut out = div().flex().flex_col().gap_3().child(path);
+        if !off.is_empty() {
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_xs().text_color(color(TEXT_4)).child("Or"));
+            for s in off {
+                row = row.child(self.flow_pill(id, kind, s, cx));
+            }
+            out = out.child(row);
+        }
+        out
+    }
+
+    /// How a step looks for what it is: current, a move, the human's decision, out of reach.
+    fn step_style(s: &Step, el: Stateful<Div>) -> Stateful<Div> {
+        let reachable = s.to.is_some() || s.standing.is_some();
+        if s.current {
+            el.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
+        } else if reachable && s.decides() {
+            el.border_color(color(ACCENT))
+                .cursor_pointer()
+                .hover(|h| h.bg(with_alpha(ACCENT, 0.16)))
+        } else if reachable {
+            el.border_color(color(BORDER_STRONG))
+                .cursor_pointer()
+                .hover(|h| h.bg(color(HOVER)))
+        } else {
+            el.border_color(color(BORDER)).opacity(0.4)
+        }
+    }
+
+    /// What a click on a step does: ratify offers the standing-rule choice first.
+    fn on_step(
+        &self,
+        id: Uuid,
+        s: &Step,
+        el: Stateful<Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let tip: SharedString = match (&s.to, s.current) {
+            (Some(c), _) => c.label.into(),
+            (None, true) => "Where it is now".into(),
+            (None, false) => "Not a move from here".into(),
+        };
+        let el = el.tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+        });
+        if s.standing.is_some() {
+            el.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_menu(Menu::Standing, window, cx);
+                }),
+            )
+        } else if let Some(choice) = s.to.clone() {
+            el.on_click(cx.listener(move |this, _, _, cx| {
+                this.model.choose_on(id, &choice);
+                cx.notify();
+            }))
+        } else {
+            el
+        }
+    }
+
+    /// A step on the main path: its mark in a ring, its name below.
+    fn flow_step(&self, id: Uuid, kind: Kind, s: &Step, cx: &mut Context<Self>) -> Div {
+        let name = s.state.as_str();
+        let ring_id = format!("flow-{name}");
+        let ring = div()
+            .id(SharedString::from(ring_id.clone()))
+            .debug_selector(move || ring_id.clone())
+            .size(px(26.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_1()
+            .child(state_mark(kind, s.state));
+        let ring = self.on_step(id, s, Self::step_style(s, ring), cx);
+        let label_id = format!("flow-label-{name}");
+        let reachable = s.to.is_some() || s.standing.is_some();
+        let label = div()
+            .debug_selector(move || label_id.clone())
+            .text_xs()
+            .whitespace_nowrap()
+            .text_color(color(if s.current {
+                TEXT
+            } else if reachable && s.decides() {
+                ACCENT_HOVER
+            } else if reachable {
+                TEXT_2
+            } else {
+                TEXT_4
+            }))
+            .when(s.current, |l| l.font_weight(FontWeight::MEDIUM))
+            .child(state_short(s.state));
+        let standing_open = self.menu == Some(Menu::Standing) && s.standing.is_some();
+        div()
+            .relative()
+            .w(px(56.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .child(ring)
+            .child(label)
+            .when(standing_open, |d| {
+                let panel = self.standing_menu(id, s, cx);
+                d.child(self.popover(Menu::Standing, false, 30., panel, cx))
+            })
+    }
+
+    /// A state off the main path, as a pill: parked, canceled, rejected.
+    fn flow_pill(&self, id: Uuid, kind: Kind, s: &Step, cx: &mut Context<Self>) -> Stateful<Div> {
+        let pill_id = format!("flow-{}", s.state.as_str());
+        let reachable = s.to.is_some();
+        let pill = div()
+            .id(SharedString::from(pill_id.clone()))
+            .debug_selector(move || pill_id.clone())
+            .h(px(26.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded_full()
+            .border_1()
+            .text_xs()
+            .text_color(color(if s.current {
+                TEXT
+            } else if reachable && s.decides() {
+                ACCENT_HOVER
+            } else if reachable {
+                TEXT_2
+            } else {
+                TEXT_4
+            }))
+            .child(state_mark(kind, s.state))
+            .child(state_name(s.state));
+        self.on_step(id, s, Self::step_style(s, pill), cx)
+    }
+
+    /// Ratify, or ratify as a standing rule shown at every session start.
+    fn standing_menu(&self, id: Uuid, s: &Step, cx: &mut Context<Self>) -> Div {
+        let mut panel = menu_panel(240.).debug_selector(|| "standing-menu".into());
+        for (row_id, label, choice) in [
+            ("ratify-plain", "Ratify", s.to.clone()),
+            (
+                "ratify-standing",
+                "Ratify as a standing rule",
+                s.standing.clone(),
+            ),
+        ] {
+            let Some(choice) = choice else { continue };
+            panel = panel.child(
+                option_row(row_id.into())
+                    .debug_selector(move || row_id.into())
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.model.choose_on(id, &choice);
+                        this.close_menu(window, cx);
+                    })),
+            );
+        }
+        panel
+    }
+
     /// "+ Add link": the relations the open node can gain, each opening the palette to pick
     /// the other end.
     fn add_link_button(&self, kind: Kind, cx: &mut Context<Self>) -> Div {
@@ -2335,7 +2647,7 @@ impl LivtkApp {
                     .text_color(color(TEXT_4))
                     .child(r.key.clone()),
             )
-            .child(state_mark(r.kind, r.state))
+            .child(self.state_button(id, r.kind, r.state, cx))
             .child(
                 div()
                     .flex_1()
@@ -2521,7 +2833,7 @@ impl LivtkApp {
                                 false,
                                 cx,
                             ))
-                            .child(state_mark(Kind::Task, r.state)),
+                            .child(self.state_button(id, Kind::Task, r.state, cx)),
                     )
                     .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
@@ -2633,45 +2945,6 @@ impl LivtkApp {
 
     fn detail_panel(&mut self, d: &Detail, cx: &mut Context<Self>) -> Stateful<Div> {
         let n = &d.node;
-        let mut choice_row = div().flex().flex_wrap().gap_2();
-        for (i, c) in d.choices.iter().enumerate() {
-            let c2 = c.clone();
-            let primary = c.decides && !matches!(c.to, State::Rejected | State::Retired);
-            let hint = match (i, c.always, c.to) {
-                (_, true, _) => Some("S"),
-                (_, _, State::Rejected) => Some("X"),
-                (0, _, _) if primary => Some("A"),
-                _ => None,
-            };
-            choice_row = choice_row.child(
-                div()
-                    .id(SharedString::from(format!("choice-{i}")))
-                    .h(px(28.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .cursor_pointer()
-                    .when(primary, |d| {
-                        d.bg(color(ACCENT))
-                            .text_color(color(TEXT))
-                            .hover(|s| s.bg(color(ACCENT_HOVER)))
-                    })
-                    .when(!primary, |d| {
-                        d.bg(color(SURFACE))
-                            .border_1()
-                            .border_color(color(BORDER_STRONG))
-                            .text_color(color(TEXT_2))
-                            .hover(|s| s.bg(color(HOVER)))
-                    })
-                    .child(c.label)
-                    .when_some(hint, |d, h| {
-                        d.child(div().text_xs().text_color(with_alpha(TEXT, 0.6)).child(h))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose(&c2, cx))),
-            );
-        }
         let mut props = div().flex().flex_col().gap_2().child(prop_row(
             "Status",
             div()
@@ -2713,6 +2986,7 @@ impl LivtkApp {
         for g in &d.link_groups {
             links = links.child(self.link_group(g, cx));
         }
+        let flow = self.state_flow(n.id, n.kind, n.state, cx);
         let title = self.detail_title(n, cx);
         let body = self.detail_body(n, cx);
         let mut timeline = div().flex().flex_col().gap_3();
@@ -2771,7 +3045,7 @@ impl LivtkApp {
                     .flex_col()
                     .gap_5()
                     .child(title)
-                    .when(!d.choices.is_empty(), |d| d.child(choice_row))
+                    .when(has_flow(n.kind), |d| d.child(flow))
                     .child(props)
                     .child(body)
                     .child(links)
@@ -3361,6 +3635,10 @@ enum Menu {
     DetailPriority,
     /// The relations a link can be added by, in the detail panel.
     AddLink,
+    /// A node's state, from its row or card.
+    RowState(Uuid),
+    /// Ratify or ratify as a standing rule, from the flow in the detail panel.
+    Standing,
 }
 
 impl Menu {

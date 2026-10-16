@@ -1257,3 +1257,132 @@ fn the_wheel_scrolls_a_board_column_down_and_shift_scrolls_across(cx: &mut TestA
     );
     assert_eq!(across.top(), scrolled.top(), "and the column did not move");
 }
+
+#[gpui_kit::test]
+fn a_rows_state_icon_opens_the_flow_and_only_moves_are_taken(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    // The inbox: LIV-1 selected, LIV-2 below it.
+    click_on(
+        cx,
+        named(format!("state-of-{}", id_of(dir.path(), "LIV-2"))),
+    );
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("row-state")));
+    assert!(
+        cx.debug_bounds("set-state-doing").is_some(),
+        "the whole flow shows"
+    );
+    click_on(cx, "set-state-doing");
+    assert_eq!(
+        state_of(dir.path(), "LIV-2"),
+        State::Planned,
+        "not a move from planned"
+    );
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), Some("row-state"), "still open")
+    });
+    click_on(cx, "set-state-acked");
+    assert_eq!(
+        state_of(dir.path(), "LIV-2"),
+        State::Acked,
+        "acknowledged from its icon"
+    );
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None);
+        assert_eq!(
+            a.model().selected().unwrap().key,
+            "LIV-1",
+            "the selection stayed"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_board_cards_state_icon_moves_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t b");
+    cx.run_until_parked();
+    click_on(
+        cx,
+        named(format!("state-of-{}", id_of(dir.path(), "LIV-1"))),
+    );
+    click_on(cx, "set-state-parked");
+    assert_eq!(state_of(dir.path(), "LIV-1"), State::Parked);
+}
+
+#[gpui_kit::test]
+fn the_panels_flow_moves_the_open_task_and_fits_the_panel(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    let panel = cx.debug_bounds("detail-body-panel").unwrap();
+    let flow = cx.debug_bounds("state-flow").expect("the flow is drawn");
+    assert!(
+        flow.left() >= panel.left() && flow.right() <= panel.right(),
+        "fits: {flow:?}"
+    );
+    let names = ["backlog", "planned", "acked", "doing", "review", "done"];
+    let labels: Vec<_> = names
+        .iter()
+        .map(|n| {
+            cx.debug_bounds(named(format!("flow-label-{n}")))
+                .expect("labelled")
+        })
+        .collect();
+    for pair in labels.windows(2) {
+        assert!(pair[0].right() < pair[1].left(), "labels apart: {pair:?}");
+    }
+    assert!(
+        labels[5].right() <= panel.right(),
+        "the last label is inside the panel"
+    );
+
+    click_on(cx, "flow-doing");
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Planned,
+        "doing is out of reach"
+    );
+    click_on(cx, "flow-acked");
+    assert_eq!(state_of(dir.path(), "LIV-1"), State::Acked);
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().detail.as_ref().unwrap().node.state,
+            State::Acked,
+            "the panel follows"
+        )
+    });
+    cx.run_until_parked();
+    click_on(cx, "flow-doing");
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Doing,
+        "now doing is the next step"
+    );
+    click_on(cx, "flow-canceled");
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Canceled,
+        "the states off the path work too"
+    );
+}
+
+#[gpui_kit::test]
+fn ratifying_from_the_flow_offers_the_standing_rule(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g l");
+    open_detail(cx);
+    click_on(cx, "flow-ratified");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("standing")));
+    click_on(cx, "ratify-standing");
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert_eq!(ws.node("LES-1").unwrap().state, State::Ratified);
+    assert_eq!(
+        ws.always_rules().unwrap().len(),
+        1,
+        "ratified as a standing rule"
+    );
+}

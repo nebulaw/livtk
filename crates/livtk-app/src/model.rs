@@ -10,9 +10,11 @@ use livtk_core::{Actor, Brief, Command, Kind, Links, Node, Rel, State, Summary, 
 use uuid::Uuid;
 
 mod activity;
+mod flow;
 mod graph;
 mod palette;
 pub use activity::{FeedRow, day_label, describe};
+pub use flow::{Step, flow_of, has_flow, state_name, state_short, steps};
 pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,
@@ -625,9 +627,12 @@ impl Model {
     }
 
     fn run(&mut self, cmd: Command, row: Option<Summary>) {
-        let index = self.selected_index();
-        // Only a row that was on screen can fade out of it.
-        let row = row.filter(|r| self.rows.iter().any(|x| x.id == r.id));
+        // Only a row that was on screen can fade out of it, from where it was.
+        let at = row
+            .as_ref()
+            .and_then(|r| self.rows.iter().position(|x| x.id == r.id));
+        let row = row.filter(|_| at.is_some());
+        let was_selected = row.as_ref().is_some_and(|r| self.selected == Some(r.id));
         let Some(project) = self.projects.get_mut(self.current) else {
             return;
         };
@@ -640,8 +645,10 @@ impl Model {
                 if let Some(row) = row
                     && !self.rows.iter().any(|r| r.id == row.id)
                 {
-                    self.leaving.push((row, index.unwrap_or(0), Instant::now()));
-                    if let Some(i) = index
+                    self.leaving.push((row, at.unwrap_or(0), Instant::now()));
+                    // The selection moves on only if it was on the row that left.
+                    if was_selected
+                        && let Some(i) = at
                         && !self.rows.is_empty()
                     {
                         let id = self.rows[i.min(self.rows.len() - 1)].id;

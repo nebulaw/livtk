@@ -1705,7 +1705,7 @@ impl LivtkApp {
         )
     }
 
-    fn detail_panel(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {
+    fn detail_panel(&mut self, d: &Detail, cx: &mut Context<Self>) -> Stateful<Div> {
         let n = &d.node;
         let mut choice_row = div().flex().flex_wrap().gap_2();
         for (i, c) in d.choices.iter().enumerate() {
@@ -1795,6 +1795,7 @@ impl LivtkApp {
         }
         let panel = div()
             .id(SharedString::from(format!("detail-{}", n.key)))
+            .debug_selector(|| "detail-body-panel".into())
             .w(px(DETAIL_WIDTH))
             .flex_none()
             .h_full()
@@ -1858,7 +1859,7 @@ impl LivtkApp {
                     .border_color(color(BORDER))
                     .child(Input::new(&self.note)),
             );
-        div().child(panel)
+        panel
     }
 
     // ---- rendering: overlays ------------------------------------------------------------------

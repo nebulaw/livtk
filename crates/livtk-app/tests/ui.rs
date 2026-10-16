@@ -469,9 +469,13 @@ fn the_body_is_edited_in_place_and_saved_with_ctrl_enter(cx: &mut TestAppContext
 fn the_detail_panel_slides_out_before_it_goes(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("detail-panel").is_some());
+    open_detail(cx);
+    let panel = cx.debug_bounds("detail-body-panel").expect("drawn");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert!(
+        panel.size.height >= window.height - gpui_kit::px(24.),
+        "the panel {panel:?} runs the full height of the window {window:?}"
+    );
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));

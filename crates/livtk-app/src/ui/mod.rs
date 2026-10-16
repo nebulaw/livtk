@@ -20,8 +20,8 @@ use livtk_core::{Brief, Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Choice, Detail, Display, GroupKey, Grouping, Layout, Model, Ordering, View, choices,
-    drop_allowed,
+    Ask, Choice, Detail, Display, GroupKey, Grouping, Item as PaletteItem, Layout, Model, Ordering,
+    View, choices, drop_allowed,
 };
 use theme::*;
 
@@ -53,6 +53,9 @@ actions!(
         Priority4,
         FocusFilter,
         ToggleHelp,
+        OpenPalette,
+        PaletteUp,
+        PaletteDown,
         Submit,
         Cancel
     ]
@@ -60,6 +63,9 @@ actions!(
 
 const NAV: &str = "LivtkNav";
 const FORM: &str = "LivtkForm";
+const PALETTE: &str = "LivtkPalette";
+/// Inside the palette's field: arrows move the highlight instead of the cursor.
+const PALETTE_FIELD: &str = "LivtkPalette > Input";
 
 const POLL: Duration = Duration::from_millis(200);
 const FADE: Duration = Duration::from_millis(180);
@@ -81,6 +87,11 @@ fn ease_out_cubic(t: f32) -> f32 {
 /// Every shortcut, in the order the shortcuts modal shows them: (section, keys, what it does).
 /// In `keys`, the words "then", "or" and "+" are separators; everything else is a key cap.
 const SHORTCUTS: &[(&str, &[&str], &str)] = &[
+    (
+        "Navigate",
+        &["Ctrl", "+", "K"],
+        "Command palette and search",
+    ),
     ("Navigate", &["J", "or", "↓"], "Next row"),
     ("Navigate", &["K", "or", "↑"], "Previous row"),
     ("Navigate", &["Enter"], "Open the detail panel"),
@@ -169,6 +180,12 @@ pub fn bind_keys(cx: &mut App) {
         // `?` character or as Shift with `/`, so both spellings are bound.
         KeyBinding::new("ctrl-?", ToggleHelp, None),
         KeyBinding::new("ctrl-shift-/", ToggleHelp, None),
+        KeyBinding::new("ctrl-k", OpenPalette, None),
+        // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
+        KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
+        KeyBinding::new("down", PaletteDown, Some(PALETTE_FIELD)),
+        KeyBinding::new("ctrl-p", PaletteUp, Some(PALETTE_FIELD)),
+        KeyBinding::new("ctrl-n", PaletteDown, Some(PALETTE_FIELD)),
         KeyBinding::new("escape", Cancel, Some(FORM)),
         KeyBinding::new("ctrl-enter", Submit, Some(FORM)),
     ]);
@@ -249,6 +266,9 @@ pub struct LivtkApp {
     list_scroll: UniformListScrollHandle,
     filter: Entity<InputState>,
     note: Entity<InputState>,
+    /// The command palette's field; what it holds lives in the model.
+    palette_input: Entity<InputState>,
+    palette_scroll: ScrollHandle,
     form: Option<NewTaskForm>,
     help: bool,
     editing: Option<Editing>,
@@ -273,9 +293,12 @@ impl LivtkApp {
         let nav = cx.focus_handle();
         let note = cx.new(|cx| InputState::new(window, cx).placeholder("Leave a note…"));
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter…"));
+        let palette_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
         let subscriptions = vec![
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
+            cx.subscribe_in(&palette_input, window, Self::on_palette_input),
         ];
         // Claude, the CLI and git change the log from outside; look every 200 ms.
         let poll = cx.spawn(async move |this, cx| {
@@ -299,6 +322,8 @@ impl LivtkApp {
             model,
             nav,
             list_scroll: UniformListScrollHandle::new(),
+            palette_input,
+            palette_scroll: ScrollHandle::new(),
             filter,
             note,
             form: None,
@@ -375,6 +400,92 @@ impl LivtkApp {
             }
             _ => {}
         }
+    }
+
+    fn on_palette_input(
+        &mut self,
+        state: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change if self.model.palette.is_some() => {
+                let text = state.read(cx).value().to_string();
+                self.model.palette_query(&text);
+                self.palette_scroll.scroll_to_item(0);
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } => self.run_palette(None, window, cx),
+            _ => {}
+        }
+    }
+
+    pub fn palette_open(&self) -> bool {
+        self.model.palette.is_some()
+    }
+
+    /// Ctrl+K: open the palette over the view, or close it. The new-task form keeps it out,
+    /// so unsaved text is never lost behind it.
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.palette.is_some() {
+            self.close_overlays(window, cx);
+            return;
+        }
+        if self.form.is_some() {
+            return;
+        }
+        self.help = false;
+        self.menu = None;
+        self.sub = None;
+        self.model.open_palette();
+        self.palette_input
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.palette_input
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
+        self.palette_scroll.scroll_to_item(0);
+        cx.notify();
+    }
+
+    fn move_palette(&mut self, delta: isize, cx: &mut Context<Self>) {
+        self.model.palette_move(delta);
+        if let Some(p) = &self.model.palette {
+            self.palette_scroll
+                .scroll_to_item(palette_child(&p.items, p.selected));
+        }
+        cx.notify();
+    }
+
+    /// Run the highlighted item, or item `index` when clicked, then do what only the view can.
+    fn run_palette(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let ask = match index {
+            Some(i) => self.model.palette_run_at(i),
+            None => self.model.palette_run(),
+        };
+        self.nav.focus(window, cx);
+        // Going to a node may have cleared the filter that hid it.
+        self.sync_filter(window, cx);
+        match ask {
+            Some(Ask::NewTask) => self.open_form(window, cx),
+            Some(Ask::AddNote) => {
+                if self.model.detail.is_none() {
+                    self.model.open_detail();
+                }
+                self.note.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            Some(Ask::EditTitle | Ask::EditBody) => {
+                if self.model.detail.is_none() {
+                    self.model.open_detail();
+                }
+                self.start_edit(ask == Some(Ask::EditBody), window, cx);
+            }
+            Some(Ask::OpenFolder) => self.open_folder(cx),
+            Some(Ask::Help) => self.help = true,
+            None => {}
+        }
+        self.after_move(cx);
     }
 
     /// Show the current view's filter text in the filter field.
@@ -649,6 +760,7 @@ impl LivtkApp {
     }
 
     fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.close_palette();
         self.menu = None;
         self.sub = None;
         self.form = None;
@@ -1986,6 +2098,166 @@ impl LivtkApp {
         Some(self.modal("new-task-modal", card, cx))
     }
 
+    /// The command palette: a field, what it finds in sections, and the keys that drive it.
+    fn palette_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let p = self.model.palette.clone()?;
+        let mut results = div()
+            .id("palette-results")
+            .track_scroll(&self.palette_scroll)
+            .max_h(px(400.))
+            .overflow_y_scroll()
+            .p_1()
+            .flex()
+            .flex_col();
+        let mut section = None;
+        for (i, item) in p.items.iter().enumerate() {
+            let s = section_of(item, &p.query);
+            if section != Some(s) {
+                results = results.child(
+                    div()
+                        .px_3()
+                        .pt_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child(s),
+                );
+                section = Some(s);
+            }
+            results = results.child(self.palette_row(i, item, i == p.selected, cx));
+        }
+        if p.items.is_empty() {
+            results = results.child(
+                div()
+                    .h(px(64.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(color(TEXT_4))
+                    .child("Nothing matches"),
+            );
+        }
+        let context = self
+            .model
+            .selected()
+            .map(|r| format!("{} · {}", r.key, r.title));
+        let card = div()
+            .debug_selector(|| "palette".into())
+            .key_context(PALETTE)
+            .w(px(640.))
+            .flex()
+            .flex_col()
+            .on_action(cx.listener(|this, _: &PaletteUp, _, cx| this.move_palette(-1, cx)))
+            .on_action(cx.listener(|this, _: &PaletteDown, _, cx| this.move_palette(1, cx)))
+            .child(
+                div()
+                    .px_4()
+                    .pt_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when_some(context, |d, c| {
+                        d.child(
+                            div()
+                                .truncate()
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child(c),
+                        )
+                    })
+                    .child(div().h(px(40.)).flex().items_center().child(flush_input(
+                        Input::new(&self.palette_input).text_base(),
+                        28.,
+                    ))),
+            )
+            .child(div().h(px(1.)).bg(color(BORDER)))
+            .child(results)
+            .child(
+                div()
+                    .h(px(36.))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_t_1()
+                    .border_color(color(BORDER))
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child(kbd("↑"))
+                    .child(kbd("↓"))
+                    .child("to move")
+                    .child(div().w(px(8.)))
+                    .child(kbd("↵"))
+                    .child("to run")
+                    .child(div().w(px(8.)))
+                    .child(kbd("Esc"))
+                    .child("to close"),
+            );
+        Some(self.modal("palette-modal", card, cx))
+    }
+
+    fn palette_row(
+        &self,
+        i: usize,
+        item: &PaletteItem,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let row = div()
+            .id(SharedString::from(format!("palette-item-{i}")))
+            .debug_selector(move || format!("palette-item-{i}"))
+            .h(px(36.))
+            .px_3()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_3()
+            .rounded_lg()
+            .cursor_pointer()
+            .when(on, |r| r.bg(color(SELECTED)).text_color(color(TEXT)))
+            .when(!on, |r| r.text_color(color(TEXT_2)))
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if this.model.palette.as_ref().is_some_and(|p| p.selected != i) {
+                    this.model.palette_highlight(i);
+                    cx.notify();
+                }
+            }))
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.run_palette(Some(i), window, cx)),
+            );
+        match item {
+            PaletteItem::Action(a) => {
+                let mut keys = div().flex().items_center().gap_1();
+                for k in a.shortcut.unwrap_or_default().split_whitespace() {
+                    keys = keys.child(kbd(k));
+                }
+                row.child(div().truncate().child(a.label.clone()))
+                    .when_some(a.context.clone(), |r, c| {
+                        r.child(div().flex_none().text_color(color(TEXT_4)).child(c))
+                    })
+                    .child(div().flex_1())
+                    .child(keys)
+            }
+            PaletteItem::Node(n) => row
+                .child(state_mark(n.kind, n.state))
+                .child(
+                    div()
+                        .w(px(60.))
+                        .flex_none()
+                        .text_color(color(TEXT_4))
+                        .child(n.key.clone()),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(n.title.clone()))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child(title_case(n.kind.as_str())),
+                ),
+        }
+    }
+
     fn help_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.help {
             return None;
@@ -2091,6 +2363,7 @@ impl Render for LivtkApp {
         let detail = self.detail(cx);
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
+        let palette = self.palette_overlay(cx);
         let notice = self.notice();
         let list_area = div()
             .flex_1()
@@ -2181,6 +2454,9 @@ impl Render for LivtkApp {
             .bg(color(WINDOW))
             .text_color(color(TEXT_2))
             .text_sm()
+            .on_action(
+                cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleHelp, window, cx| {
                 this.help = !this.help;
                 if !this.help {
@@ -2214,6 +2490,7 @@ impl Render for LivtkApp {
                 ),
             )
             .children(form)
+            .children(palette)
             .children(help)
             .children(notice)
     }
@@ -2338,6 +2615,29 @@ fn menu_divider() -> Div {
 }
 
 /// A row of a menu: what it is, from the left edge, with no empty slot before it.
+/// The section an item of the palette sits in.
+fn section_of(item: &PaletteItem, query: &str) -> &'static str {
+    match item {
+        PaletteItem::Action(_) => "Actions",
+        PaletteItem::Node(_) if query.trim().is_empty() => "Updated lately",
+        PaletteItem::Node(_) => "Results",
+    }
+}
+
+/// The child of the results list that shows item `index`: section headings come before it.
+fn palette_child(items: &[PaletteItem], index: usize) -> usize {
+    let mut headings = 0;
+    let mut last = None;
+    for item in items.iter().take(index + 1) {
+        let s = std::mem::discriminant(item);
+        if last != Some(s) {
+            headings += 1;
+            last = Some(s);
+        }
+    }
+    index + headings
+}
+
 /// A single-line input with no frame and no padding of its own, `height` tall, so its text sits
 /// exactly where the surrounding layout puts it. Input's own `h` sets only a multi-line
 /// height, hence `Styled::h`.

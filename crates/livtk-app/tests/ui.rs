@@ -140,8 +140,12 @@ fn open_app<'a>(
         bind_keys(cx);
     });
     let path = dir.to_path_buf();
-    let (app, cx) =
-        cx.add_window_view(|window, cx| LivtkApp::new(Model::open(&[path]), window, cx));
+    let (app, cx) = cx.add_window_view(|window, cx| {
+        // Keywords only, whatever models this machine has.
+        let mut model = Model::open(&[path]);
+        model.set_models_dir(None);
+        LivtkApp::new(model, window, cx)
+    });
     cx.run_until_parked();
     (app, cx)
 }
@@ -514,4 +518,123 @@ fn editing_keeps_the_shape_of_what_is_edited(cx: &mut TestAppContext) {
         "the body editor starts where the body was"
     );
     assert_eq!(view.size.width, editor.size.width);
+}
+
+fn palette_keys(
+    app: &gpui_kit::Entity<LivtkApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+) -> Vec<String> {
+    app.read_with(cx, |a, _| {
+        a.model()
+            .palette
+            .as_ref()
+            .map(|p| {
+                p.items
+                    .iter()
+                    .map(|i| match i {
+                        livtk_app::model::Item::Action(a) => a.label.clone(),
+                        livtk_app::model::Item::Node(n) => n.key.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+#[gpui_kit::test]
+fn ctrl_k_finds_a_node_and_typing_in_it_runs_no_command(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert!(a.palette_open()));
+    assert!(cx.debug_bounds("palette").is_some(), "drawn");
+
+    // Every one of these letters is a shortcut on the list.
+    cx.simulate_input("seco");
+    cx.run_until_parked();
+    assert_eq!(palette_keys(&app, cx), ["LIV-2"]);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(!a.palette_open());
+        assert_eq!(a.model().selected().unwrap().key, "LIV-2");
+        assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2");
+    });
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Planned,
+        "no shortcut ran"
+    );
+    assert_eq!(state_of(dir.path(), "LIV-2"), State::Planned);
+}
+
+#[gpui_kit::test]
+fn the_palette_runs_an_action_on_the_selected_node(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_input("ack");
+    cx.run_until_parked();
+    assert_eq!(
+        palette_keys(&app, cx).first().map(String::as_str),
+        Some("Acknowledge")
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(state_of(dir.path(), "LIV-1"), State::Acked);
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert!(
+            a.model().selected().is_some(),
+            "the keys are back on the list"
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn arrows_move_the_highlight_and_esc_or_ctrl_k_closes(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.run_until_parked();
+    let highlighted = |app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext| {
+        app.read_with(cx, |a, _| a.model().palette.as_ref().unwrap().selected)
+    };
+    cx.simulate_keystrokes("down down");
+    assert_eq!(highlighted(&app, cx), 2);
+    cx.simulate_keystrokes("up ctrl-n ctrl-n ctrl-p");
+    assert_eq!(highlighted(&app, cx), 2);
+    cx.simulate_keystrokes("escape");
+    app.read_with(cx, |a, _| assert!(!a.palette_open(), "Esc closes it"));
+    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("ctrl-k");
+    app.read_with(cx, |a, _| {
+        assert!(!a.palette_open(), "and so does Ctrl+K again")
+    });
+}
+
+#[gpui_kit::test]
+fn a_click_runs_an_item_and_new_task_opens_the_form(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_input("new task");
+    cx.run_until_parked();
+    assert_eq!(
+        palette_keys(&app, cx).first().map(String::as_str),
+        Some("New task")
+    );
+    click_on(cx, "palette-item-0");
+    app.read_with(cx, |a, _| {
+        assert!(!a.palette_open());
+        assert!(a.form_open(), "the view did what the palette asked");
+    });
+    cx.simulate_keystrokes("ctrl-k");
+    app.read_with(cx, |a, _| {
+        assert!(
+            !a.palette_open(),
+            "the form keeps the palette out, so nothing typed is lost"
+        )
+    });
 }

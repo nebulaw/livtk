@@ -1859,3 +1859,28 @@ fn the_detail_panel_stands_apart_from_the_content_as_the_sidebar_does(cx: &mut T
         "the content box keeps the sidebar's side too"
     );
 }
+
+#[gpui_kit::test]
+fn rows_and_cards_pass_under_the_floating_dock(cx: &mut TestAppContext) {
+    let dir = long_project(40);
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    let dock = cx.debug_bounds("dock").unwrap();
+    // At the top of a long list, some row is drawn where the dock floats: the dock overlays
+    // the list rather than the list stopping short of it.
+    let under = (1..=42).find_map(|n| {
+        cx.debug_bounds(named(format!("key-LIV-{n}")))
+            .filter(|b| b.bottom() > dock.top() && b.top() < dock.bottom())
+    });
+    assert!(under.is_some(), "a row passes under the dock {dock:?}");
+
+    cx.simulate_keystrokes("b");
+    cx.run_until_parked();
+    let dock = cx.debug_bounds("dock").unwrap();
+    let under = (1..=42).find_map(|n| {
+        cx.debug_bounds(named(format!("card-LIV-{n}")))
+            .filter(|b| b.bottom() > dock.top())
+    });
+    assert!(under.is_some(), "a card passes under the dock {dock:?}");
+}

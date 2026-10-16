@@ -819,8 +819,11 @@ Asked for while trying the app, and built in one batch:
   Ordering, dismissed work; List or Board; the graph's zoom; the command palette at the end.
   Grouping and Ordering became menus of their own and the Display menu went; menus open upwards.
   Below 900 px of content the buttons drop their labels for icons and tooltips. Lists, the inbox,
-  the feed and each board column keep the dock's height free at their bottom, so their last item
-  scrolls clear of it; fitting the graph keeps above it; notices sit above it. The top bar holds
+  the feed and each board column end with room the dock's size, at the end of what scrolls: rows
+  and cards pass under the dock, and the last one can rise clear of it (padding on the list's
+  frame, the first try, clipped them short of the dock instead; a style test now holds the
+  source to the rule, as a headless test sees layout, not clipping). Fitting the graph keeps
+  above it; notices sit above it. The top bar holds
   only the view's name and count, kept for things to come.
 - Refined on review: List or Board is a tab control, a recessed track as tall as the dock's
   buttons with the chosen tab raised in it; the palette is an icon alone at every width, in a

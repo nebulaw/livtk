@@ -92,9 +92,15 @@ const LEAD: f32 = 22.;
 /// The dock's height, and its gap from the content's bottom edge.
 const DOCK_HEIGHT: f32 = 40.;
 const DOCK_GAP: f32 = 16.;
-/// What lists and columns keep free at their bottom, so their last row scrolls clear of the
-/// dock floating over them.
+/// The room lists and columns add at the end of what scrolls, so their last item can rise
+/// clear of the dock floating over them; everything else passes under it.
 const DOCK_SPACE: f32 = DOCK_HEIGHT + 2. * DOCK_GAP;
+/// The same room in a virtualised list, whose items are all one row tall.
+const DOCK_ROWS: usize = 2;
+const _: () = assert!(
+    DOCK_ROWS as f32 * ROW == DOCK_SPACE,
+    "the room must be whole rows"
+);
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
 const SIDEBAR_WIDTH: f32 = 232.;
@@ -2453,7 +2459,9 @@ impl LivtkApp {
                 .into_any_element();
         }
         let rows = self.model.feed();
-        let count = rows.len() + usize::from(self.model.activity_more);
+        let more = self.model.activity_more;
+        // The lines, "Show older" while pages wait, then the dock's room at the end.
+        let count = rows.len() + usize::from(more) + DOCK_ROWS;
         let list = uniform_list(
             "feed",
             count,
@@ -2474,6 +2482,7 @@ impl LivtkApp {
                             .child(label.clone())
                             .into_any_element(),
                         Some(FeedRow::Event(e)) => this.feed_line(*e, cx),
+                        None if !(more && i == rows.len()) => dock_room(),
                         None => div()
                             .id("show-older")
                             .debug_selector(|| "show-older".into())
@@ -2504,9 +2513,7 @@ impl LivtkApp {
             }),
         )
         .track_scroll(&self.list_scroll)
-        .size_full()
-        // The last line scrolls clear of the dock floating over the bottom.
-        .pb(px(DOCK_SPACE));
+        .size_full();
         div()
             .debug_selector(|| "feed".into())
             .size_full()
@@ -2608,7 +2615,6 @@ impl LivtkApp {
             .size_full()
             .overflow_y_scroll()
             .pt_1()
-            .pb(px(DOCK_SPACE))
             .flex()
             .flex_col();
         for (r, leaving) in shown {
@@ -2620,7 +2626,10 @@ impl LivtkApp {
                 cx,
             ));
         }
-        list.into_any_element()
+        // Room at the end of what scrolls, not round it: rows pass under the dock, and the
+        // last one can rise clear of it.
+        list.child(div().h(px(DOCK_SPACE)).flex_none())
+            .into_any_element()
     }
 
     /// Tasks, lessons, decisions or findings: a virtualised list in solid group bands.
@@ -2636,7 +2645,8 @@ impl LivtkApp {
                 ))
                 .into_any_element();
         }
-        let count = self.items().len();
+        // The rows, then the dock's room at the end of what scrolls.
+        let count = self.items().len() + DOCK_ROWS;
         uniform_list(
             "rows",
             count,
@@ -2652,7 +2662,7 @@ impl LivtkApp {
                             let sel = Some(r.id) == selected;
                             out.push(this.row(&r, sel, None, false, cx));
                         }
-                        None => out.push(div().into_any_element()),
+                        None => out.push(dock_room()),
                     }
                 }
                 out
@@ -2660,8 +2670,6 @@ impl LivtkApp {
         )
         .track_scroll(&self.list_scroll)
         .size_full()
-        // The last row scrolls clear of the dock floating over the bottom.
-        .pb(px(DOCK_SPACE))
         .into_any_element()
     }
 
@@ -2864,8 +2872,6 @@ impl LivtkApp {
                 .flex_col()
                 .gap_2()
                 .p_2()
-                // Full height behind the floating dock, its last card scrolling clear of it.
-                .pb(px(DOCK_SPACE))
                 .rounded_xl()
                 .bg(color(SURFACE))
                 .border_1()
@@ -2970,7 +2976,9 @@ impl LivtkApp {
                     }));
                 col = col.child(flashing(card, &r.key, flash));
             }
-            cols = cols.child(col);
+            // Full height behind the floating dock: cards pass under it, and the room at the
+            // end lets the last one rise clear of it.
+            cols = cols.child(col.child(div().h(px(DOCK_SPACE)).flex_none()));
         }
         // Shift+wheel scrolls the board across, before any column sees it: a listener in the
         // capture phase over the board's area, which then stops the event.
@@ -3867,6 +3875,11 @@ fn section_label(text: &str) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(color(TEXT_4))
         .child(text.to_owned())
+}
+
+/// One row of the room at the end of a virtualised list: empty, under the dock.
+fn dock_room() -> AnyElement {
+    div().w_full().h(px(ROW)).into_any_element()
 }
 
 /// A non-task row's leading slot: its kind's icon, as wide as a task's priority button.

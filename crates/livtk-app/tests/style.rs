@@ -87,3 +87,23 @@ fn nothing_scales_on_hover() {
         }
     }
 }
+
+/// The developer's rule for the dock's room: it is space at the end of what scrolls, so rows
+/// and cards pass under the dock. Padding on a list or column clips them short of it instead,
+/// which a headless test cannot see (it reports layout, not clipping), so the source is held
+/// to it.
+#[test]
+fn the_docks_room_is_space_at_the_end_never_padding() {
+    assert!(
+        !UI.contains("pb(px(DOCK_SPACE))") && !UI.contains("pb(px(DOCK_HEIGHT"),
+        "the dock's room is padding somewhere"
+    );
+    assert!(
+        UI.matches("div().h(px(DOCK_SPACE)).flex_none()").count() >= 2,
+        "the inbox and each board column end with the room"
+    );
+    assert!(
+        UI.matches("+ DOCK_ROWS").count() >= 2,
+        "the virtualised lists, tasks and the feed, end with rows of room"
+    );
+}

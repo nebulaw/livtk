@@ -86,7 +86,8 @@ Lessons, decisions and findings have their own keys (`LES-1`, `DEC-1`, `FND-1`).
 ratified lesson or an accepted decision sends it back for approval, as with tasks. With the
 plugin, each prompt carries at most three relevant rules, decisions or findings, and a prompt
 that reads like a correction nudges Claude to propose a lesson. Without the model, search and
-recall use keywords only.
+recall use keywords only. With it, a prompt costs about 5 ms: livtk reads only the rows of the
+model the prompt needs, and keeps a sorted copy of its vocabulary (`livtk-vocab.txt`) beside it.
 
 States: `backlog → planned → acked → doing → review → done`, plus `parked` and `canceled`.
 Only a human can acknowledge (`planned → acked`); editing an acknowledged plan sends it back to

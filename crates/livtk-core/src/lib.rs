@@ -9,6 +9,8 @@ pub mod event;
 mod log;
 pub mod model;
 pub mod registry;
+#[cfg(feature = "embed")]
+pub mod rows;
 pub mod search;
 mod store;
 mod workspace;

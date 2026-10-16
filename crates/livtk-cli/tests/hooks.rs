@@ -510,13 +510,19 @@ fn with_model_a_paraphrase_brings_the_rule_back() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(context_of(&v).contains("LES-1 (rule)"), "{v}");
 
-    let start = Instant::now();
-    hook_with_models("user-prompt-submit", &input, &models);
-    let took = start.elapsed();
+    // Every hook's budget, the model included, now that only the prompt's rows are read.
+    let took = (0..5)
+        .map(|_| {
+            let start = Instant::now();
+            hook_with_models("user-prompt-submit", &input, &models);
+            start.elapsed()
+        })
+        .min()
+        .unwrap();
     eprintln!("user-prompt-submit with the model: {took:?}");
     assert!(
-        took < Duration::from_millis(100),
-        "budget 100 ms, took {took:?}"
+        took < Duration::from_millis(20),
+        "budget 20 ms, took {took:?}"
     );
 }
 

@@ -3978,7 +3978,10 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokenizers",
  "toml 1.1.8+spec-1.1.0",
+ "unicode-normalization-alignments",
+ "unicode_categories",
  "uuid",
 ]
 

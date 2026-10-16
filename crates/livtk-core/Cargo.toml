@@ -10,11 +10,13 @@ repository.workspace = true
 [features]
 default = ["embed"]
 # Ranking by meaning with a local model2vec model. Without it, search is keywords only.
-embed = ["dep:model2vec-rs"]
+embed = ["dep:model2vec-rs", "dep:unicode-normalization-alignments", "dep:unicode_categories"]
 
 [dependencies]
 jiff.workspace = true
 model2vec-rs = { workspace = true, optional = true }
+unicode-normalization-alignments = { workspace = true, optional = true }
+unicode_categories = { workspace = true, optional = true }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +27,8 @@ uuid.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
+# To hold livtk's WordPiece to the library's tokens.
+tokenizers.workspace = true
 
 [lints]
 workspace = true

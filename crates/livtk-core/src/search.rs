@@ -76,16 +76,23 @@ pub fn models_dir() -> Option<PathBuf> {
         .or_else(|| env("HOME").map(|d| d.join(".cache/livtk/models")))
 }
 
-/// A model2vec model loaded from a local directory.
+/// A model2vec model from a local directory: read row by row where livtk can (the potion
+/// models), else loaded whole by the library.
 #[cfg(feature = "embed")]
 pub struct Model {
     name: String,
-    inner: model2vec_rs::model::StaticModel,
+    inner: Inner,
+}
+
+#[cfg(feature = "embed")]
+enum Inner {
+    Read(crate::rows::Rows),
+    Loaded(model2vec_rs::model::StaticModel),
 }
 
 #[cfg(feature = "embed")]
 impl Model {
-    /// Load `name` from `dir/name`. Fails when the files are missing.
+    /// Open `name` in `dir/name`. Fails when the files are missing.
     pub fn load(dir: &Path, name: &str) -> Result<Model> {
         let path = dir.join(name);
         if !path.join("model.safetensors").is_file() {
@@ -94,15 +101,42 @@ impl Model {
                 path.display()
             )));
         }
-        let inner =
-            model2vec_rs::model::StaticModel::from_pretrained(&path, None, Some(true), None)
-                .map_err(|e| {
-                    Error::Invalid(format!("cannot load the model at {}: {e}", path.display()))
-                })?;
+        let inner = match crate::rows::Rows::open(&path) {
+            Some(rows) => Inner::Read(rows),
+            None => Inner::Loaded(Model::load_whole(&path)?),
+        };
         Ok(Model {
             name: name.to_owned(),
             inner,
         })
+    }
+
+    /// Load `name` whole with the library, as every model was before livtk read rows itself:
+    /// what tests hold the rows to.
+    pub fn load_whole_named(dir: &Path, name: &str) -> Result<Model> {
+        Ok(Model {
+            name: name.to_owned(),
+            inner: Inner::Loaded(Model::load_whole(&dir.join(name))?),
+        })
+    }
+
+    fn load_whole(path: &Path) -> Result<model2vec_rs::model::StaticModel> {
+        model2vec_rs::model::StaticModel::from_pretrained(path, None, Some(true), None).map_err(
+            |e| Error::Invalid(format!("cannot load the model at {}: {e}", path.display())),
+        )
+    }
+
+    /// Whether livtk reads this model's rows itself, rather than the library loading it.
+    pub fn reads_rows(&self) -> bool {
+        matches!(self.inner, Inner::Read(_))
+    }
+
+    /// The token ids livtk's own tokenizer gives `text`, when it reads this model's rows.
+    pub fn token_ids(&self, text: &str) -> Option<Vec<u32>> {
+        match &self.inner {
+            Inner::Read(rows) => Some(rows.token_ids(text)),
+            Inner::Loaded(_) => None,
+        }
     }
 }
 
@@ -113,9 +147,17 @@ impl Embed for Model {
     }
 
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        // The library panics if its tokenizer fails; a hook must never crash on that.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.encode(texts)))
-            .map_err(|_| Error::Invalid("the embedding model failed on this text".into()))
+        let failed = || Error::Invalid("the embedding model failed on this text".into());
+        match &self.inner {
+            Inner::Read(rows) => rows
+                .embed(texts)
+                .map_err(|e| Error::Invalid(format!("cannot read the embedding model: {e}"))),
+            // The library panics if its tokenizer fails; a hook must never crash on that.
+            Inner::Loaded(m) => {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.encode(texts)))
+                    .map_err(|_| failed())
+            }
+        }
     }
 }
 

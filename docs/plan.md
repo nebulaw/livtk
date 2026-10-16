@@ -541,7 +541,8 @@ text is embedded (rule alone or rule and reasons), so the tests assert that rate
 unrelated prompts recall nothing, not a perfect mapping. Of the prompt hook's 92 ms, the model
 load is 80: reading the 128 MB matrix (27 ms), parsing the tokenizer (28 ms) and converting the
 matrix (25 ms); embedding the prompt takes 0.05 ms. Reading only the rows a prompt needs would
-bring the hook to about 35 ms (a possible follow-up).
+bring the hook to about 35 ms (a possible follow-up). Done after milestone 5 (section 21), with
+livtk's own WordPiece as well: the hook with the model now takes 4.7 ms.
 
 **Done when** in a real session: a correction leads Claude to propose a lesson; you ratify it;
 a later, differently worded prompt brings that rule back into context.
@@ -880,6 +881,22 @@ Asked for while trying the app, and built in one batch:
   inbox, with its move in `livtk inbox`; the session brief names them; the app marks them as
   the human's decisions and `a` takes them. The Bash guard stays a text check of the built-in
   verbs, as the core refuses the rest.
+- The prompt hook with the model, from 92 ms to 4.7 ms, inside the 20 ms every hook has
+  (section 9), as the developer chose: both steps at once. Measured first (release, warm):
+  loading the library's model is reading and converting the 128 MB matrix (52 ms), parsing the
+  1.5 MB `tokenizer.json` (33 ms) and walking its vocabulary for the median token length
+  (7.5 ms). (1) `rows.rs` reads from `model.safetensors` only the rows a text needs, and pools
+  them as the library does; a batch that needs more than an eighth of the matrix reads it whole.
+  (2) It tokenizes with its own BERT normalizer, pre-tokenizer and WordPiece, over a vocabulary
+  cached beside the model (`livtk-vocab.txt`, made once in 12 ms, made again when
+  `tokenizer.json` changes) and sorted by token, so lookups are binary searches and loading
+  builds no table (a hash map of the 63,091 tokens cost 6.8 ms to build). It uses the same
+  Unicode crates as `tokenizers`, pinned to its versions. Any other tokenizer or a quantized
+  matrix stays with the library, and the cache records why. Tests hold it to the library on
+  every model present: the same token ids on 500+ texts (this repository's README and plan line
+  by line, and the corners of Unicode: accents, Hangul, Turkish İ, special tokens written in
+  the text, words over 100 characters), and the same vectors to the bit, the whole vocabulary
+  as texts included. Opening the model and embedding a prompt: 2.5 ms against the library's 87.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

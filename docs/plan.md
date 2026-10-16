@@ -1,7 +1,7 @@
 # livtk: plan
 
-Status: milestones 1 to 4 done; milestone 5 part 1, the command palette and search, done
-(section 17); the activity feed and the graph wait for the developer's go.
+Status: milestones 1 to 4 done; milestone 5 parts 1 and 2, the command palette and search
+(section 17) and the activity feed (section 19), done; the graph waits for the developer's go.
 
 A local, durable task and memory system for Claude Code, plus a desktop app to drive it.
 Reusable in any project as a Claude Code plugin. No API calls, no servers, no keys:
@@ -716,6 +716,11 @@ view with headless UI tests; README, plan and install.
 
 **Done when** after a session of Claude's work, the sidebar says how much happened, the feed
 shows it newest first, and any line opens its node.
+
+**What building it found.** Actions in the app acted on the selected row, and the feed has no
+rows; they now act on the node open in the panel when no row is selected, which also lets the
+palette act from the feed. When the human acts from the feed, their event lands on top and the
+highlight stays on the event it was on, one line lower.
 
 ## 18. Milestone 6 in outline: the team
 

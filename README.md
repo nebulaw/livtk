@@ -86,7 +86,8 @@ livtk-app                    # every project `livtk init` registered
 livtk-app ~/code/project     # open one (and remember it)
 ```
 
-The human's control surface: an Inbox of everything waiting for you, tasks as a list or a board,
+The human's control surface: an Inbox of everything waiting for you, an Activity feed of every
+change newest first (its badge counts what Claude did since you last looked), tasks as a list or a board,
 lessons, decisions and findings, and a detail panel with the plan, its links and its activity.
 Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette.
 As in Linear, the Filter menu (`/`) narrows by title, key or priority, and the Display menu
@@ -114,7 +115,7 @@ shortcut; the ones used most:
 | `c` | add a note |
 | `1`-`4` | priority |
 | `/` | filter menu |
-| `g i` `g t` `g l` `g d` `g f` | Inbox, Tasks, Lessons, Decisions, Findings |
+| `g i` `g a` `g t` `g l` `g d` `g f` | Inbox, Activity, Tasks, Lessons, Decisions, Findings |
 | `b` | list or board |
 | `h` | show dismissed work |
 

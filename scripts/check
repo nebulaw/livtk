@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Everything a change must pass, fastest first, each step timed:
+#   scripts/check            format, lint, every test (debug), benchmarks and model tests (quick)
+#   scripts/check --install  then install both binaries
+#
+# UI tests run in debug only (GPUI records the debug selectors they use only there). The CLI's
+# benchmarks time the binary that gets installed, start-up included, so they run in release; the
+# rest run in the `quick` profile: release speed, no LTO, rebuilt in seconds. Installing reuses
+# target/, so it compiles only what changed.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+step() {
+  local label=$1 start=$SECONDS
+  shift
+  if "$@" >/tmp/livtk-check.$$ 2>&1; then
+    printf '%-44s %4ds\n' "$label" $((SECONDS - start))
+  else
+    printf '%-44s FAILED\n' "$label"
+    cat /tmp/livtk-check.$$
+    rm -f /tmp/livtk-check.$$
+    exit 1
+  fi
+}
+trap 'rm -f /tmp/livtk-check.$$' EXIT
+
+models=${LIVTK_TEST_MODELS:-$HOME/.cache/livtk/models}
+step "format" cargo fmt --check
+step "lint" cargo clippy -q --workspace --all-targets -- -D warnings
+step "tests: core and CLI" cargo test -q
+step "tests: the app, with UI tests" cargo test -q -p livtk-app
+if [ -d "$models/potion-retrieval-32M" ]; then
+  with_models=(env LIVTK_TEST_MODELS="$models")
+  skip=()
+else
+  echo "(no model in $models: the model tests are skipped)"
+  with_models=()
+  skip=(--skip with_model)
+fi
+step "benchmarks and model tests: core, app" \
+  "${with_models[@]}" cargo test -q --profile quick -p livtk-core -p livtk-app -- --ignored "${skip[@]}"
+step "benchmarks and model tests: CLI (release)" \
+  "${with_models[@]}" cargo test -q --release -p livtk-cli -- --ignored "${skip[@]}"
+if [ "${1:-}" = "--install" ]; then
+  step "install livtk" cargo install -q --locked --path crates/livtk-cli --target-dir target
+  step "install livtk-app" cargo install -q --locked --path crates/livtk-app --target-dir target
+fi

@@ -42,3 +42,11 @@ debug = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Model tests and benchmarks at release speed, rebuilt in seconds: no LTO, parallel codegen,
+# incremental. Installed binaries keep the release profile above.
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

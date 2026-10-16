@@ -128,16 +128,20 @@ shortcut; the ones used most:
 ## Develop
 
 ```
-cargo test                                           # core and CLI
-cargo test -p livtk-app                              # the app, with headless UI tests (debug only)
-cargo test --release -p livtk-app -- --ignored       # the app's layout and drawing budgets
-cargo test --release -p livtk-cli -- --ignored       # the speed budget on 10k tasks
-cargo clippy --all-targets && cargo fmt --check
+scripts/check              # format, lint, every test, benchmarks and model tests, each timed
+scripts/check --install    # then install livtk and livtk-app
 ```
 
-Builds go to `target/`, about 3 GB for everything (dependencies carry no debug info). Cargo
-never prunes it and it grows with each toolchain and feature set, so run `cargo clean` when it
-gets large; the next build takes a few minutes.
+After an edit to the app, `scripts/check` takes about 12 s and `--install` about 64 s, 50 of
+them building the installed app with link-time optimisation. The UI tests run in debug only
+(GPUI records the debug selectors they find elements by only there). The CLI's benchmarks time
+the installed binary, start-up included, so they run in release; the other benchmarks run in
+the `quick` profile, release speed without LTO, which rebuilds in seconds. Installing reuses
+`target/`. The model tests run when the model is in `~/.cache/livtk/models` (or
+`LIVTK_TEST_MODELS`).
+
+Builds go to `target/`. Cargo never prunes it and it grows with each toolchain and profile, so
+run `cargo clean` when it gets large; the next build takes a few minutes.
 
 ## Licence
 

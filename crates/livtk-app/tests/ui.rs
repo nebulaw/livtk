@@ -2182,3 +2182,55 @@ fn scrolling_over_the_shortcuts_leaves_the_list_behind_them_still(cx: &mut TestA
         "the rows behind the modal did not move"
     );
 }
+
+#[gpui_kit::test]
+fn a_checkout_is_caught_up_in_the_background_and_shown(cx: &mut TestAppContext) {
+    let dir = project();
+    let log = dir.path().join(".livtk/events.jsonl");
+    let checkpoint = std::fs::read(&log).unwrap();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    let third = ws
+        .execute(
+            Command::Create {
+                kind: Kind::Task,
+                title: "third".into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    ws.execute(
+        Command::Move {
+            node: third[0].op.subjects().0.to_string(),
+            to: State::Planned,
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    assert!(
+        cx.debug_bounds("key-LIV-3").is_some(),
+        "the third task waits"
+    );
+
+    std::fs::write(&log, &checkpoint).unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("key-LIV-3").is_none(),
+        "after the checkout it is gone"
+    );
+    assert!(cx.debug_bounds("key-LIV-1").is_some());
+    assert!(cx.debug_bounds("catching-up-0").is_none(), "and caught up");
+    app.read_with(cx, |a, _| assert!(!a.model().projects[0].catching_up));
+
+    app.update(cx, |a, _| a.model_mut().projects[0].catching_up = true);
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("catching-up-0").is_some(),
+        "while it catches up, the sidebar says so"
+    );
+}

@@ -403,6 +403,7 @@ impl LivtkApp {
                 cx.background_executor().timer(POLL).await;
                 let alive = this.update(cx, |app, cx| {
                     let changed = app.model.tick();
+                    app.run_catch_ups(cx);
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
                     app.model.settle(Instant::now(), FLASH.max(FADE) + POLL);
                     // What the app remembers is written within a beat of changing.
@@ -452,8 +453,33 @@ impl LivtkApp {
         &self.model
     }
 
+    /// The model, for tests to put it in a state no headless frame lands on: the test executor
+    /// finishes a background catch-up before it draws.
+    pub fn model_mut(&mut self) -> &mut Model {
+        &mut self.model
+    }
+
     pub fn help_open(&self) -> bool {
         self.help
+    }
+
+    /// Catch stores up off the window's thread: a replay after a git pull takes as long as the
+    /// log is long, and the window keeps showing what it had meanwhile.
+    fn run_catch_ups(&mut self, cx: &mut Context<Self>) {
+        for job in self.model.take_catch_ups() {
+            let work = job.clone();
+            let done = cx.background_executor().spawn(async move { work.run() });
+            cx.spawn(async move |this, cx| {
+                let result = done.await;
+                let _ = this.update(cx, |app, cx| {
+                    app.model.caught_up(&job, result);
+                    app.model.tick();
+                    app.run_catch_ups(cx);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
     }
 
     /// Whether an edge is being dragged.
@@ -1009,6 +1035,7 @@ impl LivtkApp {
                     current,
                     p.inbox,
                 )
+                .when(p.catching_up, |d| d.child(catching_up(i)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.model.select_project(i);
                     this.sync_filter(window, cx);
@@ -1176,9 +1203,13 @@ impl LivtkApp {
             Icon::Project,
             open,
             false,
-            self.model
-                .project()
-                .map_or("Projects".into(), |p| SharedString::from(p.name.clone())),
+            self.model.project().map_or("Projects".into(), |p| {
+                if p.catching_up {
+                    SharedString::from(format!("{} · Catching up…", p.name))
+                } else {
+                    SharedString::from(p.name.clone())
+                }
+            }),
         )
         .on_mouse_down(
             MouseButton::Left,
@@ -1237,6 +1268,7 @@ impl LivtkApp {
                     .debug_selector(move || format!("rail-project-{i}"))
                     .child(icon(Icon::Project, 14., TEXT_3))
                     .child(div().flex_1().truncate().child(p.name.clone()))
+                    .when(p.catching_up, |d| d.child(catching_up(i)))
                     .child(check(current))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.model.select_project(i);
@@ -4384,6 +4416,17 @@ fn view_icon(view: View) -> Icon {
         View::Findings => Icon::Findings,
         View::Graph => Icon::Graph,
     }
+}
+
+/// Beside project `i`'s name while its store catches up with its log off the window's thread.
+fn catching_up(i: usize) -> Div {
+    div()
+        .debug_selector(move || format!("catching-up-{i}"))
+        .flex_none()
+        .whitespace_nowrap()
+        .text_xs()
+        .text_color(color(TEXT_4))
+        .child("Catching up…")
 }
 
 fn nav_item(

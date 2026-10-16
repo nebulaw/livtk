@@ -413,6 +413,33 @@ fn going_back_in_git_history_rebuilds() {
 }
 
 #[test]
+fn stale_says_what_refresh_would_catch_up_without_doing_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    task(&mut ws, "a");
+    let checkpoint = fs::read(log_path(dir.path())).unwrap();
+    task(&mut ws, "b");
+    let full = fs::read(log_path(dir.path())).unwrap();
+    assert!(!ws.stale().unwrap(), "its own writes are applied");
+    let mut other = Workspace::open(dir.path()).unwrap();
+    task(&mut other, "c");
+    assert!(!ws.stale().unwrap(), "so are another process's");
+
+    fs::write(log_path(dir.path()), &checkpoint).unwrap();
+    assert!(ws.stale().unwrap(), "a rewritten log is");
+    assert!(ws.stale().unwrap(), "and stays so: nothing was applied");
+    assert_eq!(ws.tasks(&[]).unwrap().len(), 3);
+    ws.refresh().unwrap();
+    assert!(!ws.stale().unwrap(), "until refresh catches up");
+
+    fs::write(log_path(dir.path()), &full).unwrap();
+    assert!(ws.stale().unwrap(), "lines appended by git are too");
+    ws.refresh().unwrap();
+    assert!(!ws.stale().unwrap());
+    assert_eq!(ws.tasks(&[]).unwrap().len(), 2);
+}
+
+#[test]
 fn lines_from_newer_versions_and_noise_are_skipped() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = init(dir.path());

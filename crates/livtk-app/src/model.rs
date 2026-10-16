@@ -160,7 +160,29 @@ pub struct Project {
     pub inbox: usize,
     /// Events by others since the human last looked at the activity feed, up to a cap.
     pub unseen: usize,
+    /// Whether its store is being brought up to date with its log on another thread.
+    pub catching_up: bool,
     ws: Workspace,
+}
+
+/// Bringing a project's store up to date with its log: after a git pull, checkout or rebase,
+/// a full replay of the log. Run off the window's thread, it opens a workspace of its own (its
+/// own connection to the store), so the window keeps showing what it had until it is done.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatchUp {
+    /// The project, as `Project::dir` names it.
+    pub project: PathBuf,
+    /// Its `.livtk` directory.
+    livtk: PathBuf,
+}
+
+impl CatchUp {
+    /// Do it: open the workspace, which catches up under the write lock, and close it.
+    pub fn run(&self) -> Result<(), String> {
+        Workspace::open_dir(&self.livtk)
+            .map(drop)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// The node open in the detail panel, with what surrounds it.
@@ -240,6 +262,8 @@ pub struct Model {
     pub leaving: Vec<(Summary, usize, Instant)>,
     /// The last thing worth telling the human: a refusal, an error.
     pub notice: Option<String>,
+    /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
+    catch_ups: Vec<CatchUp>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
@@ -284,6 +308,7 @@ impl Model {
                         dir: root,
                         inbox: 0,
                         unseen: 0,
+                        catching_up: false,
                         ws,
                     });
                 }
@@ -303,6 +328,7 @@ impl Model {
             flashed: HashMap::new(),
             leaving: Vec::new(),
             notice,
+            catch_ups: Vec::new(),
             palette: None,
             activity: Vec::new(),
             activity_more: false,
@@ -668,17 +694,40 @@ impl Model {
     // ---- staying current ----------------------------------------------------------------------
 
     /// Pick up changes made elsewhere. Cheap when nothing changed. Returns whether anything did.
+    /// It never catches a store up itself: a project whose log is ahead of its store (git
+    /// rewrote it) is left as it was shown, and a `CatchUp` for it waits in `take_catch_ups`.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        // A catch-up just begun changes only what the sidebar says: a repaint, no reload.
+        let mut began = false;
         for p in &mut self.projects {
+            if p.catching_up {
+                continue;
+            }
             // Any project counts: the sidebar shows every project's inbox.
+            match p.ws.stale() {
+                Ok(true) => {
+                    p.catching_up = true;
+                    self.catch_ups.push(CatchUp {
+                        project: p.dir.clone(),
+                        livtk: p.ws.dir().to_path_buf(),
+                    });
+                    began = true;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    self.notice = Some(format!("{}: {e}", p.name));
+                    continue;
+                }
+            }
             match p.ws.refresh() {
                 Ok(changed_here) => changed |= changed_here,
                 Err(e) => self.notice = Some(format!("{}: {e}", p.name)),
             }
         }
         if !changed {
-            return false;
+            return began;
         }
         let before: HashMap<Uuid, String> = self
             .rows
@@ -700,6 +749,22 @@ impl Model {
             }
         }
         true
+    }
+
+    /// The catching up `tick` found and left to be run elsewhere, each once.
+    pub fn take_catch_ups(&mut self) -> Vec<CatchUp> {
+        std::mem::take(&mut self.catch_ups)
+    }
+
+    /// A `CatchUp` finished with `result`: the project is shown from its store again, which the
+    /// next `tick` finds current and changed.
+    pub fn caught_up(&mut self, job: &CatchUp, result: Result<(), String>) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.dir == job.project) {
+            p.catching_up = false;
+            if let Err(e) = result {
+                self.notice = Some(format!("{}: {e}", p.name));
+            }
+        }
     }
 
     /// Forget visual state older than `age`: finished flashes and fades.

@@ -620,6 +620,9 @@ target directory. Measured: opening a 10,000-task project and listing it 14.6 ms
 28 µs. From the app, the developer ratified, acknowledged and accepted the demo's inbox; each event
 reads `human`.
 
+The rebuild off the main thread came after milestone 5 (section 21): until then the poll's
+`refresh` replayed a rewritten log on the window's thread, about a second at 100,000 events.
+
 **Done when** you run your day's acknowledging and ratifying from the app, and Claude's changes
 show up in it while it is open.
 
@@ -847,6 +850,17 @@ Asked for while trying the app, and built in one batch:
   unreadable file starts the app as new; what no longer applies (a project gone) is passed over.
 - Scrolling over a modal (the shortcuts) scrolled the list behind it: the modal now occludes
   what is under it, so nothing behind is hovered, scrolled or clicked.
+- A log rewritten by git (pull, checkout, rebase) is caught up off the window's thread, as
+  section 16 promised and the first app did not: the poll asks the core whether a store is
+  `stale()` (a stat and two small reads, no lock), and if so hands a job to GPUI's background
+  executor. The job opens a workspace of its own, so its own SQLite connection, and replays the
+  log under the write lock; the window keeps showing what it had, with "Catching up…" beside the
+  project, and the next tick reloads. Measured (quick profile, 100,000 events, last two
+  swapped as a merge leaves them): the tick that finds it 84 µs, the replay in the job 0.93 s,
+  the reload afterwards 18 ms (what any change costs at that size). Starting a job repaints
+  without reloading: reloading for the label alone cost the tick 16 ms. Two limits remain: an
+  action taken while a job runs waits for its lock, and opening a project whose store is stale
+  still catches up before the first frame.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

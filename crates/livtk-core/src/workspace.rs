@@ -326,6 +326,15 @@ impl Workspace {
         Ok(changed)
     }
 
+    /// Whether the log holds what the store has not applied: what `refresh` would catch up,
+    /// found without taking the lock or applying anything. A reader that must not wait (the
+    /// app's window) checks this and leaves the catching up to another thread.
+    pub fn stale(&self) -> Result<bool> {
+        let applied = self.store.applied()?;
+        let len = self.log.len()?;
+        Ok(len != applied.mark.len || self.log.mark(len)? != applied.mark)
+    }
+
     /// Rebuild the store from the log.
     pub fn rebuild(&mut self) -> Result<()> {
         let _lock = self.lock()?;

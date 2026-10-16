@@ -174,6 +174,56 @@ fn changes_from_elsewhere_arrive_on_the_next_tick_and_flash() {
 }
 
 #[test]
+fn a_log_rewritten_by_git_is_caught_up_off_the_ticking_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut claude = project(dir.path());
+    let a = planned(&mut claude, "first");
+    let log = dir.path().join(".livtk/events.jsonl");
+    let checkpoint = std::fs::read(&log).unwrap();
+    let b = planned(&mut claude, "second");
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    assert_eq!(keys(&m), [a.clone(), b.clone()]);
+
+    // A checkout back to before the second task.
+    std::fs::write(&log, &checkpoint).unwrap();
+    assert!(
+        m.tick(),
+        "the project is now catching up, which the sidebar shows"
+    );
+    assert!(m.projects[0].catching_up);
+    assert_eq!(
+        keys(&m),
+        [a.clone(), b.clone()],
+        "shown as it was: the tick replayed nothing"
+    );
+    let jobs = m.take_catch_ups();
+    assert_eq!(jobs.len(), 1);
+    assert!(!m.tick());
+    assert!(m.take_catch_ups().is_empty(), "one at a time per project");
+
+    let job = jobs[0].clone();
+    let result = std::thread::spawn(move || job.run()).join().unwrap();
+    assert_eq!(result, Ok(()));
+    m.caught_up(&jobs[0], result);
+    assert!(!m.projects[0].catching_up);
+    assert!(
+        m.tick(),
+        "the next tick finds the store current and changed"
+    );
+    assert_eq!(keys(&m), [a]);
+    assert!(m.take_catch_ups().is_empty());
+
+    m.caught_up(&jobs[0], Err("the disk is full".into()));
+    assert!(
+        m.notice
+            .as_deref()
+            .is_some_and(|n| n.contains("the disk is full")),
+        "a failure is told: {:?}",
+        m.notice
+    );
+}
+
+#[test]
 fn the_selection_moves_and_stops_at_the_ends() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = project(dir.path());
@@ -642,4 +692,62 @@ fn ten_thousand_tasks_stay_fast() {
         *tick < Duration::from_millis(1),
         "an idle tick took {tick:?}"
     );
+}
+
+/// `cargo test --release -p livtk-app --test model -- --ignored --nocapture`: after git rewrites
+/// a log of 100,000 events, the window's tick stays a tick; the replay happens in the job.
+#[test]
+#[ignore = "a benchmark: run in release with --ignored"]
+fn a_rewritten_log_of_100k_events_never_stalls_the_tick() {
+    use livtk_core::event::{Event, NodeData, Op};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+    let mut lines = Vec::new();
+    let mut last = None;
+    for n in 1..=100_000u32 {
+        let e = Event::new(
+            last,
+            &CLAUDE,
+            Op::NodeCreate {
+                node: uuid::Uuid::now_v7(),
+                data: NodeData {
+                    kind: Kind::Task,
+                    key: format!("LIV-{n}"),
+                    title: format!("task number {n} with a title of ordinary length"),
+                    body: String::new(),
+                    state: State::Backlog,
+                    priority: livtk_core::model::Priority::DEFAULT,
+                    props: serde_json::Map::new(),
+                },
+            },
+        );
+        last = Some(e.id);
+        lines.push(e.to_line().unwrap());
+    }
+    let log = dir.path().join(".livtk/events.jsonl");
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+
+    // As a merge leaves it: the same events, the last two in the other order.
+    let n = lines.len();
+    lines.swap(n - 1, n - 2);
+    std::fs::write(&log, lines.join("\n") + "\n").unwrap();
+    let t = Instant::now();
+    assert!(m.tick());
+    let tick = t.elapsed();
+    let jobs = m.take_catch_ups();
+    assert_eq!(jobs.len(), 1);
+    let t = Instant::now();
+    let result = jobs[0].run();
+    let replay = t.elapsed();
+    assert_eq!(result, Ok(()));
+    m.caught_up(&jobs[0], result);
+    let t = Instant::now();
+    assert!(m.tick());
+    let after = t.elapsed();
+    eprintln!(
+        "100k events rewritten: tick {tick:?}, replay in the job {replay:?}, tick after {after:?}"
+    );
+    assert!(tick < Duration::from_millis(1), "the tick took {tick:?}");
 }

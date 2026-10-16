@@ -151,4 +151,5 @@ run `cargo clean` when it gets large; the next build takes a few minutes.
 
 ## Licence
 
-MIT
+MIT. The app's icons are [Boxicons](https://boxicons.com), under CC BY 4.0: see
+[crates/livtk-app/assets/icons](crates/livtk-app/assets/icons).

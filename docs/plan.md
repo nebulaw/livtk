@@ -797,8 +797,12 @@ Asked for while trying the app, and built in one batch:
 - A state changes from a menu on its state icon in a row or on a card, showing every state of
   the kind: the moves the node can make enabled, the human's decisions in the accent, the rest
   greyed. The detail panel's row of buttons became a flow: the main path left to right with
-  arrows, the states off it (parked, canceled, rejected) below, the current one filled and the
-  reachable ones outlined; ratifying a lesson offers the standing rule. Both read the core's
+  arrows, the states off it (parked, canceled, rejected) below. Where the node is: tinted in its
+  state's colour; moves: ringed, at full strength (the backlog's mark is faint by Linear's
+  convention, which read as unavailable); the human's decisions: a dotted accent ring; out of
+  reach: faded. Only the arrows a move from here passes along light up, pointing its way: the
+  first version lit none, and which moves were possible did not read. Ratifying a lesson offers
+  the standing rule. Both read the core's
   transition table, so they never offer a move it would refuse. Changing a state from a row
   leaves the selection where it is, and the row that leaves a view fades from its own place
   (it used to take the selected row's).

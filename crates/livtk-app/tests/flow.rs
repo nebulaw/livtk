@@ -1,7 +1,7 @@
 //! A kind's states as a flow, and changing state from anywhere, without a window.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
-use livtk_app::model::{Model, View, flow_of, has_flow, state_name, steps};
+use livtk_app::model::{Arrow, Look, Model, View, arrows, flow_of, has_flow, state_name, steps};
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
 const CLAUDE: Actor = Actor::Claude { agent: None };
@@ -137,4 +137,71 @@ fn a_state_changes_on_any_row_and_the_selection_stays_put() {
     );
     assert_eq!(m.leaving.len(), 1);
     assert_eq!(m.leaving[0].1, 0, "LIV-1 fades from its own place, the top");
+}
+
+#[test]
+fn each_step_looks_like_what_it_is() {
+    use State::*;
+    let looks: Vec<(State, Look)> = steps(Kind::Task, Planned)
+        .iter()
+        .map(|s| (s.state, s.look()))
+        .collect();
+    assert_eq!(
+        looks,
+        [
+            (Backlog, Look::Move),
+            (Planned, Look::Current),
+            (Acked, Look::Decision),
+            (Doing, Look::Out),
+            (Review, Look::Out),
+            (Done, Look::Out),
+            (Parked, Look::Move),
+            (Canceled, Look::Move),
+        ],
+        "acknowledging waits on the human: the dotted ring"
+    );
+    let lesson: Vec<Look> = steps(Kind::Lesson, Proposed)
+        .iter()
+        .map(|s| s.look())
+        .collect();
+    assert_eq!(
+        lesson,
+        [Look::Current, Look::Decision, Look::Out, Look::Decision],
+        "ratifying and rejecting both wait on the human"
+    );
+    let acked: Vec<Look> = steps(Kind::Task, Acked).iter().map(|s| s.look()).collect();
+    assert!(
+        !acked.contains(&Look::Decision),
+        "nothing waits on the human once acknowledged"
+    );
+}
+
+#[test]
+fn only_the_arrows_of_moves_from_here_light_up_pointing_their_way() {
+    use Arrow::*;
+    // Backlog, Planned, Acked, Doing, Review, Done: five gaps.
+    assert_eq!(
+        arrows(Kind::Task, State::Planned),
+        [Back(Look::Move), Forward(Look::Decision), Idle, Idle, Idle],
+        "back to backlog, on to acknowledging, which is the human's"
+    );
+    assert_eq!(
+        arrows(Kind::Task, State::Doing),
+        [Idle, Idle, Back(Look::Move), Forward(Look::Move), Idle],
+        "pause back to acked, or on to review"
+    );
+    assert_eq!(
+        arrows(Kind::Task, State::Done),
+        [Idle, Idle, Idle, Back(Look::Move), Back(Look::Move)],
+        "back to doing passes review"
+    );
+    assert_eq!(
+        arrows(Kind::Task, State::Parked),
+        [Idle; 5],
+        "off the path, none"
+    );
+    assert_eq!(
+        arrows(Kind::Lesson, State::Proposed),
+        [Forward(Look::Decision), Idle]
+    );
 }

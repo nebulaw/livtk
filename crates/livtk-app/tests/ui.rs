@@ -1386,3 +1386,29 @@ fn ratifying_from_the_flow_offers_the_standing_rule(cx: &mut TestAppContext) {
         "ratified as a standing rule"
     );
 }
+
+#[gpui_kit::test]
+fn the_flows_arrows_sit_between_the_states_they_join(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    let names = ["backlog", "planned", "acked", "doing", "review", "done"];
+    let rings: Vec<_> = names
+        .iter()
+        .map(|n| cx.debug_bounds(named(format!("flow-{n}"))).expect("a ring"))
+        .collect();
+    for gap in 0..5 {
+        let arrow = cx
+            .debug_bounds(named(format!("flow-arrow-{gap}")))
+            .expect("an arrow");
+        assert!(
+            arrow.left() >= rings[gap].right() - gpui_kit::px(20.)
+                && arrow.right() <= rings[gap + 1].left() + gpui_kit::px(20.),
+            "arrow {gap} {arrow:?} between {:?} and {:?}",
+            rings[gap],
+            rings[gap + 1]
+        );
+        assert!(arrow.size.width >= gpui_kit::px(10.), "visible: {arrow:?}");
+    }
+}

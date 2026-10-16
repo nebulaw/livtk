@@ -14,7 +14,7 @@ mod flow;
 mod graph;
 mod palette;
 pub use activity::{FeedRow, day_label, describe};
-pub use flow::{Step, flow_of, has_flow, state_name, state_short, steps};
+pub use flow::{Arrow, Look, Step, arrows, flow_of, has_flow, state_name, state_short, steps};
 pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,

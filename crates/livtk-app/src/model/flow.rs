@@ -20,10 +20,32 @@ pub struct Step {
     pub standing: Option<Choice>,
 }
 
+/// How a step is drawn: where the node is, a move waiting for the human's decision, a move
+/// anyone can make, or out of reach from here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Look {
+    Current,
+    Decision,
+    Move,
+    Out,
+}
+
 impl Step {
     /// A step only the human takes: acknowledging, ratifying, accepting, rejecting, retiring.
     pub fn decides(&self) -> bool {
         self.to.as_ref().is_some_and(|c| c.decides)
+    }
+
+    pub fn look(&self) -> Look {
+        if self.current {
+            Look::Current
+        } else if self.decides() {
+            Look::Decision
+        } else if self.to.is_some() || self.standing.is_some() {
+            Look::Move
+        } else {
+            Look::Out
+        }
     }
 }
 
@@ -56,6 +78,49 @@ pub fn steps(kind: Kind, state: State) -> Vec<Step> {
             standing: moves.iter().find(|c| c.to == s && c.always).cloned(),
         })
         .collect()
+}
+
+/// An arrow between two neighbouring states of the main path, as seen from where the node is:
+/// lit, pointing the way a move from here goes, or idle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrow {
+    Idle,
+    /// Towards the end of the path, by a move that looks like this.
+    Forward(Look),
+    /// Back towards the start.
+    Back(Look),
+}
+
+/// The arrows between the main path's states, one for each gap: those a move from `state`
+/// passes along are lit and point its way, the human's decision winning where moves overlap.
+pub fn arrows(kind: Kind, state: State) -> Vec<Arrow> {
+    let all = steps(kind, state);
+    let main: Vec<&Step> = all.iter().filter(|s| s.main).collect();
+    let mut out = vec![Arrow::Idle; main.len().saturating_sub(1)];
+    let Some(here) = main.iter().position(|s| s.current) else {
+        // Off the path (parked, canceled, rejected): its moves leave from the row below.
+        return out;
+    };
+    for (to, s) in main.iter().enumerate() {
+        let look = s.look();
+        if !matches!(look, Look::Move | Look::Decision) {
+            continue;
+        }
+        let (gaps, arrow) = if to > here {
+            (here..to, Arrow::Forward(look))
+        } else {
+            (to..here, Arrow::Back(look))
+        };
+        for g in gaps {
+            if !matches!(
+                out[g],
+                Arrow::Forward(Look::Decision) | Arrow::Back(Look::Decision)
+            ) {
+                out[g] = arrow;
+            }
+        }
+    }
+    out
 }
 
 /// Whether a kind has a flow worth drawing: a finding has one state and no moves.

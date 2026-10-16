@@ -101,8 +101,10 @@ Done work stays in view; what was dismissed (canceled, rejected, retired) shows 
 A task's priority icon, in a row, on a card or in the detail panel, opens a menu to change it;
 a state icon in a row or on a card opens its kind's states, the moves it can make enabled and
 your own decisions (acknowledge, ratify, accept, reject) in the accent. The detail panel draws
-the states as a flow from left to right: where it is now filled, where it can go outlined and
-clickable; ratifying offers the standing rule.
+the states as a flow from left to right: where it is now tinted in its colour, where it can go
+ringed and clickable (a dotted accent ring when the move is your decision), the rest faded, and
+only the arrows of moves from here lit, pointing the way they go; ratifying offers the standing
+rule.
 Links are added from the detail panel (+ Add link: waits for, blocks, related to, learned from,
 supersedes) or the palette ("Add link: …"), picking the other end by search, and removed with
 their ×. On the board the wheel scrolls a column and Shift+wheel scrolls across.

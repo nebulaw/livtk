@@ -22,10 +22,10 @@ use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::{
-    Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Model, Ordering, Step, View, choices,
-    describe, drop_allowed, has_flow, link_choices, link_curve, state_name, state_short, steps,
-    visible_runs,
+    Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, Display, FeedRow, GroupKey, Grouping,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Step, View, arrows,
+    choices, describe, drop_allowed, has_flow, link_choices, link_curve, state_name, state_short,
+    steps, visible_runs,
 };
 use theme::*;
 
@@ -1622,7 +1622,7 @@ impl LivtkApp {
             .items_center()
             .gap_2()
             .rounded_lg()
-            .child(state_mark(kind, s.state))
+            .child(flow_mark(kind, s))
             .child(label)
             .child(check(s.current && !standing));
         match to {
@@ -1634,8 +1634,12 @@ impl LivtkApp {
                     this.model.choose_on(id, &choice);
                     this.close_menu(window, cx);
                 })),
+            // Where it is now: highlighted as well as checked.
+            None if s.current => row
+                .bg(color(SELECTED))
+                .text_color(color(TEXT))
+                .font_weight(FontWeight::MEDIUM),
             // Not a move from here: shown, so the flow reads whole, but greyed.
-            None if s.current => row.text_color(color(TEXT)),
             None => row.text_color(color(TEXT_4)).opacity(0.55),
         }
     }
@@ -1650,24 +1654,10 @@ impl LivtkApp {
             .w_full()
             .flex()
             .items_start();
+        let lit = arrows(kind, state);
         for (i, s) in all.iter().filter(|s| s.main).enumerate() {
             if i > 0 {
-                path = path.child(
-                    div()
-                        .flex_1()
-                        .min_w(px(10.))
-                        .h(px(26.))
-                        .flex()
-                        .items_center()
-                        .child(div().flex_1().h(px(1.)).bg(color(BORDER_STRONG)))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .line_height(px(11.))
-                                .text_color(color(TEXT_4))
-                                .child("›"),
-                        ),
-                );
+                path = path.child(flow_arrow(i - 1, lit[i - 1]));
             }
             path = path.child(self.flow_step(id, kind, s, cx));
         }
@@ -1687,21 +1677,37 @@ impl LivtkApp {
         out
     }
 
-    /// How a step looks for what it is: current, a move, the human's decision, out of reach.
+    /// How a step looks for what it is. Where the node is: tinted with its state's own colour
+    /// and ringed in it. A move waiting for the human's decision: a dotted accent ring. A move
+    /// anyone can make: a plain ring. Out of reach: dim.
     fn step_style(s: &Step, el: Stateful<Div>) -> Stateful<Div> {
-        let reachable = s.to.is_some() || s.standing.is_some();
-        if s.current {
-            el.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
-        } else if reachable && s.decides() {
-            el.border_color(color(ACCENT))
+        let el = el.border(px(1.5));
+        match s.look() {
+            Look::Current => {
+                let c = state_color(s.state);
+                el.bg(with_alpha(c, 0.18)).border_color(color(c))
+            }
+            Look::Decision => el
+                .border_dashed()
+                .border_color(color(ACCENT_HOVER))
                 .cursor_pointer()
-                .hover(|h| h.bg(with_alpha(ACCENT, 0.16)))
-        } else if reachable {
-            el.border_color(color(BORDER_STRONG))
+                .hover(|h| h.bg(with_alpha(ACCENT, 0.16))),
+            Look::Move => el
+                .bg(color(SURFACE))
+                .border_color(color(TEXT_3))
                 .cursor_pointer()
-                .hover(|h| h.bg(color(HOVER)))
-        } else {
-            el.border_color(color(BORDER)).opacity(0.4)
+                .hover(|h| h.bg(color(HOVER)).border_color(color(TEXT))),
+            Look::Out => el.border_color(color(BORDER)).opacity(0.3),
+        }
+    }
+
+    /// A step's label colour, by the same look.
+    fn step_text(s: &Step) -> u32 {
+        match s.look() {
+            Look::Current => TEXT,
+            Look::Decision => ACCENT_HOVER,
+            Look::Move => TEXT,
+            Look::Out => TEXT_4,
         }
     }
 
@@ -1752,25 +1758,15 @@ impl LivtkApp {
             .items_center()
             .justify_center()
             .rounded_full()
-            .border_1()
-            .child(state_mark(kind, s.state));
+            .child(flow_mark(kind, s));
         let ring = self.on_step(id, s, Self::step_style(s, ring), cx);
         let label_id = format!("flow-label-{name}");
-        let reachable = s.to.is_some() || s.standing.is_some();
         let label = div()
             .debug_selector(move || label_id.clone())
             .text_xs()
             .whitespace_nowrap()
-            .text_color(color(if s.current {
-                TEXT
-            } else if reachable && s.decides() {
-                ACCENT_HOVER
-            } else if reachable {
-                TEXT_2
-            } else {
-                TEXT_4
-            }))
-            .when(s.current, |l| l.font_weight(FontWeight::MEDIUM))
+            .text_color(color(Self::step_text(s)))
+            .when(s.current, |l| l.font_weight(FontWeight::SEMIBOLD))
             .child(state_short(s.state));
         let standing_open = self.menu == Some(Menu::Standing) && s.standing.is_some();
         div()
@@ -1792,7 +1788,6 @@ impl LivtkApp {
     /// A state off the main path, as a pill: parked, canceled, rejected.
     fn flow_pill(&self, id: Uuid, kind: Kind, s: &Step, cx: &mut Context<Self>) -> Stateful<Div> {
         let pill_id = format!("flow-{}", s.state.as_str());
-        let reachable = s.to.is_some();
         let pill = div()
             .id(SharedString::from(pill_id.clone()))
             .debug_selector(move || pill_id.clone())
@@ -1802,18 +1797,10 @@ impl LivtkApp {
             .items_center()
             .gap(px(6.))
             .rounded_full()
-            .border_1()
             .text_xs()
-            .text_color(color(if s.current {
-                TEXT
-            } else if reachable && s.decides() {
-                ACCENT_HOVER
-            } else if reachable {
-                TEXT_2
-            } else {
-                TEXT_4
-            }))
-            .child(state_mark(kind, s.state))
+            .text_color(color(Self::step_text(s)))
+            .when(s.current, |p| p.font_weight(FontWeight::SEMIBOLD))
+            .child(flow_mark(kind, s))
             .child(state_name(s.state));
         self.on_step(id, s, Self::step_style(s, pill), cx)
     }
@@ -3748,6 +3735,63 @@ fn menu_divider() -> Div {
 }
 
 /// A row of a menu: what it is, from the left edge, with no empty slot before it.
+/// A state's mark in the flow and the state menu: at full strength where the node is or can go,
+/// so the backlog's mark, faint by Linear's convention, never reads as unavailable when it is a
+/// move.
+fn flow_mark(kind: Kind, s: &Step) -> Div {
+    let mark = state_mark(kind, s.state);
+    if s.look() == Look::Out {
+        mark
+    } else {
+        mark.opacity(1.)
+    }
+}
+
+/// The arrow between two neighbouring states of the flow: lit and pointing the way when a move
+/// from here passes along it, in the accent for the human's decision; faint otherwise.
+fn flow_arrow(gap: usize, arrow: Arrow) -> Div {
+    let (glyph, line, tip) = match arrow {
+        Arrow::Idle => ("›", with_alpha(BORDER, 1.), with_alpha(TEXT_4, 0.5)),
+        Arrow::Forward(look) | Arrow::Back(look) => {
+            let c = if look == Look::Decision {
+                ACCENT_HOVER
+            } else {
+                TEXT_2
+            };
+            let glyph = if matches!(arrow, Arrow::Forward(_)) {
+                "›"
+            } else {
+                "‹"
+            };
+            (glyph, color(c), color(c))
+        }
+    };
+    let back = matches!(arrow, Arrow::Back(_));
+    let lit = arrow != Arrow::Idle;
+    let selector = format!("flow-arrow-{gap}");
+    let bar = div().flex_1().h(px(if lit { 1.5 } else { 1. })).bg(line);
+    let head = div()
+        .text_size(px(13.))
+        .line_height(px(13.))
+        .when(lit, |h| h.font_weight(FontWeight::BOLD))
+        .text_color(tip)
+        .child(glyph);
+    let arrow = div()
+        .debug_selector(move || selector.clone())
+        .flex_1()
+        .min_w(px(10.))
+        .h(px(26.))
+        .flex()
+        .items_center()
+        .gap(px(1.));
+    // The head sits at the end the move goes to.
+    if back {
+        arrow.child(head).child(bar)
+    } else {
+        arrow.child(bar).child(head)
+    }
+}
+
 /// A state as a dot of its colour, `size` across: the graph's cards shrink with the zoom, and
 /// the full mark does not.
 fn state_dot(state: State, size: f32) -> Div {

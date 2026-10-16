@@ -142,6 +142,17 @@ fn open_app<'a>(
         gpui_kit::init(cx);
         bind_keys(cx);
     });
+    open_window(cx, dir)
+}
+
+/// Another window on the app `open_app` set up: as if it ran again.
+fn open_window<'a>(
+    cx: &'a mut TestAppContext,
+    dir: &std::path::Path,
+) -> (
+    gpui_kit::Entity<LivtkApp>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
     let path = dir.to_path_buf();
     let (app, cx) = cx.add_window_view(|window, cx| {
         // Keywords only, whatever models this machine has.
@@ -1883,4 +1894,291 @@ fn rows_and_cards_pass_under_the_floating_dock(cx: &mut TestAppContext) {
             .filter(|b| b.bottom() > dock.top())
     });
     assert!(under.is_some(), "a card passes under the dock {dock:?}");
+}
+
+/// Redraw the window, as the next frame would.
+fn redraw(cx: &mut gpui_kit::VisualTestContext) {
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+}
+
+fn resize(cx: &mut gpui_kit::VisualTestContext, w: f32, h: f32) {
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(w), gpui_kit::px(h)));
+    redraw(cx);
+    redraw(cx);
+}
+
+/// Press on `selector`, move the pointer to `x` with the button held, and let go there.
+fn drag_to(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, x: f32) {
+    let from = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    let to = gpui_kit::point(gpui_kit::px(x), from.y);
+    cx.simulate_event(gpui_kit::MouseDownEvent {
+        position: from,
+        modifiers: gpui_kit::Modifiers::default(),
+        button: gpui_kit::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    redraw(cx);
+    cx.simulate_event(gpui_kit::MouseMoveEvent {
+        position: to,
+        modifiers: gpui_kit::Modifiers::default(),
+        pressed_button: Some(gpui_kit::MouseButton::Left),
+    });
+    redraw(cx);
+    cx.simulate_event(gpui_kit::MouseUpEvent {
+        position: to,
+        modifiers: gpui_kit::Modifiers::default(),
+        button: gpui_kit::MouseButton::Left,
+        click_count: 1,
+    });
+    redraw(cx);
+}
+
+fn width_of(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) -> f32 {
+    f32::from(
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+            .size
+            .width,
+    )
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1.
+}
+
+#[gpui_kit::test]
+fn the_sidebar_edge_resizes_it_within_limits_and_snaps_to_the_rail(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    assert!(
+        near(width_of(cx, "sidebar"), 232.),
+        "it starts at its width"
+    );
+    drag_to(cx, "sidebar-edge", 300.);
+    assert!(
+        near(width_of(cx, "sidebar"), 300.),
+        "it follows the pointer"
+    );
+    app.read_with(cx, |a, _| {
+        assert!(!a.resizing(), "and lets go with the button")
+    });
+    drag_to(cx, "sidebar-edge", 900.);
+    assert!(near(width_of(cx, "sidebar"), 360.), "up to its widest");
+    drag_to(cx, "sidebar-edge", 170.);
+    assert!(near(width_of(cx, "sidebar"), 200.), "down to its narrowest");
+    double_click_on(cx, "sidebar-edge");
+    redraw(cx);
+    assert!(
+        near(width_of(cx, "sidebar"), 232.),
+        "a double-click resets it"
+    );
+    drag_to(cx, "sidebar-edge", 100.);
+    assert!(
+        cx.debug_bounds("sidebar").is_none(),
+        "dragged under, it collapses"
+    );
+    assert!(near(width_of(cx, "rail"), 52.), "to the rail");
+}
+
+#[gpui_kit::test]
+fn ctrl_b_and_the_top_bar_button_collapse_and_expand_the_sidebar(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("ctrl-b");
+    redraw(cx);
+    assert!(cx.debug_bounds("rail").is_some(), "Ctrl+B collapses it");
+    assert!(cx.debug_bounds("sidebar").is_none());
+    cx.simulate_keystrokes("ctrl-b");
+    redraw(cx);
+    assert!(cx.debug_bounds("sidebar").is_some(), "and expands it again");
+    click_on(cx, "sidebar-toggle");
+    redraw(cx);
+    assert!(cx.debug_bounds("rail").is_some(), "so does the button");
+    click_on(cx, "sidebar-toggle");
+    redraw(cx);
+    assert!(cx.debug_bounds("sidebar").is_some());
+}
+
+#[gpui_kit::test]
+fn the_rails_buttons_go_to_views_projects_and_shortcuts(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("ctrl-b");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("rail-badge").is_some(),
+        "the proposed lesson waits in the inbox: its button has a dot"
+    );
+    click_on(cx, "rail-Tasks");
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    click_on(cx, "rail-Lessons");
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Lessons));
+    click_on(cx, "rail-projects");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("projects")));
+    assert!(
+        cx.debug_bounds("rail-open-project").is_some(),
+        "it can open another"
+    );
+    click_on(cx, "rail-project-0");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None, "picking one closes it");
+        assert_eq!(a.model().current, 0);
+    });
+    click_on(cx, "rail-shortcuts");
+    app.read_with(cx, |a, _| assert!(a.help_open()));
+}
+
+#[gpui_kit::test]
+fn a_narrow_window_shows_the_rail_and_ctrl_b_opens_the_sidebar_there(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 900., 700.);
+    assert!(
+        cx.debug_bounds("rail").is_some(),
+        "too narrow for the sidebar"
+    );
+    cx.simulate_keystrokes("ctrl-b");
+    redraw(cx);
+    assert!(cx.debug_bounds("sidebar").is_some(), "opened by hand");
+    resize(cx, 1400., 900.);
+    assert!(
+        cx.debug_bounds("sidebar").is_some(),
+        "wide, it is as chosen"
+    );
+    resize(cx, 900., 700.);
+    assert!(
+        cx.debug_bounds("rail").is_some(),
+        "narrow again, it is the rail again: opening it there was for then"
+    );
+}
+
+#[gpui_kit::test]
+fn the_panel_edge_resizes_it_within_limits_and_double_click_resets(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 900.);
+    open_detail(cx);
+    assert!(
+        near(width_of(cx, "detail-panel"), 480.),
+        "it opens at its width"
+    );
+    drag_to(cx, "panel-edge", 1000.);
+    assert!(
+        near(width_of(cx, "detail-panel"), 600.),
+        "what lies right of the pointer"
+    );
+    drag_to(cx, "panel-edge", 100.);
+    assert!(near(width_of(cx, "detail-panel"), 720.), "up to its widest");
+    drag_to(cx, "panel-edge", 1500.);
+    assert!(
+        near(width_of(cx, "detail-panel"), 360.),
+        "down to its narrowest"
+    );
+    double_click_on(cx, "panel-edge");
+    redraw(cx);
+    assert!(
+        near(width_of(cx, "detail-panel"), 480.),
+        "a double-click resets it"
+    );
+    assert!(
+        cx.debug_bounds("panel-float").is_none(),
+        "beside the content"
+    );
+}
+
+#[gpui_kit::test]
+fn a_narrow_window_floats_the_panel_over_the_content(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 800., 700.);
+    open_detail(cx);
+    assert!(
+        cx.debug_bounds("panel-float").is_some(),
+        "no room beside it"
+    );
+    let content = cx.debug_bounds("content-box").unwrap();
+    assert!(
+        content.right() >= gpui_kit::px(780.),
+        "the content keeps its width under the panel: {content:?}"
+    );
+    let panel = cx.debug_bounds("detail-panel").unwrap();
+    assert_eq!(
+        panel.right(),
+        gpui_kit::px(800.),
+        "which is at the window's edge"
+    );
+}
+
+#[gpui_kit::test]
+fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppContext) {
+    let dir = project();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("livtk/app.toml");
+    {
+        let (app, cx) = open_app(cx, dir.path());
+        resize(cx, 1600., 900.);
+        app.update_in(cx, |a, window, cx| a.remember(path.clone(), window, cx));
+        drag_to(cx, "sidebar-edge", 300.);
+        cx.simulate_keystrokes("g t");
+        open_detail(cx);
+        drag_to(cx, "panel-edge", 1040.);
+        cx.simulate_keystrokes("ctrl-b");
+        redraw(cx);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(600));
+        cx.run_until_parked();
+    }
+    let saved = livtk_app::model::Saved::load(&path);
+    assert_eq!(saved.view.as_deref(), Some("tasks"), "{saved:?}");
+    assert_eq!(saved.window.sidebar_width, Some(300.));
+    assert!(saved.window.sidebar_collapsed);
+    assert_eq!(saved.window.panel_width, Some(560.));
+
+    let (app, cx) = open_window(cx, dir.path());
+    resize(cx, 1600., 900.);
+    app.update_in(cx, |a, window, cx| a.remember(path.clone(), window, cx));
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    assert!(cx.debug_bounds("rail").is_some(), "still collapsed");
+    cx.simulate_keystrokes("ctrl-b");
+    redraw(cx);
+    assert!(near(width_of(cx, "sidebar"), 300.), "at the width it was");
+    open_detail(cx);
+    assert!(
+        near(width_of(cx, "detail-panel"), 560.),
+        "and the panel too"
+    );
+}
+
+#[gpui_kit::test]
+fn scrolling_over_the_shortcuts_leaves_the_list_behind_them_still(cx: &mut TestAppContext) {
+    let dir = long_project(40);
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    let before = cx.debug_bounds("key-LIV-5").expect("a row is drawn");
+    cx.simulate_keystrokes("ctrl-?");
+    redraw(cx);
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: before.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-400.),
+        )),
+        ..Default::default()
+    });
+    redraw(cx);
+    assert_eq!(
+        cx.debug_bounds("key-LIV-5"),
+        Some(before),
+        "the rows behind the modal did not move"
+    );
 }

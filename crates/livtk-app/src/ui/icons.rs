@@ -7,11 +7,11 @@ use gpui_kit::*;
 use super::theme::color;
 
 macro_rules! icons {
-    ($($name:ident => $file:literal,)*) => {
+    ($($(#[$doc:meta])* $name:ident => $file:literal,)*) => {
         /// Every icon the app draws.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Icon {
-            $($name,)*
+            $($(#[$doc])* $name,)*
         }
 
         impl Icon {
@@ -56,7 +56,10 @@ icons! {
     Ordering => "arrow-down-up",
     Show => "eye",
     Hide => "eye-slash",
-    ClosePanel => "dock-right-arrow",
+    /// Closing the detail panel, expanding the sidebar from its rail.
+    DockRight => "dock-right-arrow",
+    /// Collapsing the sidebar to its rail.
+    DockLeft => "dock-left-arrow",
     Link => "link",
     Unlink => "unlink",
     Notes => "message-circle-dots-2",

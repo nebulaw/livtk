@@ -833,6 +833,20 @@ Asked for while trying the app, and built in one batch:
   on every resize, which a test caught by clicking where the button had been.
 - The detail panel left the content box: it sits on the window's black beside it, full height,
   as the sidebar does, so the content stands alone in the middle between the two.
+- The sidebar collapses to a 52 px rail of icons (the project switcher as a menu, each view with
+  a dot when its inbox or feed holds something new, the shortcuts; names in tooltips), with
+  Ctrl+B or the top bar's button, and on its own below a 1000 px window, where Ctrl+B opens it
+  for the moment. Its right edge drags between 200 and 360 px, and dragged under 140 it
+  collapses; the detail panel's left edge drags between 360 and 720 px, and never past 55% of
+  the window. A double-click on an edge resets it. The edges show a thin line on hover and
+  change the cursor only while dragged. When the panel beside the content would leave it under
+  360 px, the panel floats over it instead.
+- The app remembers, in `app.toml` beside `projects.toml`: the project and view, list or board,
+  dismissed work shown, each view's filter, priorities, grouping, ordering and collapsed groups,
+  and the sidebar's and panel's widths and whether the sidebar is collapsed. A missing or
+  unreadable file starts the app as new; what no longer applies (a project gone) is passed over.
+- Scrolling over a modal (the shortcuts) scrolled the list behind it: the modal now occludes
+  what is under it, so nothing behind is hovered, scrolled or clicked.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
 

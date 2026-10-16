@@ -60,13 +60,15 @@ fn the_cursor_changes_only_while_dragging() {
             assert!(!source.contains(banned), "found {banned}");
         }
     }
+    // The graph's pan and an edge's resize: each only while its drag is on.
     let changes: Vec<&str> = UI.lines().filter(|l| l.contains(".cursor(")).collect();
-    assert_eq!(changes.len(), 1, "{changes:?}");
-    assert!(
-        changes[0].contains("when(dragging"),
-        "the one change is while dragging: {}",
-        changes[0]
-    );
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    for change in changes {
+        assert!(
+            change.contains("when(dragging"),
+            "a change is only while dragging: {change}"
+        );
+    }
 }
 
 /// No element grows or zooms on hover.

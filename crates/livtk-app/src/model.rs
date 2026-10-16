@@ -13,6 +13,7 @@ mod activity;
 mod flow;
 mod graph;
 mod palette;
+mod saved;
 pub use activity::{FeedRow, day_label, describe};
 pub use flow::{Arrow, Look, Step, arrows, flow_of, has_flow, state_name, state_short, steps};
 pub use graph::{
@@ -20,6 +21,7 @@ pub use graph::{
     link_curve, visible_runs,
 };
 pub use palette::{Action, Ask, Found, Item, LinkPick, Palette, Run, fuzzy};
+pub use saved::{Saved, SavedView, SavedWindow};
 
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

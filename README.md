@@ -97,6 +97,11 @@ by title, key or priority), Grouping (state, priority), Ordering (priority, last
 creation), dismissed work, List or Board, the graph's zoom, and the command palette. Its menus
 open upwards; on a narrow window it shows icons alone. The top bar holds only the view's name and
 count. Groups are solid bands that collapse on a click.
+`Ctrl+B`, or the top bar's button, collapses the sidebar to a rail of icons; a narrow window
+shows the rail on its own. Drag the sidebar's or the detail panel's edge to resize it, and
+double-click the edge to reset it; on a narrow window the panel floats over the content. The app
+remembers where you were, how each view was filtered, grouped and ordered, and these widths, in
+`app.toml` beside `projects.toml`.
 Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter for the body)
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
@@ -120,6 +125,7 @@ shortcut; the ones used most:
 | Keys | |
 |---|---|
 | `Ctrl+K` | command palette and search |
+| `Ctrl+B` | collapse or expand the sidebar |
 | `j` `k` | move |
 | `Enter` `Esc` | open, close the detail panel |
 | `a` | decide: acknowledge, ratify, accept |

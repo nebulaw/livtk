@@ -24,9 +24,9 @@ use uuid::Uuid;
 
 use crate::model::{
     Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Step, View,
-    arrows, choices, describe, drop_allowed, has_flow, link_choices, link_curve, state_name,
-    state_short, steps, visible_runs,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Saved,
+    SavedWindow, Step, View, arrows, choices, describe, drop_allowed, has_flow, link_choices,
+    link_curve, state_name, state_short, steps, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -64,6 +64,7 @@ actions!(
         Priority4,
         FocusFilter,
         ToggleHelp,
+        ToggleSidebar,
         OpenPalette,
         PaletteUp,
         PaletteDown,
@@ -84,7 +85,23 @@ const FLASH: Duration = Duration::from_millis(900);
 /// The detail panel opening and closing: it grows from the right edge and the list makes room.
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
-const DETAIL_WIDTH: f32 = 480.;
+/// The detail panel's width: dragged by its left edge between these, never more than a share of
+/// the window. Where the content would be left narrower than `CONTENT_MIN`, it floats over it.
+const PANEL_WIDTH: f32 = 480.;
+const PANEL_MIN: f32 = 360.;
+const PANEL_MAX: f32 = 720.;
+const PANEL_SHARE: f32 = 0.55;
+const CONTENT_MIN: f32 = 360.;
+/// The sidebar's width, dragged by its right edge between these; dragged under `SIDEBAR_SNAP`
+/// it collapses to the rail. Below `RAIL_BELOW` of window it is the rail anyway.
+const SIDEBAR_WIDTH: f32 = 232.;
+const SIDEBAR_MIN: f32 = 200.;
+const SIDEBAR_MAX: f32 = 360.;
+const SIDEBAR_SNAP: f32 = 140.;
+const RAIL_WIDTH: f32 = 52.;
+const RAIL_BELOW: f32 = 1000.;
+/// The content's own inset (8 px) and border (2 px), beside the sidebar.
+const CONTENT_FRAME: f32 = 10.;
 /// How much `+` and `-` zoom the graph.
 const ZOOM_STEP: f32 = 1.25;
 /// A list row's leading slot: a task's priority, or another kind's icon.
@@ -103,7 +120,6 @@ const _: () = assert!(
 );
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
-const SIDEBAR_WIDTH: f32 = 232.;
 /// An arrowhead on screen: its tip, and the way it points.
 type Arrowhead = ((f32, f32), (f32, f32));
 
@@ -129,6 +145,11 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         "Navigate",
         &["Ctrl", "+", "K"],
         "Command palette and search",
+    ),
+    (
+        "Navigate",
+        &["Ctrl", "+", "B"],
+        "Collapse or expand the sidebar",
     ),
     ("Navigate", &["J", "or", "↓"], "Next row"),
     ("Navigate", &["K", "or", "↑"], "Previous row"),
@@ -179,7 +200,13 @@ pub fn run(dirs: Vec<PathBuf>) {
             ..Default::default()
         };
         if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| {
-            cx.new(|cx| LivtkApp::new(Model::open(&dirs), window, cx))
+            cx.new(|cx| {
+                let mut app = LivtkApp::new(Model::open(&dirs), window, cx);
+                if let Some(path) = Saved::path() {
+                    app.remember(path, window, cx);
+                }
+                app
+            })
         }) {
             eprintln!("livtk-app: cannot open a window: {e}");
             cx.quit();
@@ -227,6 +254,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-?", ToggleHelp, None),
         KeyBinding::new("ctrl-shift-/", ToggleHelp, None),
         KeyBinding::new("ctrl-k", OpenPalette, None),
+        KeyBinding::new("ctrl-b", ToggleSidebar, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
         KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
         KeyBinding::new("down", PaletteDown, Some(PALETTE_FIELD)),
@@ -323,6 +351,19 @@ pub struct LivtkApp {
     /// A press on the graph's background: where the pointer was last, and whether it moved,
     /// which makes it a drag rather than a click.
     graph_press: Option<(Point<Pixels>, bool)>,
+    /// The sidebar's width when expanded, and whether the human collapsed it to the rail.
+    sidebar_width: f32,
+    sidebar_collapsed: bool,
+    /// Expanded by hand although the window is narrow enough for the rail; forgotten once the
+    /// window is wide again.
+    sidebar_peek: bool,
+    panel_width: f32,
+    /// The edge being dragged, if any.
+    resizing: Option<Edge>,
+    /// Where `app.toml` is, when the app remembers between runs (tests leave it out), and what
+    /// was last written there, so it is written only when something changed.
+    saved_path: Option<PathBuf>,
+    last_saved: Saved,
     form: Option<NewTaskForm>,
     help: bool,
     editing: Option<Editing>,
@@ -364,6 +405,8 @@ impl LivtkApp {
                     let changed = app.model.tick();
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
                     app.model.settle(Instant::now(), FLASH.max(FADE) + POLL);
+                    // What the app remembers is written within a beat of changing.
+                    app.persist();
                     if changed || busy {
                         cx.notify();
                     }
@@ -383,6 +426,13 @@ impl LivtkApp {
             board_scroll: ScrollHandle::new(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
+            sidebar_width: SIDEBAR_WIDTH,
+            sidebar_collapsed: false,
+            sidebar_peek: false,
+            panel_width: PANEL_WIDTH,
+            resizing: None,
+            saved_path: None,
+            last_saved: Saved::default(),
             filter,
             note,
             form: None,
@@ -406,6 +456,11 @@ impl LivtkApp {
         self.help
     }
 
+    /// Whether an edge is being dragged.
+    pub fn resizing(&self) -> bool {
+        self.resizing.is_some()
+    }
+
     pub fn form_open(&self) -> bool {
         self.form.is_some()
     }
@@ -422,6 +477,7 @@ impl LivtkApp {
             Menu::AddLink => "add-link",
             Menu::RowState(_) => "row-state",
             Menu::Standing => "standing",
+            Menu::Projects => "projects",
         })
     }
 
@@ -927,12 +983,16 @@ impl LivtkApp {
 
     // ---- rendering: the frame -----------------------------------------------------------------
 
-    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = window;
+    fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.rail(window) {
+            return self.rail_bar(cx);
+        }
         let mut side = div()
-            .w(px(SIDEBAR_WIDTH))
+            .debug_selector(|| "sidebar".into())
+            .w(px(self.sidebar_width))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .px_2()
@@ -992,32 +1052,244 @@ impl LivtkApp {
                 .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
             );
         }
-        side.child(div().flex_1()).child(
-            div()
-                .id("shortcuts")
-                .group("nav")
-                .px_2()
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded_lg()
-                .text_color(color(TEXT_4))
-                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                .child(icon_hover(Icon::Shortcuts, 16., TEXT_4, "nav", TEXT_3))
-                .child(div().flex_1().child("Shortcuts"))
-                .child(kbd("Ctrl"))
-                .child(kbd("?"))
+        side.child(div().flex_1())
+            .child(
+                div()
+                    .id("shortcuts")
+                    .group("nav")
+                    .px_2()
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_lg()
+                    .text_color(color(TEXT_4))
+                    .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
+                    .child(icon_hover(Icon::Shortcuts, 16., TEXT_4, "nav", TEXT_3))
+                    .child(div().flex_1().child("Shortcuts"))
+                    .child(kbd("Ctrl"))
+                    .child(kbd("?"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.help = !this.help;
+                        cx.notify();
+                    })),
+            )
+            .child(self.edge(Edge::Sidebar, cx))
+            .into_any_element()
+    }
+
+    /// A draggable edge: the sidebar's right, the panel's left. Nothing shows at rest, a thin line
+    /// on hover (the cursor stays, by the developer's rule), the accent while dragging; a
+    /// double-click puts the width back to its default.
+    fn edge(&self, edge: Edge, cx: &mut Context<Self>) -> Stateful<Div> {
+        let id = match edge {
+            Edge::Sidebar => "sidebar-edge",
+            Edge::Panel => "panel-edge",
+        };
+        let dragging = self.resizing == Some(edge);
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .group(id)
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .when(edge == Edge::Sidebar, |d| d.right_0())
+            .when(edge == Edge::Panel, |d| d.left_0())
+            .w(px(6.))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(if dragging { 2. } else { 1. }))
+                    .h_full()
+                    .when(dragging, |l| l.bg(color(ACCENT)))
+                    .when(!dragging, |l| {
+                        l.group_hover(id, |s| s.bg(color(BORDER_STRONG)))
+                    }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if e.click_count >= 2 {
+                        match edge {
+                            Edge::Sidebar => this.sidebar_width = SIDEBAR_WIDTH,
+                            Edge::Panel => this.panel_width = PANEL_WIDTH,
+                        }
+                        this.resizing = None;
+                    } else {
+                        this.resizing = Some(edge);
+                    }
+                    cx.notify();
+                }),
+            )
+    }
+
+    /// The pointer at `x` while dragging `edge` in a window `window_w` wide. The sidebar's width
+    /// is where the pointer is; dragged under the snap, it becomes the rail. The panel's width is
+    /// what lies right of the pointer.
+    fn drag_edge(&mut self, edge: Edge, x: f32, window_w: f32) {
+        match edge {
+            Edge::Sidebar if x < SIDEBAR_SNAP => {
+                if window_w < RAIL_BELOW {
+                    self.sidebar_peek = false;
+                } else {
+                    self.sidebar_collapsed = true;
+                }
+                self.resizing = None;
+            }
+            Edge::Sidebar => self.sidebar_width = x.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
+            Edge::Panel => self.panel_width = (window_w - x).clamp(PANEL_MIN, PANEL_MAX),
+        }
+    }
+
+    /// Ctrl+B and the top bar's button. On a narrow window the sidebar is the rail anyway, so
+    /// the toggle opens it there for now; on a wide one it is the human's choice, kept.
+    fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if Self::window_width(window) < RAIL_BELOW {
+            self.sidebar_peek = !self.sidebar_peek;
+        } else {
+            self.sidebar_collapsed = !self.sidebar_collapsed;
+        }
+        cx.notify();
+    }
+
+    /// The collapsed sidebar: a rail of icons. The project switcher, each view with a dot when
+    /// it holds something new, and the shortcuts; names in tooltips.
+    fn rail_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let inbox = self.model.project().map_or(0, |p| p.inbox);
+        let unseen = self.model.project().map_or(0, |p| p.unseen);
+        let mut rail = div()
+            .debug_selector(|| "rail".into())
+            .w(px(RAIL_WIDTH))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .py_3()
+            .gap(px(2.));
+        let open = self.menu == Some(Menu::Projects);
+        let projects = rail_button(
+            "rail-projects".into(),
+            Icon::Project,
+            open,
+            false,
+            self.model
+                .project()
+                .map_or("Projects".into(), |p| SharedString::from(p.name.clone())),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.toggle_menu(Menu::Projects, window, cx);
+            }),
+        );
+        rail = rail
+            .child(div().relative().child(projects).when(open, |d| {
+                let panel = self.projects_menu(cx);
+                d.child(self.popover(Menu::Projects, false, 40., panel, cx))
+            }))
+            .child(div().h(px(14.)));
+        for view in View::ALL {
+            let new = match view {
+                View::Inbox => inbox > 0,
+                View::Activity => unseen > 0,
+                _ => false,
+            };
+            rail = rail.child(
+                rail_button(
+                    SharedString::from(format!("rail-{}", view.title())),
+                    view_icon(view),
+                    view == self.model.view,
+                    new,
+                    view.title().into(),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
+            );
+        }
+        rail.child(div().flex_1())
+            .child(
+                rail_button(
+                    "rail-shortcuts".into(),
+                    Icon::Shortcuts,
+                    self.help,
+                    false,
+                    "Shortcuts · Ctrl ?".into(),
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.help = !this.help;
                     cx.notify();
                 })),
+            )
+            .into_any_element()
+    }
+
+    /// The projects, from the rail: pick one, or open another.
+    fn projects_menu(&self, cx: &mut Context<Self>) -> Div {
+        let mut panel = menu_panel(240.).debug_selector(|| "projects-menu".into());
+        for (i, p) in self.model.projects.iter().enumerate() {
+            let current = i == self.model.current;
+            panel = panel.child(
+                option_row(SharedString::from(format!("rail-project-{i}")))
+                    .debug_selector(move || format!("rail-project-{i}"))
+                    .child(icon(Icon::Project, 14., TEXT_3))
+                    .child(div().flex_1().truncate().child(p.name.clone()))
+                    .child(check(current))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.model.select_project(i);
+                        this.sync_filter(window, cx);
+                        this.close_menu(window, cx);
+                    })),
+            );
+        }
+        panel.child(menu_divider()).child(
+            option_row("rail-open-project".into())
+                .debug_selector(|| "rail-open-project".into())
+                .child(icon(Icon::OpenProject, 14., TEXT_3))
+                .child("Open project")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close_menu(window, cx);
+                    this.open_folder(cx);
+                })),
         )
     }
 
-    /// The top bar: the view's name and how many items it holds; its controls live in the dock.
-    fn header(&self) -> impl IntoElement {
+    /// The top bar: the sidebar's toggle, then the view's name and how many items it holds; its
+    /// controls live in the dock.
+    fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = &self.model;
+        let rail = self.rail(window);
+        let toggle = div()
+            .id("sidebar-toggle")
+            .debug_selector(|| "sidebar-toggle".into())
+            .size(px(26.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .hover(|s| s.bg(color(HOVER)))
+            .child(icon(
+                if rail {
+                    Icon::DockRight
+                } else {
+                    Icon::DockLeft
+                },
+                16.,
+                TEXT_3,
+            ))
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(if rail {
+                    "Expand the sidebar · Ctrl B"
+                } else {
+                    "Collapse the sidebar · Ctrl B"
+                })
+                .build(window, cx)
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
         div()
             .debug_selector(|| "view-header".into())
             .h(px(46.))
@@ -1025,9 +1297,11 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_3()
-            .px_4()
+            .pl(px(10.))
+            .pr_4()
             .border_b_1()
             .border_color(color(BORDER))
+            .child(toggle)
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
@@ -1260,16 +1534,94 @@ impl LivtkApp {
         panel
     }
 
+    fn window_width(window: &Window) -> f32 {
+        f32::from(window.viewport_size().width)
+    }
+
+    /// Whether the sidebar shows as the rail: as the human chose, or because the window is too
+    /// narrow for it, unless they opened it there by hand.
+    fn rail(&self, window: &Window) -> bool {
+        if Self::window_width(window) < RAIL_BELOW {
+            !self.sidebar_peek
+        } else {
+            self.sidebar_collapsed
+        }
+    }
+
+    fn sidebar_px(&self, window: &Window) -> f32 {
+        if self.rail(window) {
+            RAIL_WIDTH
+        } else {
+            self.sidebar_width
+        }
+    }
+
+    /// The panel's width: as dragged, within its limits and its share of the window.
+    fn panel_px(&self, window: &Window) -> f32 {
+        let cap = PANEL_MAX.min(Self::window_width(window) * PANEL_SHARE);
+        self.panel_width.min(cap).max(PANEL_MIN.min(cap))
+    }
+
+    /// Whether the panel floats over the content: when beside it, it would leave the content
+    /// narrower than it can be.
+    fn panel_floats(&self, window: &Window) -> bool {
+        Self::window_width(window) - self.sidebar_px(window) - CONTENT_FRAME - self.panel_px(window)
+            < CONTENT_MIN
+    }
+
     /// The content column's width, worked out from the window rather than measured, so a frame
     /// is laid out right the first time: the window, less the sidebar, the content's inset and
-    /// border, and the detail panel when it is open.
+    /// border, and the detail panel when it is open beside it.
     fn content_width(&self, window: &Window) -> f32 {
-        let panel = if self.model.detail.is_some() {
-            DETAIL_WIDTH
+        let panel = if self.model.detail.is_some() && !self.panel_floats(window) {
+            self.panel_px(window)
         } else {
             0.
         };
-        f32::from(window.viewport_size().width) - SIDEBAR_WIDTH - 10. - panel
+        Self::window_width(window) - self.sidebar_px(window) - CONTENT_FRAME - panel
+    }
+
+    /// Remember between runs through `path`: bring back what it holds now, and write it again
+    /// whenever something it holds changes.
+    pub fn remember(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let saved = Saved::load(&path);
+        self.model.restore(&saved);
+        let w = &saved.window;
+        self.sidebar_width = w
+            .sidebar_width
+            .unwrap_or(SIDEBAR_WIDTH)
+            .clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        self.sidebar_collapsed = w.sidebar_collapsed;
+        self.panel_width = w
+            .panel_width
+            .unwrap_or(PANEL_WIDTH)
+            .clamp(PANEL_MIN, PANEL_MAX);
+        self.sync_filter(window, cx);
+        self.last_saved = self.to_save();
+        self.saved_path = Some(path);
+        cx.notify();
+    }
+
+    fn to_save(&self) -> Saved {
+        let mut saved = self.model.saved();
+        saved.window = SavedWindow {
+            sidebar_width: Some(self.sidebar_width),
+            sidebar_collapsed: self.sidebar_collapsed,
+            panel_width: Some(self.panel_width),
+        };
+        saved
+    }
+
+    /// Write what is remembered, if it changed since the last write.
+    fn persist(&mut self) {
+        let Some(path) = &self.saved_path else { return };
+        let now = self.to_save();
+        if now != self.last_saved {
+            if let Err(e) = now.save(path) {
+                self.model.notice = Some(format!("cannot save the app's state: {e}"));
+            }
+            self.last_saved = now;
+        }
     }
 
     /// The dock: one compact bar floating over the bottom of the content, centred on it, holding
@@ -3044,13 +3396,13 @@ impl LivtkApp {
 
     /// The detail panel, sliding in when it opens and out when it closes. Its width animates,
     /// so the list beside it makes room smoothly instead of jumping.
-    fn detail(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn detail(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (d, closing) = match (&self.model.detail, &self.detail_leaving) {
             (Some(d), _) => (d.clone(), false),
             (None, Some(d)) => (d.clone(), true),
             (None, None) => return None,
         };
-        let panel = self.detail_panel(&d, cx);
+        let panel = self.detail_panel(&d, width, cx);
         let (id, duration) = if closing {
             (format!("detail-out-{}", self.detail_epoch), SLIDE_OUT)
         } else {
@@ -3069,14 +3421,14 @@ impl LivtkApp {
                     Animation::new(duration).with_easing(easing),
                     move |el, t| {
                         let open = if closing { 1.0 - t } else { t };
-                        el.w(px(DETAIL_WIDTH * open)).opacity(0.3 + 0.7 * open)
+                        el.w(px(width * open)).opacity(0.3 + 0.7 * open)
                     },
                 )
                 .into_any_element(),
         )
     }
 
-    fn detail_panel(&mut self, d: &Detail, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn detail_panel(&mut self, d: &Detail, width: f32, cx: &mut Context<Self>) -> Stateful<Div> {
         let n = &d.node;
         let mut props = div().flex().flex_col().gap_2().child(prop_row(
             "Status",
@@ -3132,12 +3484,14 @@ impl LivtkApp {
         div()
             .id(SharedString::from(format!("detail-{}", n.key)))
             .debug_selector(|| "detail-body-panel".into())
-            .w(px(DETAIL_WIDTH))
+            .w(px(width))
             .flex_none()
             .h_full()
+            .relative()
             // The window's black shows through, as behind the sidebar.
             .flex()
             .flex_col()
+            .child(self.edge(Edge::Panel, cx))
             .child(
                 div()
                     .h(px(46.))
@@ -3162,7 +3516,7 @@ impl LivtkApp {
                             .rounded_lg()
                             .hover(|s| s.bg(color(HOVER)))
                             .child(icon_hover(
-                                Icon::ClosePanel,
+                                Icon::DockRight,
                                 16.,
                                 TEXT_4,
                                 "close-detail",
@@ -3213,6 +3567,8 @@ impl LivtkApp {
             .id(id)
             .absolute()
             .inset_0()
+            // Nothing behind it is hovered, scrolled or clicked while it is open.
+            .occlude()
             .key_context(FORM)
             .on_action(cx.listener(|this, _: &Cancel, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.escape(window, cx)))
@@ -3655,12 +4011,75 @@ impl LivtkApp {
 
 impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar = self.sidebar(window, cx).into_any_element();
-        let header = self.header().into_any_element();
+        if Self::window_width(window) >= RAIL_BELOW {
+            self.sidebar_peek = false;
+        }
+        let sidebar = self.sidebar(window, cx);
+        let header = self.header(window, cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
-        let detail = self.detail(cx);
+        let panel_w = self.panel_px(window);
+        let floats = self.panel_floats(window);
+        // A narrow window has no room for the panel beside the content: it floats over it.
+        let detail = self.detail(panel_w, cx).map(|d| {
+            if floats {
+                div()
+                    .debug_selector(|| "panel-float".into())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .flex()
+                    .bg(color(WINDOW))
+                    .border_l_1()
+                    .border_color(color(BORDER_STRONG))
+                    .shadow_lg()
+                    .child(d)
+                    .into_any_element()
+            } else {
+                d
+            }
+        });
+        let dragging_edge = self.resizing.is_some();
+        // While an edge is dragged, follow the pointer anywhere in the window, ahead of what is
+        // under it, and let go when the button is.
+        let drag = self.resizing.map(|edge| {
+            let this = cx.entity().downgrade();
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    let moved = this.clone();
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        let w = Self::window_width(window);
+                        let held = e.pressed_button == Some(MouseButton::Left);
+                        let _ = moved.update(cx, |app, cx| {
+                            if held {
+                                app.drag_edge(edge, f32::from(e.position.x), w);
+                            } else {
+                                app.resizing = None;
+                            }
+                            cx.notify();
+                        });
+                    });
+                    let released = this.clone();
+                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        let _ = released.update(cx, |app, cx| {
+                            app.resizing = None;
+                            cx.notify();
+                        });
+                    });
+                },
+            )
+            .absolute()
+            .size_full()
+        });
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let palette = self.palette_overlay(cx);
@@ -3763,8 +4182,12 @@ impl Render for LivtkApp {
             .bg(color(WINDOW))
             .text_color(color(TEXT_2))
             .text_sm()
+            .when(dragging_edge, |d| d.cursor(CursorStyle::ResizeLeftRight))
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ToggleHelp, window, cx| {
                 this.help = !this.help;
@@ -3817,6 +4240,7 @@ impl Render for LivtkApp {
             .children(palette)
             .children(help)
             .children(notice)
+            .children(drag)
     }
 }
 
@@ -3842,6 +4266,15 @@ enum Menu {
     RowState(Uuid),
     /// Ratify or ratify as a standing rule, from the flow in the detail panel.
     Standing,
+    /// The projects, from the collapsed sidebar's rail.
+    Projects,
+}
+
+/// An edge the human drags to resize: the sidebar's right, the detail panel's left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Sidebar,
+    Panel,
 }
 
 const GROUPINGS: &[(&str, &str, Grouping)] = &[
@@ -3880,6 +4313,46 @@ fn section_label(text: &str) -> Div {
 /// One row of the room at the end of a virtualised list: empty, under the dock.
 fn dock_room() -> AnyElement {
     div().w_full().h(px(ROW)).into_any_element()
+}
+
+/// A button on the collapsed sidebar's rail: an icon, a dot when its view has work waiting, and
+/// its name as a tooltip.
+fn rail_button(
+    id: SharedString,
+    glyph: Icon,
+    on: bool,
+    badge: bool,
+    tip: SharedString,
+) -> Stateful<Div> {
+    let name = id.clone();
+    div()
+        .id(id)
+        .debug_selector(move || name.to_string())
+        .relative()
+        .size(px(36.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .when(on, |d| d.bg(color(SELECTED)))
+        .when(!on, |d| d.hover(|s| s.bg(color(HOVER))))
+        .child(icon(glyph, 18., if on { TEXT } else { TEXT_3 }))
+        .when(badge, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .top(px(6.))
+                    .right(px(6.))
+                    .size(px(7.))
+                    .rounded_full()
+                    .bg(color(ACCENT))
+                    .debug_selector(|| "rail-badge".into()),
+            )
+        })
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+        })
 }
 
 /// A non-task row's leading slot: its kind's icon, as wide as a task's priority button.

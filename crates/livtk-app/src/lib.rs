@@ -5,5 +5,6 @@ pub mod applog;
 pub mod launch;
 pub mod model;
 pub mod system;
+pub mod terminal;
 pub mod ui;
 pub mod updates;

@@ -26,7 +26,10 @@ repository = "https://github.com/nebulaw/tasks"
 livtk-build = { path = "crates/livtk-build" }
 livtk-core = { path = "crates/livtk-core" }
 livtk-update = { path = "crates/livtk-update" }
+alacritty_terminal = "0.26.0"
 anyhow = "1.0.104"
+# The terminal's events to the window; already in the tree through GPUI.
+async-channel = "2.5.0"
 clap = { version = "4.6.7", features = ["derive"] }
 jiff = "0.2.38"
 # The app's log file; already in the tree through GPUI, which logs through it.

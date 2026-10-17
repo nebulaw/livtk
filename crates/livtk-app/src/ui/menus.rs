@@ -8,9 +8,9 @@ use gpui_kit::*;
 
 use super::{
     About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoActivity,
-    GoDecisions, GoFindings, GoGraph, GoInbox, GoLessons, GoTasks, HideApp, HideOthers, InstallCli,
-    Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2, Priority3,
-    Priority4, Quit, Reject, ReportIssue, RestartToUpdate, ShowAll, Standing, ToggleAll,
+    GoDecisions, GoFindings, GoGraph, GoInbox, GoLessons, GoTasks, GoTerminal, HideApp, HideOthers,
+    InstallCli, Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2,
+    Priority3, Priority4, Quit, Reject, ReportIssue, RestartToUpdate, ShowAll, Standing, ToggleAll,
     ToggleBottom, ToggleEmpty, ToggleHelp, ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit,
     ZoomIn, ZoomOut, ZoomWindow,
 };
@@ -142,6 +142,7 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
             item("Decisions", GoDecisions, view(4)),
             item("Findings", GoFindings, view(5)),
             item("Graph", GoGraph, view(6)),
+            item("Terminal", GoTerminal, view(7)),
             MenuItem::separator(),
             item("Board", ToggleLayout, state.board),
             item("Show Empty Groups", ToggleEmpty, state.show_empty),

@@ -452,6 +452,7 @@ impl Model {
             (View::Decisions, "G D"),
             (View::Findings, "G F"),
             (View::Graph, "G R"),
+            (View::Terminal, "G X"),
         ] {
             if v != self.view {
                 out.push(plain(

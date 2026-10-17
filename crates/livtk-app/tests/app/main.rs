@@ -16,4 +16,5 @@ mod model;
 mod palette;
 mod saved;
 mod style;
+mod terminal;
 mod ui;

@@ -43,10 +43,12 @@ pub enum View {
     Findings,
     /// Every node and link, laid out.
     Graph,
+    /// A shell in the project's folder.
+    Terminal,
 }
 
 impl View {
-    pub const ALL: [View; 7] = [
+    pub const ALL: [View; 8] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
@@ -54,6 +56,7 @@ impl View {
         View::Decisions,
         View::Findings,
         View::Graph,
+        View::Terminal,
     ];
 
     pub const fn title(self) -> &'static str {
@@ -65,6 +68,7 @@ impl View {
             View::Decisions => "Decisions",
             View::Findings => "Findings",
             View::Graph => "Graph",
+            View::Terminal => "Terminal",
         }
     }
 
@@ -79,7 +83,7 @@ impl View {
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
-            View::Inbox | View::Activity | View::Graph => None,
+            View::Inbox | View::Activity | View::Graph | View::Terminal => None,
             View::Tasks => Some(Kind::Task),
             View::Lessons => Some(Kind::Lesson),
             View::Decisions => Some(Kind::Decision),

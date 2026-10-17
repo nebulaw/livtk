@@ -1713,6 +1713,42 @@ fn the_top_bar_names_the_project_and_its_menu_switches(cx: &mut TestAppContext) 
     });
 }
 
+/// G then X opens the project's terminal, with the keys: there, the list's keys (G then T) are
+/// the shell's, and the app's Command keys stay the app's. A click on the sidebar takes the keys
+/// back to the views.
+#[gpui_kit::test]
+fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) {
+    let dir = project();
+    // A shell is the core's to test (tests/app/terminal.rs): here, the view and its keys.
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g x");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Terminal));
+    assert!(
+        cx.debug_bounds("terminal").is_some(),
+        "the terminal is drawn"
+    );
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Terminal, "typed into the shell");
+    });
+    cx.simulate_keystrokes("secondary-k");
+    app.read_with(cx, |a, _| {
+        assert!(a.palette_open(), "the palette's key is the app's")
+    });
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "view-Tasks");
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    cx.simulate_keystrokes("g x");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Terminal, "the list's keys work again");
+    });
+}
+
 #[gpui_kit::test]
 fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();

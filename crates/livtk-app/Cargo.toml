@@ -16,6 +16,9 @@ path = "src/main.rs"
 livtk-build.workspace = true
 livtk-core.workspace = true
 livtk-update.workspace = true
+# The terminal view: Alacritty's emulation, scrollback, selection and PTY (Zed's is built on it).
+alacritty_terminal.workspace = true
+async-channel.workspace = true
 gpui-kit.workspace = true
 # Code blocks in descriptions and notes coloured by language: the tree-sitter grammars of the
 # gpui-component gpui-kit is built on (and JSON, which comes with them), switched on here;

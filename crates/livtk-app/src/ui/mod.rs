@@ -10,6 +10,7 @@ pub mod contour_grid;
 pub mod icons;
 pub mod menus;
 pub mod state_flow;
+pub mod terminal;
 mod theme;
 
 use std::cell::Cell;
@@ -60,6 +61,7 @@ actions!(
         GoDecisions,
         GoFindings,
         GoGraph,
+        GoTerminal,
         ZoomIn,
         ZoomOut,
         ZoomFit,
@@ -266,6 +268,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "D"], "Decisions"),
     ("Navigate", &["G", "then", "F"], "Findings"),
     ("Navigate", &["G", "then", "R"], "Graph"),
+    ("Navigate", &["G", "then", "X"], "Terminal"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
     (
@@ -440,6 +443,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("g d", GoDecisions, nav),
         KeyBinding::new("g f", GoFindings, nav),
         KeyBinding::new("g r", GoGraph, nav),
+        KeyBinding::new("g x", GoTerminal, nav),
         KeyBinding::new("+", ZoomIn, nav),
         KeyBinding::new("=", ZoomIn, nav),
         KeyBinding::new("-", ZoomOut, nav),
@@ -600,6 +604,12 @@ pub struct LivtkApp {
     rail_epoch: usize,
     /// The sidebar's width the last change slid from.
     rail_from: Option<f32>,
+    /// Each project's terminal, by its folder: started the first time it is shown, kept while
+    /// the app runs.
+    terminals: HashMap<PathBuf, Entity<terminal::TerminalPane>>,
+    /// The view and project last drawn, so arriving at a terminal gives it the keys, and leaving
+    /// gives them back to the list.
+    last_place: Option<(View, usize)>,
     /// Whether the bottom bar is shown, and its height; whether it is sliding away, and how many
     /// times it opened or shut (each slides once).
     bottom_open: bool,
@@ -813,6 +823,8 @@ impl LivtkApp {
             rail_was: None,
             rail_epoch: 0,
             rail_from: None,
+            terminals: HashMap::new(),
+            last_place: None,
             bottom_open: false,
             bottom_height: BOTTOM_HEIGHT,
             bottom_leaving: false,
@@ -1177,6 +1189,41 @@ impl LivtkApp {
         if self.filter.read(cx).value().as_ref() != want {
             self.filter
                 .update(cx, |s, cx| s.set_value(want.clone(), window, cx));
+        }
+    }
+
+    /// The open project's terminal, once it has one.
+    fn current_terminal(&self) -> Option<&Entity<terminal::TerminalPane>> {
+        self.terminals.get(&self.model.project()?.dir)
+    }
+
+    /// In the Terminal view, the open project's terminal, made the first time.
+    fn terminal_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<terminal::TerminalPane>> {
+        if self.model.view != View::Terminal {
+            return None;
+        }
+        let dir = self.model.project()?.dir.clone();
+        let pane = self
+            .terminals
+            .entry(dir.clone())
+            .or_insert_with(|| cx.new(|cx| terminal::TerminalPane::new(dir, cx)));
+        Some(pane.clone())
+    }
+
+    /// Arriving at a terminal (by any way: a key, the sidebar, the palette, another project)
+    /// gives it the keys; leaving one gives them back to the list.
+    fn focus_on_arrival(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let place = (self.model.view, self.model.current);
+        if self.last_place == Some(place) {
+            return;
+        }
+        let was_terminal = self.last_place.is_some_and(|(v, _)| v == View::Terminal);
+        self.last_place = Some(place);
+        if let Some(pane) = self.terminal_view(cx) {
+            let focus = pane.read(cx).focus_handle().clone();
+            focus.focus(window, cx);
+        } else if was_terminal {
+            self.nav.focus(window, cx);
         }
     }
 
@@ -1813,10 +1860,14 @@ impl LivtkApp {
 
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
-        // The inbox and the feed first, under no heading; then the views of the project's work.
+        // The inbox and the feed first, under no heading; then the views of the project's work;
+        // then its tools, under none again.
         for view in View::ALL {
             if view == View::Tasks {
                 side = side.child(div().h(px(14.))).child(section_label("Views"));
+            }
+            if view == View::Terminal {
+                side = side.child(div().h(px(14.)));
             }
             let count = match view {
                 View::Inbox => inbox,
@@ -2131,8 +2182,9 @@ impl LivtkApp {
             .pt_1()
             .gap(px(2.));
         for view in View::ALL {
-            // The inbox and the feed, then the views of the work, as the sidebar groups them.
-            if view == View::Tasks {
+            // The inbox and the feed, the views of the work, the tools, as the sidebar groups
+            // them.
+            if matches!(view, View::Tasks | View::Terminal) {
                 rail = rail.child(div().h(px(14.)));
             }
             let new = match view {
@@ -2384,8 +2436,12 @@ impl LivtkApp {
             )
     }
 
-    fn header(&self) -> impl IntoElement {
+    fn header(&self, cx: &App) -> impl IntoElement {
         let m = &self.model;
+        let shell_title = (m.view == View::Terminal)
+            .then(|| self.current_terminal())
+            .flatten()
+            .and_then(|t| t.read(cx).title().map(str::to_owned));
         div()
             .debug_selector(|| "view-header".into())
             .h(px(46.))
@@ -2405,7 +2461,9 @@ impl LivtkApp {
             .child(
                 div()
                     .text_color(color(TEXT_4))
-                    .child(if m.view == View::Activity {
+                    .child(if m.view == View::Terminal {
+                        shell_title.unwrap_or_default()
+                    } else if m.view == View::Activity {
                         format!(
                             "{}{}",
                             m.activity.len(),
@@ -3510,6 +3568,8 @@ impl LivtkApp {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
+            // Drawn in the list's place, outside its keys: `terminal_view`.
+            (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
             (View::Tasks, Layout::Board) if self.model.columns().is_empty() => empty(
                 view_icon(View::Tasks),
@@ -5593,7 +5653,8 @@ impl Render for LivtkApp {
             );
         let top_bar = self.top_bar(window, cx);
         let bottom = (self.bottom_open || self.bottom_leaving).then(|| self.bottom_bar(window, cx));
-        let header = self.header().into_any_element();
+        self.focus_on_arrival(window, cx);
+        let header = self.header(cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
@@ -5783,6 +5844,12 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &Priority3, _, cx| prio(this, 3, cx)))
             .on_action(cx.listener(|this, _: &Priority4, _, cx| prio(this, 4, cx)))
             .child(content);
+        // The terminal takes the list's place, outside the list's keys, so every plain key
+        // reaches the shell.
+        let main = match self.terminal_view(cx) {
+            Some(t) => div().flex_1().min_h_0().child(t).into_any_element(),
+            None => list_area.into_any_element(),
+        };
         div()
             .size_full()
             .relative()
@@ -5805,6 +5872,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
             .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
             .on_action(cx.listener(|this, _: &GoGraph, w, cx| this.go(View::Graph, w, cx)))
+            .on_action(cx.listener(|this, _: &GoTerminal, w, cx| this.go(View::Terminal, w, cx)))
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
                 if cfg!(target_os = "macos") {
                     cx.hide();
@@ -5921,7 +5989,7 @@ impl Render for LivtkApp {
                                             .flex()
                                             .flex_col()
                                             .child(header)
-                                            .child(list_area)
+                                            .child(main)
                                             // Floating over the content's bottom, centred on it; it moves
                                             // with the content as the detail panel opens beside it.
                                             .child(
@@ -6291,6 +6359,7 @@ fn view_icon(view: View) -> Icon {
         View::Decisions => Icon::Decisions,
         View::Findings => Icon::Findings,
         View::Graph => Icon::Graph,
+        View::Terminal => Icon::Terminal,
     }
 }
 
@@ -6312,8 +6381,10 @@ fn nav_item(
     active: bool,
     count: usize,
 ) -> Stateful<Div> {
+    let name = id.clone();
     div()
         .id(id)
+        .debug_selector(move || name.to_string())
         .group("nav")
         .px_2()
         .h(px(NAV_ROW))

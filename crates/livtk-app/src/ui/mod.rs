@@ -561,11 +561,6 @@ pub struct LivtkApp {
     rail_epoch: usize,
     /// Where the last change slid from: the sidebar's width and the content's top.
     rail_from: Option<(f32, f32)>,
-    /// The palette as last shown, the one folding away after it closed, and how many times it
-    /// opened or closed.
-    palette_last: Option<Palette>,
-    palette_leaving: Option<Palette>,
-    palette_epoch: usize,
     /// Expanded by hand although the window is narrow enough for the rail; forgotten once the
     /// window is wide again.
     sidebar_peek: bool,
@@ -758,9 +753,6 @@ impl LivtkApp {
             rail_was: None,
             rail_epoch: 0,
             rail_from: None,
-            palette_last: None,
-            palette_leaving: None,
-            palette_epoch: 0,
             sidebar_peek: false,
             panel_width: PANEL_WIDTH,
             resizing: None,
@@ -4438,7 +4430,15 @@ impl LivtkApp {
 
     /// A modal: a dim backdrop that closes it when clicked, around a card sized to its content.
     /// `keys`: the modal itself has the keys (the shortcuts, About), rather than a field in it.
-    fn modal(&self, id: &'static str, keys: bool, card: Div, cx: &mut Context<Self>) -> AnyElement {
+    /// `fades`: it fades in (the palette shows at once).
+    fn modal(
+        &self,
+        id: &'static str,
+        keys: bool,
+        fades: bool,
+        card: Div,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .id(id)
             .absolute()
@@ -4482,7 +4482,8 @@ impl LivtkApp {
             )
             .with_animation(
                 SharedString::from(format!("{id}-in")),
-                Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
+                Animation::new(Duration::from_millis(if fades { 140 } else { 0 }))
+                    .with_easing(ease_out_quint()),
                 |el, t| el.opacity(t),
             )
             .into_any_element()
@@ -4573,49 +4574,19 @@ impl LivtkApp {
                     .child(div().flex_1())
                     .child(create),
             );
-        Some(self.modal("new-task-modal", false, card, cx))
+        Some(self.modal("new-task-modal", false, true, card, cx))
     }
 
     /// The command palette: a field, what it finds in sections, and the keys that drive it.
-    /// The palette as it opens (the field, then its list growing open) or, from what it last
-    /// showed, as it closes: fading away quickly, letting the window through as it goes.
+    /// The palette, shown at once and gone at once.
     fn palette_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let epoch = self.palette_epoch;
-        if let Some(p) = self.model.palette.clone() {
-            let card = self.palette_card(&p, Some(epoch), cx);
-            return Some(self.modal("palette-modal", false, card, cx));
-        }
-        let p = self.palette_leaving.clone()?;
-        let card = self.palette_card(&p, None, cx);
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .pb(px(16.))
-                .child(div().h(px(110.)).min_h(px(16.)).flex_shrink(20.))
-                .child(
-                    card.overflow_hidden()
-                        .rounded_xl()
-                        .bg(color(SURFACE))
-                        .border_1()
-                        .border_color(color(BORDER_STRONG))
-                        .shadow_lg(),
-                )
-                .with_animation(
-                    SharedString::from(format!("palette-out-{epoch}")),
-                    Animation::new(PALETTE_OUT).with_easing(ease_in_out),
-                    |el, t| el.bg(with_alpha(0x000000, 0.6 * (1. - t))).opacity(1. - t),
-                )
-                .into_any_element(),
-        )
+        let p = self.model.palette.clone()?;
+        let card = self.palette_card(&p, cx);
+        Some(self.modal("palette-modal", false, false, card, cx))
     }
 
-    /// The palette's card for `p`. Opening (`opening`, numbered), as Spotlight does: the field
-    /// first, on its own, then the list growing open below it.
-    fn palette_card(&mut self, p: &Palette, opening: Option<usize>, cx: &mut Context<Self>) -> Div {
+    /// The palette's card for `p`.
+    fn palette_card(&mut self, p: &Palette, cx: &mut Context<Self>) -> Div {
         let mut results = div()
             .id("palette-results")
             .track_scroll(&self.palette_scroll)
@@ -4709,12 +4680,8 @@ impl LivtkApp {
                         )
                     }),
             )
-            .child(listing(
-                opening,
-                div()
-                    .child(div().h(px(1.)).bg(color(BORDER)))
-                    .child(results),
-            ))
+            .child(div().h(px(1.)).bg(color(BORDER)))
+            .child(results)
             .child(
                 div()
                     .h(px(36.))
@@ -4736,36 +4703,6 @@ impl LivtkApp {
                     .child(kbd("Esc"))
                     .child("to close"),
             )
-    }
-
-    /// Notice the palette opening or closing since the last frame: opening, its field shows and
-    /// its list opens; closing, what it last showed stays to fade away, then goes.
-    fn track_palette(&mut self, cx: &mut Context<Self>) {
-        match (&self.model.palette, self.palette_last.is_some()) {
-            (Some(p), was_open) => {
-                if !was_open {
-                    self.palette_epoch += 1;
-                    self.palette_leaving = None;
-                }
-                self.palette_last = Some(p.clone());
-            }
-            (None, true) => {
-                self.palette_epoch += 1;
-                self.palette_leaving = self.palette_last.take();
-                let epoch = self.palette_epoch;
-                cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(PALETTE_OUT).await;
-                    let _ = this.update(cx, |this, cx| {
-                        if this.palette_epoch == epoch {
-                            this.palette_leaving = None;
-                            cx.notify();
-                        }
-                    });
-                })
-                .detach();
-            }
-            (None, false) => {}
-        }
     }
 
     /// An action's icon in the palette, so every row has one: a move shows the state it goes
@@ -4942,7 +4879,7 @@ impl LivtkApp {
                     .p_4()
                     .child(sections),
             );
-        Some(self.modal("shortcuts-modal", true, card, cx))
+        Some(self.modal("shortcuts-modal", true, true, card, cx))
     }
 
     /// Make the menu bar and the Dock menu again when what they show changed: the projects, the
@@ -5078,7 +5015,7 @@ impl LivtkApp {
                     .child("Durable tasks and memory for Claude Code and its human."),
             )
             .child(div().text_xs().text_color(color(TEXT_4)).child(REPOSITORY));
-        Some(self.modal("about-modal", true, card, cx))
+        Some(self.modal("about-modal", true, true, card, cx))
     }
 
     /// The notice, at the bottom right above the dock's level, with its ×. The pointer over it
@@ -5458,7 +5395,6 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
-        self.track_palette(cx);
         let palette = self.palette_overlay(cx);
         let notice = self.notice(cx);
         let list_area = div()
@@ -6516,42 +6452,8 @@ fn parent_chip(key: &str) -> Div {
         .child(key.to_owned())
 }
 
-/// The palette's width, and how long it takes to fade away.
+/// The palette's width.
 const PALETTE_W: f32 = 640.;
-const PALETTE_OUT: Duration = Duration::from_millis(120);
-/// The palette's list opening: how long, the share of it the field shows alone, and the list's
-/// height at most (its results and divider) while it grows.
-const LIST_IN: Duration = Duration::from_millis(340);
-const LIST_WAIT: f32 = 0.3;
-const LIST_FULL: f32 = 410.;
-
-/// The palette's list under its field: opening, it grows open once the field has shown, from
-/// nothing to all of it; otherwise as it is. It gives way on a short window.
-fn listing(opening: Option<usize>, list: Div) -> AnyElement {
-    let list = list
-        .flex()
-        .flex_col()
-        .min_h_0()
-        .flex_shrink(1.)
-        .overflow_hidden();
-    let Some(epoch) = opening else {
-        return list.into_any_element();
-    };
-    list.with_animation(
-        SharedString::from(format!("palette-list-{epoch}")),
-        Animation::new(LIST_IN),
-        |el, t| {
-            // The field alone for the first part, then the list opens, easing out.
-            let open = ease_out_cubic(((t - LIST_WAIT) / (1. - LIST_WAIT)).clamp(0., 1.));
-            if open >= 1. {
-                el
-            } else {
-                el.max_h(px(LIST_FULL * open)).opacity(open)
-            }
-        },
-    )
-    .into_any_element()
-}
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.
 fn ago(at: &str) -> String {

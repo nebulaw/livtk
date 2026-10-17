@@ -958,6 +958,14 @@ Asked for while trying the app, and built in one batch:
   build's age from file times and a development build from a folder's name, both wrong at times.
   The identity is a crate of its own because it changes with every commit: in livtk-core it
   would rebuild everything after each one.
+- **Updates** (developer's decision, 2026-10-17): "Restart to Update", never on its own. What
+  never changes is the contract, in `livtk-update`: a manifest (`"format": 1`, ordered by build
+  number, unknown fields ignored, a newer format skipped) and a helper inside the bundle with a
+  fixed command line that swaps the installed app for a staged one by renames in one folder and
+  rolls back when the new build does not report a healthy start. Where updates come from is what
+  changes: a local folder now (`scripts/release`), a feed over HTTPS later, both a `Source`; a
+  signature (ed25519) is reserved in the manifest until updates leave this machine. macOS is
+  implemented; Windows and Linux answer "unsupported" until their installers are written.
 
 ## 18. Milestone 6 in outline: the team
 

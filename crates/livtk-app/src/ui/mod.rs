@@ -74,6 +74,8 @@ actions!(
         FocusFilter,
         ToggleHelp,
         ToggleSidebar,
+        ToggleBottom,
+        TogglePanel,
         OpenPalette,
         PaletteUp,
         PaletteDown,
@@ -223,6 +225,16 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         "Navigate",
         &[keys::MOD, "+", "B"],
         "Collapse or expand the sidebar",
+    ),
+    (
+        "Navigate",
+        &[keys::MOD, "+", "J"],
+        "Show or hide the bottom bar",
+    ),
+    (
+        "Navigate",
+        &[keys::ALT, "+", keys::MOD, "+", "B"],
+        "Show or hide the detail panel",
     ),
     ("Navigate", &["J", "or", "↓"], "Next row or group"),
     ("Navigate", &["K", "or", "↑"], "Previous row or group"),
@@ -435,6 +447,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-/", ToggleHelp, None),
         KeyBinding::new("secondary-k", OpenPalette, None),
         KeyBinding::new("secondary-b", ToggleSidebar, None),
+        KeyBinding::new("secondary-j", ToggleBottom, None),
+        KeyBinding::new("secondary-alt-b", TogglePanel, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
         // Ctrl+N and Ctrl+P are Control on every platform, as in every Mac text field.
         KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
@@ -576,6 +590,8 @@ pub struct LivtkApp {
     rail_epoch: usize,
     /// The sidebar's width the last change slid from.
     rail_from: Option<f32>,
+    /// Whether the bottom bar is shown.
+    bottom_open: bool,
     /// Whether the pointer is over the top bar's field, and how many times that changed: a
     /// change fades its hover in or out.
     top_field_hover: bool,
@@ -775,6 +791,7 @@ impl LivtkApp {
             rail_was: None,
             rail_epoch: 0,
             rail_from: None,
+            bottom_open: false,
             top_field_hover: false,
             top_field_epoch: 0,
             sidebar_peek: false,
@@ -1037,6 +1054,10 @@ impl LivtkApp {
 
     pub fn palette_open(&self) -> bool {
         self.model.palette.is_some()
+    }
+
+    pub fn bottom_open(&self) -> bool {
+        self.bottom_open
     }
 
     /// Ctrl+K: open the palette over the view, or close it. The new-task form keeps it out,
@@ -1886,7 +1907,8 @@ impl LivtkApp {
             Edge::Panel => "panel-edge",
         };
         let dragging = self.resizing == Some(edge);
-        let window_h = f32::from(window.viewport_size().height);
+        // The edges run the height under the top bar.
+        let window_h = f32::from(window.viewport_size().height) - TOP_BAR;
         let glow = match (self.edge_hover, self.edge_leaving) {
             (Some(h), _) if h.edge == edge => Some(edge_glow(h, dragging, window_h, false)),
             (_, Some(h)) if h.edge == edge => Some(edge_glow(h, false, window_h, true)),
@@ -1954,8 +1976,11 @@ impl LivtkApp {
         cx.notify();
     }
 
-    /// The pointer over `edge` at height `y`: the glow follows it, fading in when it arrives.
+    /// The pointer over `edge` at height `y` in the window: the glow follows it, fading in when it
+    /// arrives.
     fn hover_edge(&mut self, edge: Edge, y: f32) {
+        // From the window's top to the edge's, which starts under the top bar.
+        let y = y - TOP_BAR;
         self.edge_leaving = None;
         let epoch = match self.edge_hover {
             Some(h) if h.edge == edge => h.epoch,
@@ -1985,13 +2010,30 @@ impl LivtkApp {
         }
     }
 
-    /// Ctrl+B and the top bar's button. On a narrow window the sidebar is the rail anyway, so
+    /// ⌘B and the top bar's button. On a narrow window the sidebar is the rail anyway, so
     /// the toggle opens it there for now; on a wide one it is the human's choice, kept.
     fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
         if Self::window_width(window) < RAIL_BELOW {
             self.sidebar_peek = !self.sidebar_peek;
         } else {
             self.sidebar_collapsed = !self.sidebar_collapsed;
+        }
+        cx.notify();
+    }
+
+    /// ⌘J and the top bar's button: the bottom bar shown or hidden.
+    fn toggle_bottom(&mut self, cx: &mut Context<Self>) {
+        self.bottom_open = !self.bottom_open;
+        cx.notify();
+    }
+
+    /// ⌥⌘B and the top bar's button: the detail panel closed, or opened on what is selected,
+    /// as Enter opens it.
+    fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+        if self.model.detail.is_some() {
+            self.model.close_detail();
+        } else {
+            self.model.open_detail();
         }
         cx.notify();
     }
@@ -2107,7 +2149,7 @@ impl LivtkApp {
     /// The bar across the window's top: on macOS the traffic lights at its left, and a press on
     /// it drags the window (a double-click zooms it, as the system's titlebar does). In its
     /// middle, the palette's field at rest: what it searches; a click, or its
-    /// keys, opens the palette. Its right end is kept for the panels' toggles.
+    /// keys, opens the palette. At its right end, the panels' toggles.
     fn top_bar(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let field = div()
             .id("top-field")
@@ -2120,8 +2162,9 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
+            // Edged as the content box is: its own black, its hairline.
             .rounded_lg()
-            .bg(color(SURFACE))
+            .bg(color(CONTENT))
             .border_1()
             .border_color(color(BORDER))
             .text_sm()
@@ -2140,7 +2183,7 @@ impl LivtkApp {
                     .rounded_lg()
                     .bg(color(HOVER))
                     .border_1()
-                    .border_color(color(BORDER_STRONG))
+                    .border_color(color(BORDER))
                     .opacity(if over { 1. } else { 0. })
                     .with_animation(
                         SharedString::from(format!("top-field-{epoch}")),
@@ -2205,39 +2248,41 @@ impl LivtkApp {
                     .justify_center()
                     .child(field),
             )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .pr_3()
+                    .flex()
+                    .items_center()
+                    .child(panel_toggle(
+                        "toggle-left",
+                        Icon::PanelLeft,
+                        !self.rail(window),
+                        format!("Sidebar · {}", keys::SIDEBAR),
+                        cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
+                    ))
+                    .child(panel_toggle(
+                        "toggle-bottom",
+                        Icon::PanelBottom,
+                        self.bottom_open,
+                        format!("Bottom bar · {}", keys::BOTTOM),
+                        cx.listener(|this, _, _, cx| this.toggle_bottom(cx)),
+                    ))
+                    .child(panel_toggle(
+                        "toggle-right",
+                        Icon::PanelRight,
+                        self.model.detail.is_some(),
+                        format!("Detail panel · {}", keys::PANEL),
+                        cx.listener(|this, _, _, cx| this.toggle_panel(cx)),
+                    )),
+            )
     }
 
-    fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn header(&self) -> impl IntoElement {
         let m = &self.model;
-        let rail = self.rail(window);
-        let toggle = div()
-            .id("sidebar-toggle")
-            .debug_selector(|| "sidebar-toggle".into())
-            .size(px(26.))
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .rounded_lg()
-            .hover(|s| s.bg(color(HOVER)))
-            .child(icon(
-                if rail {
-                    Icon::DockRight
-                } else {
-                    Icon::DockLeft
-                },
-                16.,
-                TEXT_3,
-            ))
-            .tooltip(move |window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(if rail {
-                    format!("Expand the sidebar · {}", keys::SIDEBAR)
-                } else {
-                    format!("Collapse the sidebar · {}", keys::SIDEBAR)
-                })
-                .build(window, cx)
-            })
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)));
         div()
             .debug_selector(|| "view-header".into())
             .h(px(46.))
@@ -2245,11 +2290,9 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_3()
-            .pl(px(10.))
-            .pr_4()
+            .px_4()
             .border_b_1()
             .border_color(color(BORDER))
-            .child(toggle)
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
@@ -5415,7 +5458,7 @@ impl Render for LivtkApp {
                 },
             );
         let top_bar = self.top_bar(window, cx);
-        let header = self.header(window, cx).into_any_element();
+        let header = self.header().into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
@@ -5687,6 +5730,8 @@ impl Render for LivtkApp {
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleBottom, _, cx| this.toggle_bottom(cx)))
+            .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleHelp, window, cx| {
                     this.set_help(!this.help, window, cx)
@@ -5777,6 +5822,38 @@ fn titlebar_height(window: &Window) -> f32 {
     } else {
         0.
     }
+}
+
+/// A toggle of the top bar's: `icon`, lit while its panel is `open`, named with its keys in
+/// `tip`. Its press is its own: it never drags the window.
+fn panel_toggle(
+    id: &'static str,
+    i: Icon,
+    open: bool,
+    tip: String,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let tip = SharedString::from(tip);
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .group(id)
+        .size(px(30.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .hover(|h| h.bg(color(HOVER)))
+        .child(if open {
+            icon(i, 20., TEXT_2)
+        } else {
+            icon_hover(i, 20., TEXT_4, id, TEXT_2)
+        })
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+        })
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(on_click)
 }
 
 fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {

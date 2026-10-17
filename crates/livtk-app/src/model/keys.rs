@@ -8,10 +8,14 @@ const MAC: bool = cfg!(target_os = "macos");
 pub const MOD: &str = if MAC { "⌘" } else { "Ctrl" };
 pub const SHIFT: &str = if MAC { "⇧" } else { "Shift" };
 
-/// Shortcuts as one label: the palette, the shortcuts, the sidebar, a form's submit.
+/// Shortcuts as one label: the palette, the shortcuts, the panels, a form's submit.
 pub const PALETTE: &str = if MAC { "⌘ K" } else { "Ctrl K" };
 pub const HELP: &str = if MAC { "⌘ ?" } else { "Ctrl ?" };
 pub const SIDEBAR: &str = if MAC { "⌘ B" } else { "Ctrl B" };
+/// The bottom bar and the detail panel, shown or hidden.
+pub const BOTTOM: &str = if MAC { "⌘ J" } else { "Ctrl J" };
+pub const PANEL: &str = if MAC { "⌥ ⌘ B" } else { "Ctrl Alt B" };
+pub const ALT: &str = if MAC { "⌥" } else { "Alt" };
 pub const SUBMIT: &str = if MAC { "⌘ ↵" } else { "Ctrl ↵" };
 /// Ratify as a standing rule.
 pub const STANDING: &str = if MAC { "⇧ A" } else { "Shift A" };

@@ -11,7 +11,8 @@ use super::{
     GoDecisions, GoFindings, GoGraph, GoInbox, GoLessons, GoTasks, HideApp, HideOthers, InstallCli,
     Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2, Priority3,
     Priority4, Quit, Reject, ReportIssue, RestartToUpdate, ShowAll, Standing, ToggleAll,
-    ToggleEmpty, ToggleHelp, ToggleLayout, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
+    ToggleBottom, ToggleEmpty, ToggleHelp, ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit,
+    ZoomIn, ZoomOut, ZoomWindow,
 };
 
 /// What the menus show of the app's state: the projects and which is open, the view and its
@@ -147,6 +148,8 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
             item("Show Dismissed Work", ToggleAll, state.show_dismissed),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Toggle Bottom Bar", ToggleBottom),
+            MenuItem::action("Toggle Detail Panel", TogglePanel),
             MenuItem::action("Command Palette", OpenPalette),
             MenuItem::separator(),
             MenuItem::action("Zoom Graph In", ZoomIn),

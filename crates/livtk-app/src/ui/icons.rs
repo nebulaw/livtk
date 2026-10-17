@@ -58,10 +58,12 @@ icons! {
     ViewOptions => "slider-alt",
     Show => "eye",
     Hide => "eye-slash",
-    /// Closing the detail panel, expanding the sidebar from its rail.
+    /// Closing the detail panel.
     DockRight => "dock-right-arrow",
-    /// Collapsing the sidebar to its rail.
-    DockLeft => "dock-left-arrow",
+    /// The top bar's toggles: the sidebar, the bottom bar, the detail panel.
+    PanelLeft => "dock-left",
+    PanelBottom => "dock-bottom",
+    PanelRight => "dock-right",
     /// The handle on an edge that resizes the sidebar or the panel.
     Resize => "move-horizontal",
     Link => "link",

@@ -1554,6 +1554,23 @@ fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.
 }
 
+/// An edge's handle sits where the pointer is on it, though the edge starts under the top bar.
+#[gpui_kit::test]
+fn an_edges_handle_follows_the_pointer_along_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    let edge = cx.debug_bounds("sidebar-edge").expect("the sidebar's edge");
+    let at = gpui_kit::point(edge.center().x, gpui_kit::px(400.));
+    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    let handle = cx.debug_bounds("edge-handle").expect("its handle shows");
+    assert!(
+        (f32::from(handle.center().y) - 400.).abs() < 1.,
+        "at the pointer: {handle:?}"
+    );
+}
+
 #[gpui_kit::test]
 fn the_sidebar_edge_resizes_it_within_limits_and_snaps_to_the_rail(cx: &mut TestAppContext) {
     let dir = project();
@@ -1603,12 +1620,47 @@ fn ctrl_b_and_the_top_bar_button_collapse_and_expand_the_sidebar(cx: &mut TestAp
     cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(cx.debug_bounds("sidebar").is_some(), "and expands it again");
-    click_on(cx, "sidebar-toggle");
+    click_on(cx, "toggle-left");
     redraw(cx);
     assert!(cx.debug_bounds("rail").is_some(), "so does the button");
-    click_on(cx, "sidebar-toggle");
+    click_on(cx, "toggle-left");
     redraw(cx);
     assert!(cx.debug_bounds("sidebar").is_some());
+}
+
+/// The top bar's toggles at its right: the bottom bar and the detail panel, each by its button
+/// or its keys (the sidebar's, above). The view header has no toggle of its own any more.
+#[gpui_kit::test]
+fn the_top_bars_toggles_show_and_hide_the_bottom_bar_and_the_panel(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    assert!(cx.debug_bounds("sidebar-toggle").is_none());
+    let bar = cx.debug_bounds("top-bar").unwrap();
+    for t in ["toggle-left", "toggle-bottom", "toggle-right"] {
+        assert!(
+            inside(cx.debug_bounds(t).unwrap(), bar),
+            "{t} in the top bar"
+        );
+    }
+    click_on(cx, "toggle-bottom");
+    app.read_with(cx, |a, _| assert!(a.bottom_open()));
+    cx.simulate_keystrokes("secondary-j");
+    app.read_with(cx, |a, _| assert!(!a.bottom_open(), "its keys too"));
+    click_on(cx, "toggle-right");
+    settle(cx);
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_some(), "on the selected task")
+    });
+    cx.simulate_keystrokes("secondary-alt-b");
+    settle(cx);
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
+    cx.simulate_keystrokes("secondary-alt-b");
+    settle(cx);
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_some(), "and back"));
 }
 
 #[gpui_kit::test]

@@ -483,6 +483,36 @@ fn notifications_stack_newest_first_and_the_same_one_counts_up() {
 }
 
 #[test]
+fn a_repeat_keeps_its_id_and_one_not_yet_seen_waits_its_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = empty_model(dir.path());
+    m.inform("a");
+    let a = m.notice().unwrap().id;
+    m.hold(a, true, Instant::now());
+    m.inform("b");
+    m.inform("a");
+    let top = m.notice().unwrap();
+    assert_eq!(
+        (top.id, top.count),
+        (a, 2),
+        "the same one, counted, its id kept"
+    );
+    m.age_notices(Instant::now() + INFO_FOR * 10, FADE);
+    assert!(m.toasts().contains(a), "still held");
+    // Three errors on top: an info below them is not seen yet, and does not age away.
+    let other = tempfile::tempdir().unwrap();
+    let mut m = empty_model(other.path());
+    m.inform("below");
+    let below = m.notice().unwrap().id;
+    for e in ["x", "y", "z"] {
+        m.warn(e);
+    }
+    m.age_notices(Instant::now() + INFO_FOR * 10, FADE);
+    m.age_notices(Instant::now() + INFO_FOR * 10 + FADE, FADE);
+    assert!(m.toasts().contains(below), "waits until it is shown");
+}
+
+#[test]
 fn a_success_clears_the_errors_it_answers() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = project(dir.path());
@@ -544,6 +574,11 @@ fn a_failure_that_lasts_is_told_once_not_on_every_tick() {
         "failing again after it passed is told again"
     );
     readable(&log, true);
+    m.tick();
+    assert!(
+        m.notice().is_none(),
+        "working again, the project takes its error back"
+    );
 }
 
 #[test]

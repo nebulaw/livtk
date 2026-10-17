@@ -55,6 +55,9 @@ pub struct Toast {
     pub actions: Vec<Button>,
     /// How many times it was raised.
     pub count: usize,
+    /// What raised it, when that can take it back (a project whose sync failed, once it works
+    /// again).
+    pub source: Option<String>,
     /// Fading out since then, if it is leaving.
     pub leaving: Option<Instant>,
     since: Instant,
@@ -70,6 +73,7 @@ impl Toast {
             text: text.into(),
             actions: Vec::new(),
             count: 1,
+            source: None,
             leaving: None,
             since: Instant::now(),
             held: false,
@@ -97,6 +101,12 @@ impl Toast {
         self
     }
 
+    /// What raised it, so it can be taken back when that no longer holds.
+    pub fn source(mut self, source: impl Into<String>) -> Toast {
+        self.source = Some(source.into());
+        self
+    }
+
     /// A button, of the two at most a notification has.
     pub fn action(mut self, label: impl Into<String>, act: Act) -> Toast {
         if self.actions.len() < 2 {
@@ -119,6 +129,8 @@ impl Toast {
 
 /// How many notifications show at once; the rest are counted.
 pub const SHOWN: usize = 3;
+/// How many are kept at most: beyond, the oldest go.
+pub const KEPT: usize = 20;
 
 /// The notifications, oldest first.
 #[derive(Debug, Default)]
@@ -128,23 +140,36 @@ pub struct Toasts {
 }
 
 impl Toasts {
-    /// Raise `t`: the same one already there counts up and starts its time again, newest;
-    /// else it is added. Its id.
+    /// Raise `t`: the same one already there counts up, starts its time again and comes to the
+    /// top, keeping its id (so what the pointer and Show more hold of it stays with it); else
+    /// it is added, the oldest going beyond `KEPT`. Its id.
     pub fn raise(&mut self, mut t: Toast) -> u64 {
-        self.raised += 1;
         if let Some(i) = self.list.iter().position(|o| o.same_as(&t)) {
             let mut old = self.list.remove(i);
             old.count += 1;
             old.since = Instant::now();
             old.leaving = None;
             old.actions = t.actions;
-            old.id = self.raised;
+            let id = old.id;
             self.list.push(old);
-        } else {
-            t.id = self.raised;
-            self.list.push(t);
+            return id;
         }
+        self.raised += 1;
+        t.id = self.raised;
+        self.list.push(t);
+        let over = self.list.len().saturating_sub(KEPT);
+        self.list.drain(..over);
         self.raised
+    }
+
+    /// Whether notification `id` is still there.
+    pub fn contains(&self, id: u64) -> bool {
+        self.list.iter().any(|t| t.id == id)
+    }
+
+    /// Take back what `source` raised: what it told of no longer holds.
+    pub fn clear_source(&mut self, source: &str) {
+        self.list.retain(|t| t.source.as_deref() != Some(source));
     }
 
     /// The ones shown, newest first, and how many more there are.
@@ -189,11 +214,18 @@ impl Toasts {
         }
     }
 
-    /// Let time pass to `now`: each whose time is up starts to leave, unless held, and is gone
-    /// `fade` after. Whether anything changed, so the view repaints only then.
+    /// Let time pass to `now`: each shown whose time is up starts to leave, unless held, and is
+    /// gone `fade` after; one waiting below the shown ones is not seen yet, so its time waits.
+    /// Whether anything changed, so the view repaints only then.
     pub fn age(&mut self, now: Instant, fade: Duration) -> bool {
         let mut changed = false;
-        for t in &mut self.list {
+        let below = self.list.len().saturating_sub(SHOWN);
+        for t in &mut self.list[..below] {
+            if t.leaving.is_none() {
+                t.since = now;
+            }
+        }
+        for t in &mut self.list[below..] {
             let Some(stays) = t.level.stays() else {
                 continue;
             };

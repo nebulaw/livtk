@@ -707,6 +707,8 @@ impl LivtkApp {
                     // What the app remembers is written within a beat of changing.
                     app.persist();
                     let told = told(&app.model) != noticed;
+                    let toasts = app.model.toasts();
+                    app.expanded.retain(|id| toasts.contains(*id));
                     if changed || busy || told {
                         cx.notify();
                     }
@@ -6286,13 +6288,13 @@ fn reindent_field(field: &Entity<TextareaState>, out: bool, window: &mut Window,
 
 /// What the notifications show, to tell when the window must draw again: each shown one and
 /// whether it is leaving.
-fn told(m: &Model) -> Vec<(u64, bool)> {
-    m.toasts()
-        .shown()
-        .0
+fn told(m: &Model) -> (Vec<(u64, bool, usize)>, usize) {
+    let (shown, more) = m.toasts().shown();
+    let shown = shown
         .iter()
-        .map(|t| (t.id, t.leaving.is_some()))
-        .collect()
+        .map(|t| (t.id, t.leaving.is_some(), t.count))
+        .collect();
+    (shown, more)
 }
 
 /// A sub-task shown away from its parent: the parent's key, quietly.

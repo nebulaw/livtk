@@ -965,7 +965,8 @@ impl Model {
         let mut changed = false;
         // A catch-up just begun changes only what the sidebar says: a repaint, no reload.
         let mut began = false;
-        let mut failed = None;
+        let mut failed = Vec::new();
+        let mut recovered = Vec::new();
         for p in &mut self.projects {
             if p.catching_up {
                 continue;
@@ -999,10 +1000,20 @@ impl Model {
                 }
                 Err(e) => Some(format!("{}: {e}", p.name)),
             };
-            failed = p.went(failure).or(failed);
+            let source = failure_source(&p.dir);
+            let was_failing = p.failure.is_some();
+            match p.went(failure) {
+                Some(text) => failed.push((text, source)),
+                None if was_failing && p.failure.is_none() => recovered.push(source),
+                None => {}
+            }
         }
-        if let Some(text) = failed {
-            self.warn(text);
+        // A project that works again takes back what its failure told.
+        for source in recovered {
+            self.toasts.clear_source(&source);
+        }
+        for (text, source) in failed {
+            self.notify(Toast::error(text).source(source));
         }
         if !changed {
             return began;
@@ -1109,8 +1120,14 @@ impl Model {
             Err(_) => p.try_later(now),
         }
         let failure = result.err().map(|e| format!("{}: {e}", p.name));
-        if let Some(text) = p.went(failure) {
-            self.warn(text);
+        let source = failure_source(&p.dir);
+        let was_failing = p.failure.is_some();
+        match p.went(failure) {
+            Some(text) => {
+                self.notify(Toast::error(text).source(source));
+            }
+            None if was_failing && p.failure.is_none() => self.toasts.clear_source(&source),
+            None => {}
         }
     }
 
@@ -1729,4 +1746,9 @@ fn nest(
     let mut slots: Vec<Option<Summary>> = rows.into_iter().map(Some).collect();
     let rows = order.into_iter().filter_map(|i| slots[i].take()).collect();
     (rows, depth)
+}
+
+/// What a project's failure is raised as, so it is taken back once the project works again.
+fn failure_source(dir: &Path) -> String {
+    format!("project:{}", dir.display())
 }

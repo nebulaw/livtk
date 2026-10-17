@@ -2776,7 +2776,20 @@ fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestApp
     cx.simulate_keystrokes("g a");
     redraw(cx);
     let today = livtk_app::model::grid::today();
-    click_on(cx, named(format!("grid-{today}")));
+    // Today's square, by the grid's geometry: 8px of room, then 18px a week or a weekday, the
+    // months' row 28px above; 6px into the 13px square.
+    let (w, r) = app.read_with(cx, |a, _| a.model().grid.drawn(today).at(today).unwrap());
+    let origin = cx
+        .debug_bounds("grid-squares")
+        .expect("the grid is drawn")
+        .origin;
+    let at = origin
+        + gpui_kit::point(
+            gpui_kit::px(8. + w as f32 * 18. + 6.),
+            gpui_kit::px(28. + r as f32 * 18. + 6.),
+        );
+    cx.simulate_click(at, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().grid.pick, Some((today, today)));
         assert!(!a.model().activity.is_empty(), "today's events");

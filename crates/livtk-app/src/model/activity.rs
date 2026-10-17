@@ -90,21 +90,28 @@ impl Model {
         }
     }
 
-    /// Pick `day` in the grid (with `extend`, the days from the one picked before): the feed
-    /// shows those days only.
-    pub fn grid_pick(&mut self, day: jiff::civil::Date, extend: bool) {
-        self.grid.pick(day, extend);
+    /// A day clicked in the grid: it anchors a range, or closes the one anchored. The feed
+    /// shows the days picked only.
+    pub fn grid_pick(&mut self, day: jiff::civil::Date) {
+        self.grid.pick(day);
+        self.reload_feed();
+    }
+
+    /// A month picked in the grid, to today at most.
+    pub fn grid_pick_span(&mut self, first: jiff::civil::Date, last: jiff::civil::Date) {
+        self.grid.pick_span(first, last.min(super::grid::today()));
         self.reload_feed();
     }
 
     /// The feed for every day again.
     pub fn grid_unpick(&mut self) {
+        self.grid.anchored = false;
         if self.grid.pick.take().is_some() {
             self.reload_feed();
         }
     }
 
-    /// The grid's span, who or what changed: it counts again.
+    /// The grid's who or what changed: it counts again.
     pub fn grid_changed(&mut self) {
         self.load_activity();
     }

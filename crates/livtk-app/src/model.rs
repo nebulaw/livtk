@@ -518,6 +518,7 @@ impl Model {
             self.band = None;
             self.detail = None;
             self.grid.pick = None;
+            self.grid.anchored = false;
             self.leaving.clear();
             self.flashed.clear();
             self.enter_activity();

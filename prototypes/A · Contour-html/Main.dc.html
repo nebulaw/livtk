@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Contour activity grid</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#C2C2C2}a:hover{color:#FFFFFF}
+.mono{font-family:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-feature-settings:'tnum' 1}
+.eyebrow{font-family:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#9E9E9E}
+.dlabel{position:absolute;left:0;font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;line-height:13px;color:#9E9E9E}
+.cell{position:absolute;width:13px;height:13px;border:0;padding:0;margin:0;cursor:pointer;transition:transform .12s ease}
+.cell:hover{transform:scale(1.3);z-index:2}
+.cell:focus-visible{outline:2px solid #FFFFFF;outline-offset:2px;z-index:3}
+.mlabel{position:absolute;top:0;height:16px;padding:0;border:0;background:none;font-family:inherit;font-size:11px;letter-spacing:.02em;cursor:pointer}
+.mlabel:disabled{cursor:default}
+.btn{height:44px;padding:0 18px;border-radius:10px;border:1px solid #3D3D3D;background:#1E1E1E;color:#FFFFFF;font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:1}
+.btn:hover{background:#2E2E2E}
+.btn:disabled{color:#595959;cursor:default;background:#1E1E1E}
+.btn-light{background:#FFFFFF;color:#000000;border-color:#FFFFFF}
+.btn-light:hover{background:#C2C2C2;border-color:#C2C2C2}
+.seg{display:flex;gap:4px;padding:4px;background:#000000;border-radius:12px;border:1px solid #2E2E2E}
+.seg-btn{height:40px;min-width:76px;padding:0 16px;border:0;border-radius:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:13px;font-weight:500;cursor:pointer}
+.rail-btn{border:0;background:none;padding:0;font-family:inherit;color:inherit;cursor:pointer;display:flex;flex-direction:column;gap:10px;align-items:stretch;text-align:left}
+.rail-btn:disabled{cursor:default}
+.lg{width:18px;height:18px;border-radius:4px;border:0;padding:0;cursor:pointer}
+.ln-month{fill:none;stroke:#3D3D3D;stroke-width:1}
+.ln-hover{fill:none;stroke:#C2C2C2;stroke-width:1.5}
+.ln-sel{fill:none;stroke:#FFFFFF;stroke-width:2;stroke-linejoin:round}
+.ln-prev{fill:none;stroke:#FFFFFF;stroke-width:1.5;stroke-dasharray:3 3}
+.tip{position:absolute;transform:translate(-50%,-100%);background:#FFFFFF;color:#000000;border-radius:8px;padding:8px 12px;white-space:nowrap;pointer-events:none;z-index:10;display:flex;flex-direction:column;gap:2px;box-shadow:0 10px 24px #000000}
+.tip::after{content:'';position:absolute;left:50%;bottom:-4px;width:8px;height:8px;background:#FFFFFF;transform:translateX(-50%) rotate(45deg)}
+</style>
+</helmet>
+<div style="width: 1560px; height: 860px; box-sizing: border-box; padding: 48px 56px; background: #121212; color: #FFFFFF; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; display: flex; flex-direction: column; gap: 32px">
+  <header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px">
+    <div style="display: flex; flex-direction: column; gap: 12px">
+      <div class="eyebrow">Contribution activity · Contour</div>
+      <h1 style="margin: 0; font-size: 36px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.05"><span class="mono" style="font-weight: 500">{{totalStr}}</span> contributions in {{year}}</h1>
+      <div style="font-size: 14px; color: #9E9E9E">{{headerSub}}</div>
+    </div>
+    <div class="seg" role="group" aria-label="Year">
+      <sc-for list="{{years}}" as="y" hint-placeholder-count="3">
+        <button class="seg-btn" type="button" aria-pressed="{{y.on}}" onClick="{{y.pick}}" style="background: {{y.bg}}; color: {{y.fg}}">{{y.label}}</button>
+      </sc-for>
+    </div>
+  </header>
+
+  <div style="display: flex; gap: 32px; flex: 1; min-height: 0">
+    <section style="flex: 1; min-width: 0; background: #1E1E1E; border: 1px solid #2E2E2E; border-radius: 18px; padding: 32px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; gap: 28px">
+      <div style="display: flex; gap: 12px">
+        <div style="width: 28px; flex: none; position: relative; margin-top: 28px; height: 121px">
+          <span class="dlabel" style="top: 0px">Mon</span>
+          <span class="dlabel" style="top: 36px">Wed</span>
+          <span class="dlabel" style="top: 72px">Fri</span>
+          <span class="dlabel" style="top: 108px">Sun</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px">
+          <div style="position: relative; height: 16px; width: {{gridW}}px">
+            <sc-for list="{{mlabels}}" as="m" hint-placeholder-count="12">
+              <button class="mlabel" type="button" onClick="{{m.click}}" onMouseEnter="{{m.enter}}" onMouseLeave="{{m.leave}}" disabled="{{m.disabled}}" style="left: {{m.x}}px; color: {{m.color}}; font-weight: {{m.weight}}">{{m.name}}</button>
+            </sc-for>
+          </div>
+          <div style="position: relative; width: {{gridW}}px; height: 121px" onMouseLeave="{{clearHover}}">
+            <sc-for list="{{cells}}" as="c" hint-placeholder-count="365">
+              <button class="cell" type="button" aria-label="{{c.label}}" onClick="{{c.click}}" onMouseEnter="{{c.enter}}" onFocus="{{c.enter}}" style="left: {{c.x}}px; top: {{c.y}}px; background: {{c.fill}}; box-shadow: {{c.ring}}; border-radius: {{c.rad}}px"></button>
+            </sc-for>
+            <svg width="{{svgW}}" height="{{svgH}}" aria-hidden="true" style="position: absolute; left: -8px; top: -8px; pointer-events: none; overflow: visible">
+              <path class="ln-month" d="{{monthsD}}"></path>
+              <path class="ln-hover" d="{{hoverD}}"></path>
+              <path class="ln-prev" d="{{prevD}}"></path>
+              <path class="ln-sel" d="{{selD}}"></path>
+            </svg>
+            <sc-if value="{{hasTip}}" hint-placeholder-val="{{ false }}">
+              <div class="tip" style="left: {{tip.left}}px; top: {{tip.top}}px">
+                <span style="font-size: 13px; font-weight: 600">{{tip.count}}</span>
+                <span class="mono" style="font-size: 11px; color: #333333">{{tip.date}}</span>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px; border-top: 1px solid #2E2E2E; padding-top: 24px">
+        <sc-for list="{{rail}}" as="r" hint-placeholder-count="12">
+          <button class="rail-btn" type="button" onClick="{{r.click}}" onMouseEnter="{{r.enter}}" onMouseLeave="{{r.leave}}" disabled="{{r.disabled}}" aria-label="{{r.aria}}">
+            <span style="height: 72px; display: flex; align-items: flex-end; background: #000000; border-radius: 6px; overflow: hidden"><span style="display: block; width: 100%; height: {{r.h}}px; background: {{r.fill}}"></span></span>
+            <span style="display: flex; justify-content: space-between; align-items: baseline; gap: 4px"><span style="font-size: 12px; font-weight: 600; color: {{r.fg}}">{{r.name}}</span><span class="mono" style="font-size: 11px; color: #9E9E9E">{{r.total}}</span></span>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 24px">
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: #C2C2C2">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: {{hintDot}}; flex: none"></span>
+          <span>{{hint}}</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 14px">
+          <span class="eyebrow">Less</span>
+          <div style="display: flex; gap: 10px">
+            <sc-for list="{{legend}}" as="l" hint-placeholder-count="6">
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 28px">
+                <button class="lg" type="button" aria-label="{{l.aria}}" aria-pressed="{{l.on}}" onClick="{{l.click}}" style="background: {{l.fill}}; box-shadow: {{l.ring}}"></button>
+                <span class="mono" style="font-size: 10px; color: #9E9E9E">{{l.range}}</span>
+              </div>
+            </sc-for>
+          </div>
+          <span class="eyebrow">More</span>
+        </div>
+      </div>
+    </section>
+
+    <aside style="width: 340px; flex: none; background: #1E1E1E; border: 1px solid #2E2E2E; border-radius: 18px; padding: 28px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px">
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <div class="eyebrow">{{insEyebrow}}</div>
+        <div style="font-size: 24px; font-weight: 600; letter-spacing: -0.015em">{{rangeLabel}}</div>
+        <div class="mono" style="font-size: 12px; color: #9E9E9E">{{rangeSub}}</div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #2E2E2E; border: 1px solid #2E2E2E; border-radius: 12px; overflow: hidden">
+        <sc-for list="{{stats}}" as="s" hint-placeholder-count="4">
+          <div style="background: #1E1E1E; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+            <div class="eyebrow" style="font-size: 10px">{{s.label}}</div>
+            <div class="mono" style="font-size: 22px; font-weight: 500">{{s.value}}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: #000000; border-radius: 12px">
+        <span style="width: 14px; height: 14px; border-radius: 3px; background: {{top.fill}}; box-shadow: inset 0 0 0 1px #3D3D3D; flex: none"></span>
+        <span style="display: flex; flex-direction: column; gap: 3px; flex: 1"><span class="eyebrow" style="font-size: 10px">Busiest day</span><span style="font-size: 14px; font-weight: 500">{{top.date}}</span></span>
+        <span class="mono" style="font-size: 22px; font-weight: 500">{{top.count}}</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div class="eyebrow" style="font-size: 10px">By weekday</div>
+        <div style="display: flex; flex-direction: column; gap: 7px">
+          <sc-for list="{{weekdays}}" as="w" hint-placeholder-count="7">
+            <div style="display: grid; grid-template-columns: 30px minmax(0, 1fr) 44px; align-items: center; gap: 10px">
+              <span class="mono" style="font-size: 11px; color: #9E9E9E">{{w.label}}</span>
+              <span style="height: 8px; background: #000000; border-radius: 4px; overflow: hidden; display: block"><span style="display: block; height: 100%; width: {{w.pct}}%; background: {{w.fill}}; border-radius: 4px"></span></span>
+              <span class="mono" style="font-size: 12px; text-align: right">{{w.value}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: auto">
+        <button class="btn btn-light" type="button" onClick="{{jumpToday}}">Jump to today</button>
+        <button class="btn" type="button" onClick="{{clearSel}}" disabled="{{noSel}}">Clear</button>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"cellRadius":{"editor":"range","min":0,"max":6.5,"step":0.5,"unit":"px","default":3},"monthLines":{"editor":"boolean","default":true},"$preview":{"width":1560,"height":860}}'>
+var HA = (function () {
+  var TODAY = Date.UTC(2026, 9, 17), DAY = 86400000;
+  var MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var MONL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var WD3 = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  var RAMP = ['#000000','#333333','#595959','#8C8C8C','#C2C2C2','#FFFFFF'];
+  var LVR = ['0','1–3','4–6','7–9','10–13','14+'];
+  var S = 13, G = 5, P = 18, PAD = 8;
+  var cache = {};
+  function rng(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function level(n) { if (n == null) return -1; if (n === 0) return 0; if (n <= 3) return 1; if (n <= 6) return 2; if (n <= 9) return 3; if (n <= 13) return 4; return 5; }
+  function year(y) {
+    if (cache[y]) return cache[y];
+    var rnd = rng(y * 7919 + 13);
+    var jan1 = Date.UTC(y, 0, 1);
+    var len = Math.round((Date.UTC(y + 1, 0, 1) - jan1) / DAY);
+    var off = (new Date(jan1).getUTCDay() + 6) % 7;
+    var WDW = [1.0, 1.1, 1.15, 1.05, 0.85, 0.28, 0.16];
+    var v1 = 150 + Math.floor(rnd() * 50), v1l = 7 + Math.floor(rnd() * 5);
+    var bursts = []; for (var k = 0; k < 5; k++) bursts.push(Math.floor(rnd() * len));
+    var days = [];
+    for (var i = 0; i < len; i++) {
+      var t = jan1 + i * DAY, dt = new Date(t);
+      var dow = (dt.getUTCDay() + 6) % 7;
+      var future = t > TODAY, count = null;
+      if (!future) {
+        var season = 0.8 + 0.35 * Math.sin((i / len) * Math.PI * 2 - 1.2) + (i / len) * 0.3;
+        var burst = 1; for (var b = 0; b < bursts.length; b++) if (i >= bursts[b] && i < bursts[b] + 9) burst = 1.9;
+        var vac = (i >= v1 && i < v1 + v1l) || i >= 352;
+        var lam = 6.2 * WDW[dow] * season * burst;
+        var pz = dow >= 5 ? 0.5 : 0.1;
+        var r = rnd();
+        if (vac) count = r < 0.12 ? 1 + Math.floor(rnd() * 2) : 0;
+        else if (r < pz) count = 0;
+        else count = Math.max(1, Math.round(lam * (0.35 + rnd() * 1.3)));
+      }
+      days.push({ i: i, t: t, dow: dow, col: Math.floor((i + off) / 7), month: dt.getUTCMonth(), date: dt.getUTCDate(), future: future, count: count, level: level(count) });
+    }
+    var months = [];
+    for (var m = 0; m < 12; m++) months.push({ m: m, first: -1, last: -1, lastValid: -1, total: 0, active: 0 });
+    var lastValid = -1;
+    days.forEach(function (d) { var mo = months[d.month]; if (mo.first < 0) mo.first = d.i; mo.last = d.i; if (!d.future) { mo.lastValid = d.i; mo.total += d.count; if (d.count > 0) mo.active++; lastValid = d.i; } });
+    cache[y] = { y: y, days: days, months: months, ncols: Math.floor((len - 1 + off) / 7) + 1, lastValid: lastValid };
+    return cache[y];
+  }
+  function polys(c0, r0, c1, r1) {
+    if (c0 === c1) return [[[c0, r0], [c0 + 1, r0], [c0 + 1, r1 + 1], [c0, r1 + 1]]];
+    if (c1 === c0 + 1 && r1 < r0) return [[[c0, r0], [c0 + 1, r0], [c0 + 1, 7], [c0, 7]], [[c1, 0], [c1 + 1, 0], [c1 + 1, r1 + 1], [c1, r1 + 1]]];
+    var p = [];
+    if (r0 > 0) p.push([c0, r0], [c0 + 1, r0], [c0 + 1, 0]); else p.push([c0, 0]);
+    p.push([c1 + 1, 0]);
+    if (r1 < 6) p.push([c1 + 1, r1 + 1], [c1, r1 + 1], [c1, 7]); else p.push([c1 + 1, 7]);
+    p.push([c0, 7]);
+    return [p];
+  }
+  function f(q) { return q[0].toFixed(1) + ' ' + q[1].toFixed(1); }
+  function rounded(pts, rad) {
+    var n = pts.length, A = [], B = [];
+    for (var i = 0; i < n; i++) {
+      var pv = pts[(i - 1 + n) % n], c = pts[i], nx = pts[(i + 1) % n];
+      var d1 = Math.hypot(pv[0] - c[0], pv[1] - c[1]), d2 = Math.hypot(nx[0] - c[0], nx[1] - c[1]);
+      var r1 = Math.min(rad, d1 / 2), r2 = Math.min(rad, d2 / 2);
+      A.push([c[0] + (pv[0] - c[0]) / d1 * r1, c[1] + (pv[1] - c[1]) / d1 * r1]);
+      B.push([c[0] + (nx[0] - c[0]) / d2 * r2, c[1] + (nx[1] - c[1]) / d2 * r2]);
+    }
+    var s = 'M' + f(A[0]);
+    for (var j = 0; j < n; j++) s += 'Q' + f(pts[j]) + ' ' + f(B[j]) + 'L' + f(A[(j + 1) % n]);
+    return s + 'Z';
+  }
+  function pathFor(Y, a, b) {
+    var d0 = Y.days[a], d1 = Y.days[b];
+    return polys(d0.col, d0.dow, d1.col, d1.dow).map(function (p) {
+      return rounded(p.map(function (q) { return [PAD + q[0] * P - G / 2, PAD + q[1] * P - G / 2]; }), 4);
+    }).join('');
+  }
+  function stats(Y, lo, hi) {
+    var o = { total: 0, n: 0, active: 0, streak: 0, top: null, wd: [0, 0, 0, 0, 0, 0, 0] }, run = 0;
+    for (var i = lo; i <= hi; i++) {
+      var d = Y.days[i]; if (d.future) break;
+      o.n++; o.total += d.count; o.wd[d.dow] += d.count;
+      if (d.count > 0) { o.active++; run++; if (run > o.streak) o.streak = run; } else run = 0;
+      if (!o.top || d.count > o.top.count) o.top = d;
+    }
+    return o;
+  }
+  function fmt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function short(d) { return d.date + ' ' + MON3[d.month]; }
+  function dayLabel(d) { return WD3[d.dow] + ', ' + d.date + ' ' + MON3[d.month]; }
+  function countLabel(d) { if (d.future) return 'Not yet'; if (d.count === 0) return 'No contributions'; return d.count === 1 ? '1 contribution' : d.count + ' contributions'; }
+  return { TODAY: TODAY, MON3: MON3, MONL: MONL, WD3: WD3, RAMP: RAMP, LVR: LVR, S: S, G: G, P: P, PAD: PAD, year: year, pathFor: pathFor, stats: stats, fmt: fmt, short: short, dayLabel: dayLabel, countLabel: countLabel };
+})();
+
+class Component extends DCLogic {
+  state = { year: 2026, hover: null, hm: null, a: null, b: null, lvl: null };
+
+  pick(i) {
+    var Y = HA.year(this.state.year);
+    if (Y.days[i].future) return;
+    var s = this.state;
+    if (s.a == null || s.b != null) this.setState({ a: i, b: null });
+    else this.setState({ b: i });
+  }
+
+  renderVals() {
+    var H = HA, s = this.state, self = this;
+    var rad = this.props.cellRadius ?? 3;
+    var showLines = this.props.monthLines ?? true;
+    var Y = H.year(s.year), days = Y.days;
+    var lo = null, hi = null;
+    if (s.a != null) { var bb = s.b == null ? s.a : s.b; lo = Math.min(s.a, bb); hi = Math.max(s.a, bb); }
+    var hd = s.hover != null ? days[s.hover] : null;
+    var hm = s.hm != null ? s.hm : (hd ? hd.month : null);
+
+    var cells = days.map(function (d) {
+      var fill = d.future ? '#1E1E1E' : H.RAMP[d.level];
+      if (s.lvl != null && !d.future) fill = d.level === s.lvl ? '#FFFFFF' : '#000000';
+      var ring = 'none';
+      if (d.future) ring = 'inset 0 0 0 1px #3D3D3D';
+      if (d.t === H.TODAY) ring = '0 0 0 2px #1E1E1E, 0 0 0 3.5px #FFFFFF';
+      return {
+        x: d.col * H.P, y: d.dow * H.P, fill: fill, ring: ring, rad: rad,
+        label: H.dayLabel(d) + ' ' + s.year + ': ' + H.countLabel(d),
+        enter: function () { if (self.state.hover !== d.i) self.setState({ hover: d.i }); },
+        click: function () { self.pick(d.i); }
+      };
+    });
+
+    var yr = H.stats(Y, 0, Y.lastValid);
+    var L0 = lo == null ? 0 : lo, L1 = hi == null ? Y.lastValid : Math.min(hi, Y.lastValid);
+    var st = H.stats(Y, L0, L1);
+    var maxMonth = Math.max.apply(null, Y.months.map(function (m) { return m.total; })) || 1;
+
+    var mlabels = Y.months.map(function (m) {
+      var fd = days[m.first], col = fd.dow === 0 ? fd.col : fd.col + 1;
+      var selM = lo != null && lo === m.first && hi === m.lastValid;
+      var on = hm === m.m || selM;
+      return {
+        name: H.MON3[m.m], x: col * H.P, color: on ? '#FFFFFF' : '#9E9E9E', weight: selM ? 700 : 500, disabled: m.lastValid < 0,
+        enter: function () { self.setState({ hm: m.m }); }, leave: function () { self.setState({ hm: null }); },
+        click: function () { if (m.lastValid >= 0) self.setState({ a: m.first, b: m.lastValid }); }
+      };
+    });
+
+    var rail = Y.months.map(function (m) {
+      var selM = lo != null && lo === m.first && hi === m.lastValid;
+      var empty = m.lastValid < 0;
+      return {
+        name: H.MON3[m.m], total: empty ? '—' : H.fmt(m.total), h: empty ? 3 : Math.max(3, Math.round(m.total / maxMonth * 72)),
+        fill: selM ? '#FFFFFF' : (hm === m.m ? '#C2C2C2' : (empty ? '#333333' : '#595959')),
+        fg: selM || hm === m.m ? '#FFFFFF' : '#C2C2C2', disabled: empty,
+        aria: 'Select ' + H.MONL[m.m] + ', ' + m.total + ' contributions',
+        enter: function () { self.setState({ hm: m.m }); }, leave: function () { self.setState({ hm: null }); },
+        click: function () { if (!empty) self.setState({ a: m.first, b: m.lastValid }); }
+      };
+    });
+
+    var lvlCounts = [0, 0, 0, 0, 0, 0];
+    days.forEach(function (d) { if (!d.future) lvlCounts[d.level]++; });
+    var legend = [0, 1, 2, 3, 4, 5].map(function (l) {
+      var on = s.lvl === l;
+      return {
+        fill: H.RAMP[l], range: H.LVR[l], on: on,
+        ring: on ? '0 0 0 2px #1E1E1E, 0 0 0 3.5px #FFFFFF' : (l === 0 ? 'inset 0 0 0 1px #3D3D3D' : 'none'),
+        aria: 'Isolate days with ' + H.LVR[l] + ' contributions (' + lvlCounts[l] + ' days)',
+        click: function () { self.setState({ lvl: self.state.lvl === l ? null : l }); }
+      };
+    });
+
+    var wdMax = Math.max.apply(null, st.wd) || 1;
+    var weekdays = st.wd.map(function (v, k) { return { label: H.WD3[k], value: H.fmt(v), pct: Math.round(v / wdMax * 100), fill: v === wdMax ? '#FFFFFF' : '#8C8C8C' }; });
+
+    var prevD = 'M0 0';
+    if (s.a != null && s.b == null && hd && !hd.future && hd.i !== s.a) prevD = H.pathFor(Y, Math.min(s.a, hd.i), Math.max(s.a, hd.i));
+
+    var rangeLabel, eyebrow;
+    if (lo == null) { eyebrow = 'Year overview'; rangeLabel = '1 Jan – ' + H.short(days[Y.lastValid]); }
+    else if (lo === hi) { eyebrow = 'Selected day'; rangeLabel = H.dayLabel(days[lo]); }
+    else { eyebrow = 'Selected range'; rangeLabel = H.short(days[lo]) + ' – ' + H.short(days[hi]); }
+
+    var hint = 'Click a day to anchor, click another to close the range — or pick a month';
+    var hintDot = '#595959';
+    if (s.a != null && s.b == null) { hint = 'Anchored on ' + H.dayLabel(days[s.a]) + ' — click a second day to extend'; hintDot = '#FFFFFF'; }
+    else if (s.lvl != null) { hint = 'Isolating ' + H.LVR[s.lvl] + ' contribution days · ' + lvlCounts[s.lvl] + ' matches'; hintDot = '#FFFFFF'; }
+
+    var top = st.top || days[0];
+    var gridW = Y.ncols * H.P - H.G;
+
+    return {
+      year: s.year,
+      totalStr: H.fmt(yr.total),
+      headerSub: yr.active + ' active days · ' + yr.streak + '-day longest streak · through ' + H.short(days[Y.lastValid]),
+      years: [2024, 2025, 2026].map(function (y) { var on = y === s.year; return { label: String(y), on: on, bg: on ? '#FFFFFF' : '#000000', fg: on ? '#000000' : '#C2C2C2', pick: function () { self.setState({ year: y, a: null, b: null, hover: null, hm: null }); } }; }),
+      gridW: gridW, svgW: gridW + 16, svgH: 7 * H.P - H.G + 16,
+      cells: cells, mlabels: mlabels, rail: rail, legend: legend,
+      monthsD: showLines ? Y.months.map(function (m) { return H.pathFor(Y, m.first, m.last); }).join('') : 'M0 0',
+      hoverD: hm != null ? H.pathFor(Y, Y.months[hm].first, Y.months[hm].last) : 'M0 0',
+      selD: lo != null ? H.pathFor(Y, lo, hi) : 'M0 0',
+      prevD: prevD,
+      hasTip: !!hd,
+      tip: hd ? { left: hd.col * H.P + H.S / 2, top: hd.dow * H.P - 10, count: (hd.t === H.TODAY ? 'Today · ' : '') + H.countLabel(hd), date: H.dayLabel(hd) + ' ' + s.year } : { left: 0, top: 0, count: '', date: '' },
+      clearHover: function () { self.setState({ hover: null }); },
+      hint: hint, hintDot: hintDot,
+      insEyebrow: eyebrow, rangeLabel: rangeLabel,
+      rangeSub: st.n + (st.n === 1 ? ' day tracked' : ' days tracked') + (hi != null && hi > Y.lastValid ? ' · future days skipped' : ''),
+      stats: [
+        { label: 'Contributions', value: H.fmt(st.total) },
+        { label: 'Active days', value: st.active + '/' + st.n },
+        { label: 'Daily average', value: st.n ? (st.total / st.n).toFixed(1) : '0' },
+        { label: 'Longest streak', value: st.streak + (st.streak === 1 ? ' day' : ' days') }
+      ],
+      top: { fill: H.RAMP[top.level], date: H.dayLabel(top), count: top.count },
+      weekdays: weekdays,
+      noSel: s.a == null && s.lvl == null,
+      clearSel: function () { self.setState({ a: null, b: null, lvl: null }); },
+      jumpToday: function () { var T = H.year(2026); self.setState({ year: 2026, a: T.lastValid, b: null, hm: null }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

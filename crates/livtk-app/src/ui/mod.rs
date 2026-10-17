@@ -545,9 +545,15 @@ pub struct LivtkApp {
     checking_updates: bool,
     /// Notifications opened with Show more.
     expanded: std::collections::HashSet<u64>,
-    /// The activity grid's sideways scrolling, and the range it was last scrolled to the end for.
+    /// The activity grid's sideways scrolling, and whether it was scrolled to its latest weeks.
     grid_scroll: ScrollHandle,
-    grid_scrolled_for: Option<crate::model::grid::Span>,
+    grid_scrolled: bool,
+    /// The day or month's name under the pointer in the activity grid, and the grid as last
+    /// drawn and where.
+    grid_hover: Option<activity_grid::Target>,
+    grid_frame: activity_grid::GridFrame,
+    /// The day last clicked in the grid, which the tooltip tells of.
+    grid_clicked: Option<jiff::civil::Date>,
     /// Each board column's own scrolling, so a card moved to comes into view.
     column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
@@ -748,7 +754,10 @@ impl LivtkApp {
             board_scroll: ScrollHandle::new(),
             column_scrolls: Default::default(),
             grid_scroll: ScrollHandle::new(),
-            grid_scrolled_for: None,
+            grid_scrolled: false,
+            grid_hover: None,
+            grid_frame: Default::default(),
+            grid_clicked: None,
             update: None,
             checking_updates: false,
             expanded: Default::default(),
@@ -931,7 +940,6 @@ impl LivtkApp {
             Menu::DetailState => "detail-state",
             Menu::Standing => "standing",
             Menu::Projects => "projects",
-            Menu::GridSpan => "grid-span",
             Menu::GridWhat => "grid-what",
         })
     }
@@ -5762,7 +5770,6 @@ enum Menu {
     /// The projects, from the collapsed sidebar's rail.
     Projects,
     /// The activity grid's range, and what it counts.
-    GridSpan,
     GridWhat,
 }
 

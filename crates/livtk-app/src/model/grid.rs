@@ -1,7 +1,8 @@
 //! The activity grid: a year of days as GitHub draws contributions, each day's colour by how
 //! much happened in the project, above the activity feed. Counts come from one grouped query
 //! (`Workspace::activity_by_day`); here they are filtered by who and what, laid out in weeks
-//! (Monday first), given levels, and summed up. A day picked here filters the feed below.
+//! (Monday first), given levels, and cut into months. A day, or the days
+//! between two clicked, or a month, picked here filters the feed below.
 
 use std::collections::BTreeMap;
 
@@ -39,14 +40,6 @@ impl Counts {
 /// The states a node reaches only by the human's decision.
 const DECIDED: &[&str] = &["acked", "ratified", "accepted", "rejected", "retired"];
 
-/// Which stretch of days the grid shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Span {
-    /// The last 12 months, to this week.
-    Recent,
-    Year(i16),
-}
-
 /// Whose activity counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Who {
@@ -81,43 +74,51 @@ pub struct Cell {
     pub day: Date,
     /// What counts that day, by the grid's who and what.
     pub count: u64,
-    /// 0 for nothing, then 1 to 4 by the range's own busy days.
+    /// 0 for nothing, then 1 to 5 by the range's own busy days.
     pub level: u8,
-    /// Everything that happened, by kind (for the grid's who).
-    pub counts: Counts,
-    pub picked: bool,
+    /// After today: not yet.
+    pub future: bool,
 }
 
-/// The range in numbers.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Summary {
-    pub total: u64,
-    pub busiest: Option<(Date, u64)>,
-    /// Days in a row with something, to today (or yesterday, today being young).
-    pub current: u64,
-    pub longest: u64,
-    pub done: u64,
-    pub decisions: u64,
+/// A month in the grid: its name, the week its name goes over (its first whole week), and its
+/// first and last day shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Month {
+    pub name: &'static str,
+    pub label_week: usize,
+    pub first: Date,
+    pub last: Date,
 }
 
-/// The grid as drawn: its weeks (a day out of the range is `None`), where each month's label
-/// goes (a week's index), and the summary.
+/// The grid as drawn: its weeks, Monday first, and its months.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Drawn {
-    pub weeks: Vec<[Option<Cell>; 7]>,
-    pub months: Vec<(usize, &'static str)>,
-    pub summary: Summary,
+    pub weeks: Vec<[Cell; 7]>,
+    pub months: Vec<Month>,
 }
+
+impl Drawn {
+    /// Where `day` sits: its week and its weekday (0 for Monday).
+    pub fn at(&self, day: Date) -> Option<(usize, usize)> {
+        let first = self.weeks.first()?[0].day;
+        let n = usize::try_from((day - first).get_days()).ok()?;
+        (n < self.weeks.len() * 7).then_some((n / 7, n % 7))
+    }
+}
+
+/// How many levels there are, nothing included.
+pub const LEVELS: usize = 6;
 
 /// The grid's choices and the days it counts.
 #[derive(Clone, Debug)]
 pub struct Grid {
-    pub span: Span,
     pub who: Who,
     pub what: What,
     pub folded: bool,
     /// The days the feed is filtered to, first and last.
     pub pick: Option<(Date, Date)>,
+    /// A day was clicked and waits for a second to close the range.
+    pub anchored: bool,
     /// Per day: the human's, then Claude's.
     days: BTreeMap<Date, [Counts; 2]>,
 }
@@ -125,11 +126,11 @@ pub struct Grid {
 impl Default for Grid {
     fn default() -> Grid {
         Grid {
-            span: Span::Recent,
             who: Who::All,
             what: What::All,
             folded: false,
             pick: None,
+            anchored: false,
             days: BTreeMap::new(),
         }
     }
@@ -138,6 +139,11 @@ impl Default for Grid {
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+
+/// A month's short name.
+pub fn month_name(d: Date) -> &'static str {
+    MONTHS[usize::try_from(d.month() - 1).unwrap_or(0)]
+}
 
 impl Grid {
     /// Take in the counts per day.
@@ -171,15 +177,6 @@ impl Grid {
         }
     }
 
-    /// The years the log has days in, newest first, this one included.
-    pub fn years(&self, today: Date) -> Vec<i16> {
-        let mut years: Vec<i16> = self.days.keys().map(|d| d.year()).collect();
-        years.push(today.year());
-        years.sort_unstable_by(|a, b| b.cmp(a));
-        years.dedup();
-        years
-    }
-
     /// A day's counts, for the grid's who.
     fn counts(&self, day: Date) -> Counts {
         let Some([human, claude]) = self.days.get(&day) else {
@@ -196,30 +193,24 @@ impl Grid {
         }
     }
 
-    /// The first and last day of the span, as `today` sees it.
-    pub fn bounds(&self, today: Date) -> (Date, Date) {
-        match self.span {
-            Span::Recent => (today.checked_sub(364.days()).unwrap_or(today), today),
-            Span::Year(y) => (
-                Date::new(y, 1, 1).unwrap_or(today),
-                Date::new(y, 12, 31).unwrap_or(today),
-            ),
-        }
+    /// The first and last day shown: from the Monday a year back, so every week is whole, to
+    /// `today`.
+    pub fn bounds(today: Date) -> (Date, Date) {
+        let back = today.checked_sub(1.year()).unwrap_or(today);
+        let monday = back
+            .checked_sub(i64::from(back.weekday().to_monday_zero_offset()).days())
+            .unwrap_or(back);
+        (monday, today)
     }
 
     /// The grid as drawn on `today`.
     pub fn drawn(&self, today: Date) -> Drawn {
-        let (first, last) = self.bounds(today);
-        // From the Monday of the first day's week to the Sunday of the last's.
-        let start = first
-            .checked_sub((i64::from(first.weekday().to_monday_zero_offset())).days())
-            .unwrap_or(first);
-        let in_range = |d: Date| d >= first && d <= last && d <= today;
-        // The levels, by the range's busy days, as GitHub's quartiles.
+        let (first, last) = Grid::bounds(today);
+        // The levels split the range's busy days in five, as GitHub's quartiles do in four;
+        // each step's top taken below the busiest, so the busiest day reaches the top step.
         let mut busy: Vec<u64> = Vec::new();
-        let end = last.min(today);
         let mut d = first;
-        while d <= end {
+        while d <= last {
             let n = self.what.of(&self.counts(d));
             if n > 0 {
                 busy.push(n);
@@ -230,103 +221,88 @@ impl Grid {
             }
         }
         busy.sort_unstable();
-        // Quartiles over the positions below the top, so the busiest day reaches the top step.
-        let q = |p: usize| busy.get(busy.len().saturating_sub(1) * p / 4);
-        let (q1, q2, q3) = (q(1).copied(), q(2).copied(), q(3).copied());
+        let tops: Vec<u64> = if busy.is_empty() {
+            Vec::new()
+        } else {
+            (1..LEVELS - 1)
+                .map(|p| busy[(busy.len() - 1) * p / (LEVELS - 1)])
+                .collect()
+        };
         let level = |n: u64| -> u8 {
             if n == 0 {
-                0
-            } else if q1.is_none_or(|q| n <= q) {
-                1
-            } else if q2.is_none_or(|q| n <= q) {
-                2
-            } else if q3.is_none_or(|q| n <= q) {
-                3
-            } else {
-                4
+                return 0;
             }
+            let step = tops.iter().position(|&t| n <= t).unwrap_or(tops.len());
+            u8::try_from(step + 1).unwrap_or(0)
         };
         let mut weeks = Vec::new();
-        let mut months: Vec<(usize, &'static str)> = Vec::new();
-        let mut summary = Summary::default();
-        let mut run = 0u64;
-        let mut day = start;
-        loop {
-            let mut week: [Option<Cell>; 7] = Default::default();
-            for slot in &mut week {
-                if in_range(day) {
-                    let counts = self.counts(day);
-                    let count = self.what.of(&counts);
-                    summary.total += count;
-                    summary.done += counts.done;
-                    summary.decisions += counts.decisions;
-                    if count > 0 && summary.busiest.is_none_or(|(_, b)| count > b) {
-                        summary.busiest = Some((day, count));
-                    }
-                    run = if count > 0 { run + 1 } else { 0 };
-                    summary.longest = summary.longest.max(run);
-                    if day.day() == 1 || (weeks.is_empty() && months.is_empty()) {
-                        let w = weeks.len();
-                        // Two labels never crowd each other.
-                        if months.last().is_none_or(|(at, _)| w >= at + 3) {
-                            months.push((w, MONTHS[usize::try_from(day.month() - 1).unwrap_or(0)]));
-                        }
-                    }
-                    *slot = Some(Cell {
-                        day,
-                        count,
-                        level: level(count),
-                        counts,
-                        picked: self.pick.is_some_and(|(a, b)| day >= a && day <= b),
-                    });
-                }
-                day = match day.tomorrow() {
-                    Ok(d) => d,
-                    Err(_) => break,
+        let mut months: Vec<Month> = Vec::new();
+        let mut day = first;
+        while day <= last {
+            let w = weeks.len();
+            let week: [Cell; 7] = std::array::from_fn(|i| {
+                let d = day.checked_add((i as i64).days()).unwrap_or(day);
+                let future = d > last;
+                let count = if future {
+                    0
+                } else {
+                    self.what.of(&self.counts(d))
                 };
+                Cell {
+                    day: d,
+                    count,
+                    level: level(count),
+                    future,
+                }
+            });
+            for c in &week {
+                match months.last_mut() {
+                    Some(m) if m.first.month() == c.day.month() => m.last = c.day,
+                    _ => months.push(Month {
+                        name: month_name(c.day),
+                        // A month's name goes over its first whole week.
+                        label_week: if c.day.weekday().to_monday_zero_offset() == 0 {
+                            w
+                        } else {
+                            w + 1
+                        },
+                        first: c.day,
+                        last: c.day,
+                    }),
+                }
             }
             weeks.push(week);
-            if day > last.min(today) {
-                break;
-            }
-        }
-        summary.current = self.streak_to(today);
-        Drawn {
-            weeks,
-            months,
-            summary,
-        }
-    }
-
-    /// Days in a row with something, ending today, or yesterday when nothing happened today
-    /// yet.
-    fn streak_to(&self, today: Date) -> u64 {
-        let has = |d: Date| self.what.of(&self.counts(d)) > 0;
-        let mut day = if has(today) {
-            today
-        } else {
-            match today.yesterday() {
-                Ok(d) => d,
-                Err(_) => return 0,
-            }
-        };
-        let mut n = 0;
-        while has(day) {
-            n += 1;
-            day = match day.yesterday() {
+            day = match day.checked_add(7.days()) {
                 Ok(d) => d,
                 Err(_) => break,
             };
         }
-        n
+        // The first month's name goes over the first week, however much of it there is.
+        if let Some(m) = months.first_mut() {
+            m.label_week = 0;
+        }
+        Drawn { weeks, months }
     }
 
-    /// Pick `day` for the feed: alone, or with `extend` the days from the one picked before.
-    pub fn pick(&mut self, day: Date, extend: bool) {
-        self.pick = match (self.pick, extend) {
-            (Some((a, b)), true) => Some((a.min(day), b.max(day))),
-            _ => Some((day, day)),
+    /// A day clicked: it anchors a range (the feed shows that day meanwhile), or closes the
+    /// range a day anchored.
+    pub fn pick(&mut self, day: Date) {
+        self.pick = match (self.pick, self.anchored) {
+            (Some((a, _)), true) => {
+                self.anchored = false;
+                Some((a.min(day), a.max(day)))
+            }
+            _ => {
+                self.anchored = true;
+                Some((day, day))
+            }
         };
+    }
+
+    /// A span of days picked at once: a month.
+    pub fn pick_span(&mut self, first: Date, last: Date) {
+        self.pick = Some((first, last));
+        self.anchored = false;
     }
 }
 
@@ -342,14 +318,4 @@ pub fn pick_bounds(pick: (Date, Date)) -> Option<(String, String)> {
 /// Today, where this machine is.
 pub fn today() -> Date {
     jiff::Timestamp::now().to_zoned(TimeZone::system()).date()
-}
-
-/// A weekday's short name, for the grid's side.
-pub fn weekday_name(i: usize) -> &'static str {
-    match i {
-        0 => "Mon",
-        2 => "Wed",
-        4 => "Fri",
-        _ => "",
-    }
 }

@@ -41,8 +41,7 @@ icons! {
     Decisions => "route",
     Findings => "medical-flask",
     Graph => "circuit-board",
-    /// The terminal: a prompt.
-    Terminal => "chevrons-right",
+    Terminal => "terminal",
     Project => "folder",
     OpenProject => "folder-plus",
     Shortcuts => "help-circle",

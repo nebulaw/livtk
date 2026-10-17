@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use livtk_app::model::{
-    GroupKey, Grouping, Layout, Model, NOTICE_FOR, Ordering, RETRY_FIRST, RETRY_MAX, View, choices,
+    GroupKey, Grouping, Layout, Model, Ordering, RETRY_FIRST, RETRY_MAX, View, choices,
 };
 use livtk_core::{Actor, Command, Kind, Rel, State, Workspace};
 
@@ -409,95 +409,97 @@ fn empty_model(dir: &Path) -> Model {
 const FADE: Duration = Duration::from_millis(240);
 const MS: Duration = Duration::from_millis(1);
 
+/// How long an info notification stays.
+const INFO_FOR: Duration = Duration::from_secs(6);
+
 #[test]
-fn a_notice_leaves_on_its_own_after_its_time_and_a_fade() {
+fn a_notification_leaves_after_its_levels_time_and_an_error_stays_until_closed() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = empty_model(dir.path());
-    m.warn("the disk is full");
+    m.inform("linked");
     let shown = Instant::now();
-
-    assert!(!m.age_notice(shown + NOTICE_FOR - MS, FADE), "not yet");
-    assert!(m.notice().is_some_and(|n| n.leaving.is_none()));
-
-    let up = shown + NOTICE_FOR;
-    assert!(m.age_notice(up, FADE), "its time is up: it starts to leave");
+    assert!(!m.age_notices(shown + INFO_FOR - MS, FADE), "not yet");
+    let up = shown + INFO_FOR;
+    assert!(
+        m.age_notices(up, FADE),
+        "its time is up: it starts to leave"
+    );
     assert_eq!(m.notice().and_then(|n| n.leaving), Some(up));
-    assert!(!m.age_notice(up + FADE - MS, FADE), "fading");
-    assert!(m.notice().is_some(), "still drawn while it fades");
-    assert!(m.age_notice(up + FADE, FADE), "faded: gone");
+    assert!(!m.age_notices(up + FADE - MS, FADE), "fading");
+    assert!(m.age_notices(up + FADE, FADE), "faded: gone");
     assert!(m.notice().is_none());
-    assert!(!m.age_notice(up + FADE * 2, FADE), "nothing left to age");
+
+    m.warn("the disk is full");
+    assert!(
+        !m.age_notices(Instant::now() + INFO_FOR * 100, FADE),
+        "an error never leaves on its own"
+    );
+    let id = m.notice().unwrap().id;
+    m.dismiss(id);
+    assert!(m.notice().is_none(), "closed");
 }
 
 #[test]
-fn a_notice_under_the_pointer_stays_and_gets_its_whole_time_again_when_let_go() {
+fn a_notification_under_the_pointer_stays_and_gets_its_whole_time_again_when_let_go() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = empty_model(dir.path());
-    m.warn("refused");
+    m.inform("noted");
+    let id = m.notice().unwrap().id;
     let shown = Instant::now();
-    m.hold_notice(true, shown);
+    m.hold(id, true, shown);
     assert!(
-        !m.age_notice(shown + NOTICE_FOR * 10, FADE),
+        !m.age_notices(shown + INFO_FOR * 10, FADE),
         "held, it stays"
     );
-    assert!(m.notice().is_some_and(|n| n.leaving.is_none()));
-
-    let let_go = shown + NOTICE_FOR * 10;
-    m.hold_notice(false, let_go);
+    let let_go = shown + INFO_FOR * 10;
+    m.hold(id, false, let_go);
     assert!(
-        !m.age_notice(let_go + NOTICE_FOR - MS, FADE),
+        !m.age_notices(let_go + INFO_FOR - MS, FADE),
         "its time starts again when the pointer leaves"
     );
-    assert!(m.age_notice(let_go + NOTICE_FOR, FADE));
-
+    assert!(m.age_notices(let_go + INFO_FOR, FADE));
     // Caught while fading: the pointer brings it back.
-    m.hold_notice(true, let_go + NOTICE_FOR + MS);
+    m.hold(id, true, let_go + INFO_FOR + MS);
     assert!(m.notice().is_some_and(|n| n.leaving.is_none()));
-    assert!(!m.age_notice(let_go + NOTICE_FOR + FADE * 2, FADE));
-    assert!(m.notice().is_some());
 }
 
 #[test]
-fn a_new_notice_replaces_the_old_and_starts_its_time_again() {
+fn notifications_stack_newest_first_and_the_same_one_counts_up() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = empty_model(dir.path());
-    m.warn("refused");
-    let first = m.notice().unwrap().id;
-    let up = Instant::now() + NOTICE_FOR;
-    assert!(m.age_notice(up, FADE), "the first is leaving");
+    for text in ["one", "two", "three", "four"] {
+        m.inform(text);
+    }
+    let (shown, more) = m.toasts().shown();
+    let texts: Vec<&str> = shown.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(texts, ["four", "three", "two"], "three shown, newest first");
+    assert_eq!(more, 1, "the rest counted");
 
-    m.warn("refused");
-    let n = m.notice().unwrap();
-    assert!(n.id > first, "the same text again is a new notice");
-    assert_eq!(n.text, "refused");
-    assert_eq!(n.leaving, None, "it is not leaving");
-    assert!(
-        !m.age_notice(Instant::now() + NOTICE_FOR - MS, FADE),
-        "its time started when it was shown"
-    );
-
-    m.hold_notice(true, Instant::now());
-    m.warn("another");
-    assert!(
-        !m.age_notice(Instant::now() + NOTICE_FOR * 10, FADE),
-        "it shows where the one it replaced did, under the same pointer, so it is held"
-    );
+    m.inform("two");
+    let (shown, more) = m.toasts().shown();
+    assert_eq!(shown[0].text, "two", "raised again: newest");
+    assert_eq!(shown[0].count, 2, "counted, not stacked");
+    assert_eq!(more, 1);
 }
 
 #[test]
-fn a_notice_closes_and_a_success_clears_it() {
+fn a_success_clears_the_errors_it_answers() {
     let dir = tempfile::tempdir().unwrap();
     let mut ws = project(dir.path());
     planned(&mut ws, "a plan");
     drop(ws);
     let mut m = Model::open(&[dir.path().to_path_buf()]);
     m.warn("refused");
-    m.dismiss_notice();
-    assert!(m.notice().is_none(), "closed");
-
-    m.warn("refused");
+    m.inform("by the way");
     m.decide();
-    assert!(m.notice().is_none(), "an action that succeeds clears it");
+    assert!(
+        m.toasts().shown().0.iter().all(|t| !t.is_error()),
+        "an action that succeeds clears the errors"
+    );
+    assert!(
+        m.notice().is_some_and(|t| t.text == "by the way"),
+        "and only them"
+    );
 }
 
 /// Make `path` unreadable, or readable again.
@@ -528,7 +530,7 @@ fn a_failure_that_lasts_is_told_once_not_on_every_tick() {
         Some(told),
         "not again: telling it again would start its time again"
     );
-    m.dismiss_notice();
+    m.dismiss_all();
     m.tick();
     assert!(m.notice().is_none(), "closed, it stays closed");
 
@@ -572,7 +574,7 @@ fn a_catch_up_that_keeps_failing_is_told_once() {
         Some(told),
         "not again on the next try"
     );
-    m.dismiss_notice();
+    m.dismiss_all();
     fail(&mut m, "the disk is full");
     assert!(m.notice().is_none(), "closed, it stays closed");
 
@@ -582,7 +584,7 @@ fn a_catch_up_that_keeps_failing_is_told_once() {
             .is_some_and(|n| n.text.contains("the lock is held")),
         "a different failure is told"
     );
-    m.dismiss_notice();
+    m.dismiss_all();
     m.tick_at(Instant::now() + RETRY_MAX);
     let jobs = m.take_catch_ups();
     m.caught_up(&jobs[0], Ok(()));
@@ -784,12 +786,12 @@ fn why_no_notifications_come_is_told_once_or_each_time_and_never_over_another_no
     m.warn("a project would not open");
     m.tell_quiet(Quiet::NoBundle);
     assert_eq!(m.notice().unwrap().text, "a project would not open");
-    m.dismiss_notice();
+    m.dismiss_all();
 
     m.tell_quiet(Quiet::NoBundle);
     let told = m.notice().map(|n| n.text.clone()).expect("told");
     assert!(told.contains("livtk.app"), "{told}");
-    m.dismiss_notice();
+    m.dismiss_all();
     m.tell_quiet(Quiet::NoBundle);
     assert!(m.notice().is_none(), "a missing bundle is told once");
 
@@ -804,7 +806,7 @@ fn why_no_notifications_come_is_told_once_or_each_time_and_never_over_another_no
     for _ in 0..2 {
         again.tell_quiet(Quiet::OpenFailed);
         assert!(again.notice().is_some());
-        again.dismiss_notice();
+        again.dismiss_all();
     }
 }
 

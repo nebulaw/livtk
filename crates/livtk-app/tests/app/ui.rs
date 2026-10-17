@@ -7,7 +7,7 @@
 use gpui_kit::TestAppContext;
 use std::time::{Duration, Instant};
 
-use livtk_app::model::{Model, NOTICE_FOR, View};
+use livtk_app::model::{Model, View};
 use livtk_app::ui::{LivtkApp, bind_keys};
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
@@ -1926,6 +1926,16 @@ fn warn(app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext, 
 }
 
 const NOTICE_FADE: Duration = Duration::from_millis(240);
+/// How long an info notification stays.
+const NOTICE_FOR: Duration = Duration::from_secs(6);
+
+fn inform(app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext, text: &str) {
+    app.update(cx, |a, cx| {
+        a.model_mut().inform(text);
+        cx.notify();
+    });
+    redraw(cx);
+}
 
 #[gpui_kit::test]
 fn the_notice_closes_with_its_x(cx: &mut TestAppContext) {
@@ -1944,13 +1954,13 @@ fn the_notice_closes_with_its_x(cx: &mut TestAppContext) {
 fn the_notice_stays_while_the_pointer_is_over_it(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    warn(&app, cx, "LIV-1 waits on LIV-2");
+    inform(&app, cx, "LIV-1 waits on LIV-2");
     let (x, y) = centre(cx, "notice");
     move_to(cx, x, y);
     app.update(cx, |a, _| {
         assert!(
             !a.model_mut()
-                .age_notice(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
+                .age_notices(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
             "held by the pointer, its time does not run out"
         )
     });
@@ -1963,7 +1973,7 @@ fn the_notice_stays_while_the_pointer_is_over_it(cx: &mut TestAppContext) {
     app.update(cx, |a, _| {
         assert!(
             !a.model_mut()
-                .age_notice(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
+                .age_notices(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
             "still held after a key press"
         )
     });
@@ -1973,9 +1983,9 @@ fn the_notice_stays_while_the_pointer_is_over_it(cx: &mut TestAppContext) {
     let left = Instant::now();
     app.update(cx, |a, cx| {
         let m = a.model_mut();
-        assert!(!m.age_notice(left + NOTICE_FOR / 2, NOTICE_FADE));
-        assert!(m.age_notice(left + NOTICE_FOR, NOTICE_FADE), "it leaves");
-        assert!(m.age_notice(left + NOTICE_FOR + NOTICE_FADE, NOTICE_FADE));
+        assert!(!m.age_notices(left + NOTICE_FOR / 2, NOTICE_FADE));
+        assert!(m.age_notices(left + NOTICE_FOR, NOTICE_FADE), "it leaves");
+        assert!(m.age_notices(left + NOTICE_FOR + NOTICE_FADE, NOTICE_FADE));
         cx.notify();
     });
     redraw(cx);
@@ -2243,12 +2253,30 @@ fn what_arrives_while_the_window_is_away_is_a_system_notification(cx: &mut TestA
         cx.update(|window, _| window.is_window_active()),
         "the window is in front"
     );
-    plan("seen in front");
+    let front = plan("seen in front");
     poll(cx);
     assert!(
         cx.shown_system_notifications().is_empty(),
         "with the window in front, nothing is posted"
     );
+    // It is told in the window instead, with a way to it.
+    app.read_with(cx, |a, _| {
+        let t = a.model().notice().expect("told in the window");
+        assert_eq!(
+            t.title.as_deref(),
+            Some(format!("{front} waits for you").as_str())
+        );
+    });
+    redraw(cx);
+    cx.simulate_keystrokes("g t");
+    click_on(cx, "notice-act-0");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Inbox, "Open goes to the inbox");
+        assert_eq!(
+            a.model().selected().map(|r| r.key.clone()),
+            Some(front.clone())
+        );
+    });
 
     cx.deactivate_window();
     let key = plan("while away");

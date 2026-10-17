@@ -15,6 +15,7 @@ mod graph;
 pub mod keys;
 mod palette;
 mod saved;
+pub mod toasts;
 pub use activity::{FeedRow, INDENT, created_as, day_label, describe, note_markdown, reindent};
 pub use flow::{
     Arrow, Look, Step, arrows, arrows_with, flow_of, has_flow, state_name, state_short, steps,
@@ -26,6 +27,7 @@ pub use graph::{
 };
 pub use palette::{Action, Ask, Found, Item, LinkPick, Palette, Run, fuzzy};
 pub use saved::{Saved, SavedView, SavedWindow};
+pub use toasts::{Act, Button, Level, Toast, Toasts};
 
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -193,28 +195,6 @@ pub struct Choice {
 pub const RETRY_FIRST: Duration = Duration::from_secs(1);
 pub const RETRY_MAX: Duration = Duration::from_secs(30);
 
-/// How long a notice stays before it starts to leave, unless the pointer holds it.
-pub const NOTICE_FOR: Duration = Duration::from_secs(6);
-
-/// The last thing worth telling the human: a refusal, an error. It leaves on its own
-/// `NOTICE_FOR` after it was shown, fading out, but not while the pointer is over it; it can be
-/// closed; a new one takes its place and its time starts again.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Notice {
-    pub text: String,
-    /// Something went wrong (a refusal, an error), or only something to know (a tool linked).
-    pub error: bool,
-    /// Counts the notices shown, so each is told apart from the one it replaced, even with the
-    /// same text: the view plays its animations afresh.
-    pub id: u64,
-    /// Fading out since then, if it is leaving.
-    pub leaving: Option<Instant>,
-    /// When its time started: when it was shown, or when the pointer last let go of it.
-    since: Instant,
-    /// The pointer is over it, so it stays.
-    held: bool,
-}
-
 /// Why this app posts no system notifications where it runs (macOS posts them only for its
 /// bundle), for the human to be told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,9 +355,8 @@ pub struct Model {
     /// Rows the human just moved out of the current view, where they were, and when: the view
     /// fades them out in place.
     pub leaving: Vec<(Summary, usize, Instant)>,
-    notice: Option<Notice>,
-    /// How many notices were shown: the next one's id.
-    notices: u64,
+    /// What the app tells the human in the window.
+    toasts: Toasts,
     /// Whether the human was told that this app posts no system notifications where it runs.
     pub told_no_notifications: bool,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
@@ -456,8 +435,7 @@ impl Model {
             detail: None,
             flashed: HashMap::new(),
             leaving: Vec::new(),
-            notice: None,
-            notices: 0,
+            toasts: Toasts::default(),
             told_no_notifications: false,
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
@@ -496,8 +474,8 @@ impl Model {
             self.select_project(before);
             true
         } else {
-            if let Some(n) = more.notice {
-                self.warn(n.text);
+            if let Some(t) = more.toasts.latest() {
+                self.warn(t.text.clone());
             }
             false
         }
@@ -911,7 +889,7 @@ impl Model {
         };
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(events) => {
-                self.notice = None;
+                self.toasts.clear_errors();
                 let created = events.first().map(|e| e.op.subjects().0);
                 if self.view != View::Tasks {
                     self.view = View::Tasks;
@@ -943,7 +921,7 @@ impl Model {
         };
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(_) => {
-                self.notice = None;
+                self.toasts.clear_errors();
                 self.reload();
                 // A row that left the view (acknowledged out of the inbox, say) fades out, and
                 // the selection moves to the row that took its place.
@@ -1143,42 +1121,38 @@ impl Model {
             .retain(|(_, _, at)| now.duration_since(*at) < age);
     }
 
-    // ---- the notice ---------------------------------------------------------------------------
+    // ---- notifications -------------------------------------------------------------------------
 
-    pub fn notice(&self) -> Option<&Notice> {
-        self.notice.as_ref()
+    pub fn toasts(&self) -> &Toasts {
+        &self.toasts
     }
 
-    /// Tell the human something went wrong. It replaces any notice shown, and its time starts now.
-    /// It shows where the one it replaces did, so a pointer over that one is over it, and holds
-    /// it.
+    /// The newest notification.
+    pub fn notice(&self) -> Option<&Toast> {
+        self.toasts.latest()
+    }
+
+    /// Tell the human something: the one way every notification is raised. Its id.
+    pub fn notify(&mut self, t: Toast) -> u64 {
+        self.toasts.raise(t)
+    }
+
+    /// Tell the human something went wrong: it stays until closed, or until what it told of no
+    /// longer holds.
     pub fn warn(&mut self, text: impl Into<String>) {
-        self.notice_of(text.into(), true);
+        self.notify(Toast::error(text));
     }
 
-    /// Tell the human something worth knowing that is no error, as a notice does.
+    /// Tell the human something worth knowing that is no error.
     pub fn inform(&mut self, text: impl Into<String>) {
-        self.notice_of(text.into(), false);
-    }
-
-    fn notice_of(&mut self, text: String, error: bool) {
-        self.notices += 1;
-        self.notice = Some(Notice {
-            text,
-            error,
-            id: self.notices,
-            leaving: None,
-            since: Instant::now(),
-            held: self.notice.as_ref().is_some_and(|n| n.held),
-        });
+        self.notify(Toast::info(text));
     }
 
     /// Tell the human why this app posts no system notifications where it runs, and where it
     /// would. Running outside the bundle is told once ever; a bundle that would not open, each
-    /// time. A notice already showing (a project that would not open, say) is left in place, and
-    /// what was not told then is told another time.
+    /// time. While something else is being told, it waits for another time.
     pub fn tell_quiet(&mut self, why: Quiet) {
-        if self.notice.is_some() || (why == Quiet::NoBundle && self.told_no_notifications) {
+        if !self.toasts.is_empty() || (why == Quiet::NoBundle && self.told_no_notifications) {
             return;
         }
         let text = match why {
@@ -1192,47 +1166,27 @@ impl Model {
                 "livtk.app would not open, so this runs here, without notifications."
             }
         };
-        self.warn(text);
+        self.notify(Toast::warning(text));
     }
 
-    /// Close the notice: the human read it, or what it told of no longer holds.
-    pub fn dismiss_notice(&mut self) {
-        self.notice = None;
+    /// Close every notification.
+    pub fn dismiss_all(&mut self) {
+        self.toasts.dismiss_all();
     }
 
-    /// The pointer came over the notice (`held`), which keeps it, a leaving one included, or
-    /// went away at `now`, which gives it its whole time again.
-    pub fn hold_notice(&mut self, held: bool, now: Instant) {
-        if let Some(n) = &mut self.notice {
-            n.held = held;
-            if held {
-                n.leaving = None;
-            } else {
-                n.since = now;
-            }
-        }
+    /// Close notification `id`: the human read it.
+    pub fn dismiss(&mut self, id: u64) {
+        self.toasts.dismiss(id);
     }
 
-    /// Let the notice's time pass to `now`: it starts to leave once its time is up, unless held,
-    /// and is gone `fade` after that. Returns whether it changed, so the view repaints only then.
-    pub fn age_notice(&mut self, now: Instant, fade: Duration) -> bool {
-        let Some(n) = &mut self.notice else {
-            return false;
-        };
-        if n.held {
-            return false;
-        }
-        match n.leaving {
-            None if now.duration_since(n.since) >= NOTICE_FOR => {
-                n.leaving = Some(now);
-                true
-            }
-            Some(at) if now.duration_since(at) >= fade => {
-                self.notice = None;
-                true
-            }
-            _ => false,
-        }
+    /// The pointer came over notification `id` (`held`), or left it at `now`.
+    pub fn hold(&mut self, id: u64, held: bool, now: Instant) {
+        self.toasts.hold(id, held, now);
+    }
+
+    /// Let the notifications' time pass to `now`; whether any changed.
+    pub fn age_notices(&mut self, now: Instant, fade: Duration) -> bool {
+        self.toasts.age(now, fade)
     }
 
     // ---- display options -----------------------------------------------------------------------

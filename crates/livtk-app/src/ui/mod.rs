@@ -27,10 +27,10 @@ use uuid::Uuid;
 
 use crate::model::keys;
 use crate::model::{
-    Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Quiet, Run, Saved,
-    SavedWindow, Step, View, arrows_with, created_as, describe, drop_allowed, has_flow,
-    link_choices, link_curve, state_name, steps_with, visible_runs,
+    Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
+    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Model, Ordering, Quiet, Run,
+    Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe, drop_allowed,
+    has_flow, link_choices, link_curve, state_name, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -121,6 +121,12 @@ const FLASH: Duration = Duration::from_millis(900);
 /// A notice coming in, and fading out when its time is up.
 const NOTICE_IN: Duration = Duration::from_millis(140);
 const NOTICE_FADE: Duration = Duration::from_millis(240);
+/// A notification's width, and the height of its text: clipped, then open with Show more.
+const TOAST_WIDTH: f32 = 380.;
+const TOAST_CLIPPED: f32 = 84.;
+const TOAST_OPEN: f32 = 320.;
+/// Text longer than this (or of more lines than four) is clipped, with Show more.
+const TOAST_LONG: usize = 220;
 /// The detail panel opening and closing: it grows from the right edge and the list makes room.
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
@@ -532,6 +538,8 @@ pub struct LivtkApp {
     update: Option<livtk_update::stage::Staged>,
     /// A look for updates under way.
     checking_updates: bool,
+    /// Notifications opened with Show more.
+    expanded: std::collections::HashSet<u64>,
     /// Each board column's own scrolling, so a card moved to comes into view.
     column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
@@ -656,7 +664,7 @@ impl LivtkApp {
                 let alive = this.update(cx, |app, cx| {
                     // Whatever below tells the human something (a tick, a write that failed),
                     // or lets a notice go, shows now: a notice is drawn only when painted.
-                    let noticed = app.model.notice().map(|n| (n.id, n.leaving.is_some()));
+                    let noticed = told(&app.model);
                     let changed = app.model.tick();
                     // A hidden window draws nothing, and the Dock's count must still be right.
                     app.sync_menus(cx);
@@ -679,17 +687,26 @@ impl LivtkApp {
                     }
                     if !arrived.is_empty() && !app.window_active {
                         app.notify_arrived(arrived, cx);
+                    } else {
+                        // In front: told in the window, with a way to it.
+                        for a in arrived {
+                            app.model.notify(
+                                Toast::info(a.title.clone())
+                                    .title(format!("{} waits for you", a.key))
+                                    .action("Open", Act::Open(a)),
+                            );
+                        }
                     }
                     app.run_catch_ups(cx);
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
                     let now = Instant::now();
                     app.model.settle(now, FLASH.max(FADE) + POLL);
-                    if app.model.age_notice(now, NOTICE_FADE) {
+                    if app.model.age_notices(now, NOTICE_FADE) {
                         app.end_notice_fade(cx);
                     }
                     // What the app remembers is written within a beat of changing.
                     app.persist();
-                    let told = app.model.notice().map(|n| (n.id, n.leaving.is_some())) != noticed;
+                    let told = told(&app.model) != noticed;
                     if changed || busy || told {
                         cx.notify();
                     }
@@ -713,6 +730,7 @@ impl LivtkApp {
             column_scrolls: Default::default(),
             update: None,
             checking_updates: false,
+            expanded: Default::default(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
             sidebar_width: SIDEBAR_WIDTH,
@@ -830,13 +848,14 @@ impl LivtkApp {
     /// A notice began to fade: take it away the moment the fade ends, not at the next poll, as
     /// it would otherwise stand there unseen, taking clicks meant for what is under it.
     fn end_notice_fade(&mut self, cx: &mut Context<Self>) {
-        if self.model.notice().is_none_or(|n| n.leaving.is_none()) {
+        let (shown, _) = self.model.toasts().shown();
+        if shown.iter().all(|t| t.leaving.is_none()) {
             return;
         }
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_FADE).await;
             let _ = this.update(cx, |app, cx| {
-                if app.model.age_notice(Instant::now(), NOTICE_FADE) {
+                if app.model.age_notices(Instant::now(), NOTICE_FADE) {
                     cx.notify();
                 }
             });
@@ -1547,11 +1566,11 @@ impl LivtkApp {
                 match found {
                     Ok(Some(staged)) => {
                         log::info!("update: build {} staged", staged.manifest.build);
-                        app.model.inform(format!(
-                            "livtk build {} is ready: Restart to Update, from the livtk menu or \
-                             the sidebar, when it suits you.",
-                            staged.manifest.build
-                        ));
+                        app.model.notify(
+                            Toast::success("Restart to install it when it suits you.")
+                                .title(format!("livtk build {} is ready", staged.manifest.build))
+                                .action("Restart to Update", Act::RestartToUpdate),
+                        );
                         app.update = Some(staged);
                     }
                     Ok(None) if asked => app
@@ -4940,13 +4959,61 @@ impl LivtkApp {
     /// holds it; when its time is up it fades out. Its id stays the same from one notice to the
     /// next, so a pointer over it stays over it; its animations are each notice's own, so a new
     /// one comes in afresh.
+    /// The notifications, bottom right above the dock: newest first, a few shown and the rest
+    /// counted.
     fn notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let n = self.model.notice()?;
-        let id = n.id;
+        let (shown, more) = self.model.toasts().shown();
+        if shown.is_empty() {
+            return None;
+        }
+        let mut stack = div()
+            .absolute()
+            // Above the dock's level, so the two never meet.
+            .bottom(px(DOCK_SPACE + 8.))
+            .right(px(16.))
+            .w(px(TOAST_WIDTH))
+            .flex()
+            .flex_col_reverse()
+            .gap_2();
+        for (i, t) in shown.into_iter().enumerate() {
+            stack = stack.child(self.toast(t, i == 0, cx));
+        }
+        if more > 0 {
+            stack = stack.child(
+                div()
+                    .debug_selector(|| "toasts-more".into())
+                    .self_end()
+                    .px_2()
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child(format!("+{more} more")),
+            );
+        }
+        Some(stack.into_any_element())
+    }
+
+    /// One notification: a bar and an icon in its level's colour, its title and markdown text
+    /// (four lines, then Show more), how many times it came, its buttons, and a close. The pointer
+    /// over it holds it. The newest answers to `notice` in tests.
+    fn toast(&self, t: &Toast, newest: bool, cx: &mut Context<Self>) -> AnyElement {
+        let id = t.id;
+        let (hue, glyph) = match t.level {
+            Level::Info => (ACCENT, Icon::Info),
+            Level::Success => (REVIEW, Icon::Check),
+            Level::Warning => (PROGRESS, Icon::Error),
+            Level::Error => (RED, Icon::Error),
+        };
+        let name = |what: &str| -> SharedString {
+            if newest {
+                format!("notice{what}").into()
+            } else {
+                format!("toast-{id}{what}").into()
+            }
+        };
+        let close_name = name("-close");
         let close = div()
-            .id("notice-close")
-            .debug_selector(|| "notice-close".into())
-            .group("notice-close")
+            .id(close_name.clone())
+            .debug_selector(move || close_name.to_string())
             .size(px(20.))
             .flex_none()
             .flex()
@@ -4954,48 +5021,136 @@ impl LivtkApp {
             .justify_center()
             .rounded_lg()
             .hover(|s| s.bg(color(HOVER)))
-            .child(icon_hover(Icon::Close, 14., TEXT_4, "notice-close", TEXT))
+            .child(icon(Icon::Close, 14., TEXT_3))
             .tooltip(|window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new("Close").build(window, cx)
             })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.model.dismiss_notice();
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.model.dismiss(id);
                 cx.notify();
             }));
+        let expanded = self.expanded.contains(&id);
+        let long = t.text.len() > TOAST_LONG || t.text.lines().count() > 4;
+        let text = div()
+            .id(SharedString::from(format!("toast-text-{id}")))
+            .text_color(color(TEXT_2))
+            .when(long && !expanded, |d| {
+                d.max_h(px(TOAST_CLIPPED)).overflow_hidden()
+            })
+            .when(expanded, |d| d.max_h(px(TOAST_OPEN)).overflow_y_scroll())
+            .child(TextView::markdown(
+                SharedString::from(format!("toast-md-{id}")),
+                t.text.clone(),
+            ));
+        let mut body = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when_some(t.title.clone(), |d, title| {
+                d.child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color(TEXT))
+                        .child(title),
+                )
+            })
+            .child(text);
+        if long {
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("toast-more-{id}")))
+                    .debug_selector(move || format!("toast-more-{id}"))
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .hover(|s| s.text_color(color(TEXT)))
+                    .child(if expanded { "Show less" } else { "Show more" })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.expanded.remove(&id) {
+                            this.expanded.insert(id);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        if !t.actions.is_empty() {
+            let mut row = div().flex().gap_2().pt_1();
+            for (i, b) in t.actions.iter().enumerate() {
+                let act = b.act.clone();
+                let act_name = name(&format!("-act-{i}"));
+                row = row.child(
+                    div()
+                        .id(act_name.clone())
+                        .debug_selector(move || act_name.to_string())
+                        .h(px(24.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .text_xs()
+                        .bg(color(if i == 0 { ACCENT } else { SURFACE }))
+                        .text_color(color(TEXT))
+                        .hover(|s| s.bg(color(if i == 0 { ACCENT_HOVER } else { HOVER })))
+                        .child(b.label.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.dismiss(id);
+                            this.act(&act, cx);
+                        })),
+                );
+            }
+            body = body.child(row);
+        }
+        let card_name = name("");
         let card = div()
-            .id("notice")
-            .debug_selector(|| "notice".into())
-            .py_3()
-            .pl_3()
-            .pr_2()
+            .id(card_name.clone())
+            .debug_selector(move || card_name.to_string())
+            .w_full()
             .rounded_xl()
+            .overflow_hidden()
             .bg(color(LIFTED))
             .border_1()
-            .border_color(with_alpha(if n.error { RED } else { ACCENT }, 0.5))
+            .border_color(color(BORDER_STRONG))
             .text_color(color(TEXT))
+            .text_sm()
             .shadow_lg()
             .flex()
-            .items_start()
-            .gap_2()
-            // Presses here are the notice's: nothing under it is clicked through it.
+            // Presses here are the notification's: nothing under it is clicked through it.
             .occlude()
             // Only the pointer lets it go: a key pressed with the pointer resting on it, which
             // GPUI by default takes as leaving, does not.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.model.hold_notice(*hovered, Instant::now());
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.model.hold(id, *hovered, Instant::now());
                 cx.notify();
             }))
-            .child(if n.error {
-                icon(Icon::Error, 16., RED)
-            } else {
-                icon(Icon::Info, 16., ACCENT)
-            })
-            .child(div().flex_1().child(n.text.clone()))
-            .child(close);
-        let card = if n.leaving.is_some() {
+            .child(div().w(px(3.)).flex_none().bg(color(hue)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .py_3()
+                    .pl_3()
+                    .pr_2()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .child(icon(glyph, 16., hue))
+                    .child(body)
+                    .when(t.count > 1, |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child(format!("×{}", t.count)),
+                        )
+                    })
+                    .child(close),
+            );
+        let card = if t.leaving.is_some() {
             card.with_animation(
-                SharedString::from(format!("notice-out-{id}")),
+                SharedString::from(format!("toast-out-{id}")),
                 Animation::new(NOTICE_FADE).with_easing(ease_in_out),
                 |el, t| el.opacity(1.0 - t),
             )
@@ -5004,22 +5159,24 @@ impl LivtkApp {
             card.into_any_element()
         };
         // The coming in is drawn whether or not the card is leaving, so it plays once per
-        // notice: one caught while fading comes back at full strength, not in again from nothing.
-        Some(
-            div()
-                .absolute()
-                // Above the dock's level, so the two never meet.
-                .bottom(px(DOCK_SPACE + 8.))
-                .right(px(16.))
-                .max_w(px(520.))
-                .child(card)
-                .with_animation(
-                    SharedString::from(format!("notice-in-{id}")),
-                    Animation::new(NOTICE_IN).with_easing(ease_out_quint()),
-                    |el, t| el.opacity(t),
-                )
-                .into_any_element(),
-        )
+        // notification: one caught while fading comes back at full strength.
+        div()
+            .child(card)
+            .with_animation(
+                SharedString::from(format!("toast-in-{id}")),
+                Animation::new(NOTICE_IN).with_easing(ease_out_quint()),
+                |el, t| el.opacity(t),
+            )
+            .into_any_element()
+    }
+
+    /// A notification's button pressed.
+    fn act(&mut self, act: &Act, cx: &mut Context<Self>) {
+        match act {
+            Act::Open(arrival) => self.model.open_arrival(arrival),
+            Act::RestartToUpdate => self.restart_to_update(cx),
+        }
+        cx.notify();
     }
 }
 
@@ -6125,6 +6282,17 @@ fn reindent_field(field: &Entity<TextareaState>, out: bool, window: &mut Window,
         s.replace(new, window, cx);
         s.set_selected_range(after, cx);
     });
+}
+
+/// What the notifications show, to tell when the window must draw again: each shown one and
+/// whether it is leaving.
+fn told(m: &Model) -> Vec<(u64, bool)> {
+    m.toasts()
+        .shown()
+        .0
+        .iter()
+        .map(|t| (t.id, t.leaving.is_some()))
+        .collect()
 }
 
 /// A sub-task shown away from its parent: the parent's key, quietly.

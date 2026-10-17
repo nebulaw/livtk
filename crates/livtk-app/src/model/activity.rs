@@ -32,14 +32,25 @@ impl Model {
         }
     }
 
-    /// Load the newest events, as many as are shown already, and mark them seen: the human is
-    /// looking at them.
+    /// Load the newest events, as many as are shown already (of the days picked in the grid, if
+    /// any), and mark them seen: the human is looking at them. The grid's counts with them.
     pub(super) fn load_activity(&mut self) {
         let Some(p) = self.projects.get(self.current) else {
             return;
         };
+        match p.ws.activity_by_day() {
+            Ok(days) => self.grid.set_days(&days),
+            Err(e) => self.warn(e.to_string()),
+        }
+        let Some(p) = self.projects.get(self.current) else {
+            return;
+        };
         let want = self.activity.len().max(PAGE);
-        match p.ws.activity(None, want) {
+        let page = match self.grid.pick.and_then(super::grid::pick_bounds) {
+            Some((from, to)) => p.ws.activity_in(&from, &to, None, want),
+            None => p.ws.activity(None, want),
+        };
+        match page {
             Ok(events) => {
                 self.activity_more = events.len() == want;
                 if let Some(newest) = events.first()
@@ -64,13 +75,42 @@ impl Model {
             return;
         };
         let before = self.activity.last().map(|a| a.event.id);
-        match p.ws.activity(before, PAGE) {
+        let page = match self.grid.pick.and_then(super::grid::pick_bounds) {
+            Some((from, to)) => p.ws.activity_in(&from, &to, before, PAGE),
+            None => p.ws.activity(before, PAGE),
+        };
+        match page {
             Ok(older) => {
                 self.activity_more = older.len() == PAGE;
                 self.activity.extend(older);
             }
             Err(e) => self.warn(e.to_string()),
         }
+    }
+
+    /// Pick `day` in the grid (with `extend`, the days from the one picked before): the feed
+    /// shows those days only.
+    pub fn grid_pick(&mut self, day: jiff::civil::Date, extend: bool) {
+        self.grid.pick(day, extend);
+        self.reload_feed();
+    }
+
+    /// The feed for every day again.
+    pub fn grid_unpick(&mut self) {
+        if self.grid.pick.take().is_some() {
+            self.reload_feed();
+        }
+    }
+
+    /// The grid's span, who or what changed: it counts again.
+    pub fn grid_changed(&mut self) {
+        self.load_activity();
+    }
+
+    fn reload_feed(&mut self) {
+        self.activity.clear();
+        self.activity_index = 0;
+        self.load_activity();
     }
 
     pub(super) fn activity_select_by(&mut self, delta: isize) {

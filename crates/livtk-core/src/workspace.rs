@@ -544,6 +544,36 @@ impl Workspace {
         Ok(self.store.events_page(None, 1)?.first().map(|e| e.id))
     }
 
+    /// How many events each day holds, by who, what and the state moved to: what the
+    /// activity grid draws.
+    pub fn activity_by_day(&self) -> Result<Vec<crate::store::DayEvents>> {
+        self.store.events_by_day()
+    }
+
+    /// The activity feed between `from` and `to` (UTC, RFC 3339; `to` excluded): up to `limit`
+    /// events, newest first, before `before` or from the newest.
+    pub fn activity_in(
+        &self,
+        from: &str,
+        to: &str,
+        before: Option<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Activity>> {
+        let mut out = Vec::new();
+        for event in self.store.events_page_in(from, to, before, limit)? {
+            let (node, other) = event.op.subjects();
+            out.push(Activity {
+                node: self.store.brief(node)?,
+                other: match other {
+                    Some(o) => self.store.brief(o)?,
+                    None => None,
+                },
+                event,
+            });
+        }
+        Ok(out)
+    }
+
     /// The events after `after` (or the whole log), oldest first: what a reader of signals
     /// that stopped there has not seen.
     pub fn events_after(&self, after: Option<Uuid>) -> Result<Vec<Event>> {

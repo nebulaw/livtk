@@ -30,6 +30,8 @@ pub struct Saved {
     pub views: BTreeMap<String, SavedView>,
     /// The human was told this app posts no notifications where it ran: not again.
     pub told_no_notifications: bool,
+    /// The activity grid folded away.
+    pub grid_folded: bool,
     pub window: SavedWindow,
 }
 
@@ -172,6 +174,7 @@ impl Model {
             show_all: false,
             views,
             told_no_notifications: self.told_no_notifications,
+            grid_folded: self.grid.folded,
             window: SavedWindow::default(),
         }
     }
@@ -221,6 +224,7 @@ impl Model {
             }
         }
         self.told_no_notifications |= saved.told_no_notifications;
+        self.grid.folded = saved.grid_folded;
         self.layout = match saved.layout.as_deref() {
             Some("board") => Layout::Board,
             _ => Layout::List,

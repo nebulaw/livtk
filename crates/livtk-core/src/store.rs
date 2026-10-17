@@ -136,6 +136,20 @@ pub struct Summary {
     pub parent: Option<Uuid>,
 }
 
+/// Events of one kind on one day: see `Store::events_by_day`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DayEvents {
+    /// The day, `YYYY-MM-DD`, in this machine's time zone.
+    pub day: String,
+    /// Made by the human, else by Claude (or a hook).
+    pub human: bool,
+    /// The operation, as `node.set`.
+    pub op: String,
+    /// For a `node.set` that moved the node, the state it moved to.
+    pub state: Option<String>,
+    pub count: u64,
+}
+
 /// A short reference to a node, for lists of links.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Brief {
@@ -446,6 +460,53 @@ impl Store {
             .iter()
             .map(|l| serde_json::from_str(l).map_err(Error::from))
             .collect()
+    }
+
+    /// A page of the log between `from` (inclusive) and `to` (exclusive), times as the log
+    /// writes them (UTC, RFC 3339), newest first: up to `limit` events before `before`.
+    pub fn events_page_in(
+        &self,
+        from: &str,
+        to: &str,
+        before: Option<Uuid>,
+        limit: usize,
+    ) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT line FROM events WHERE at >= ?1 AND at < ?2 AND (?3 IS NULL OR id < ?3) \
+             ORDER BY id DESC LIMIT ?4",
+        )?;
+        let lines: Vec<String> = stmt
+            .query_map(
+                params![from, to, before.map(|b| b.to_string()), limit as i64],
+                |r| r.get(0),
+            )?
+            .collect::<rusqlite::Result<_>>()?;
+        lines
+            .iter()
+            .map(|l| serde_json::from_str(l).map_err(Error::from))
+            .collect()
+    }
+
+    /// How many events each day holds, in this machine's time zone: by whether the human made
+    /// them, the operation, and for a move the state moved to. One grouped pass over the log.
+    pub fn events_by_day(&self) -> Result<Vec<DayEvents>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT date(at, 'localtime'), by = 'human', op, \
+             json_extract(line, '$.data.state'), count(*) \
+             FROM events GROUP BY 1, 2, 3, 4",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DayEvents {
+                    day: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    human: r.get(1)?,
+                    op: r.get(2)?,
+                    state: r.get(3)?,
+                    count: r.get::<_, i64>(4)?.max(0) as u64,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
     }
 
     /// Every link, as (source, relation, destination).

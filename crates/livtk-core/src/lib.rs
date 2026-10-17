@@ -21,7 +21,7 @@ pub use error::{Error, Result};
 pub use event::{Event, Op};
 pub use model::{Actor, Kind, Rel, State};
 pub use search::Hit;
-pub use store::{Brief, Node, Snapshot, Summary};
+pub use store::{Brief, DayEvents, Node, Snapshot, Summary};
 pub use workspace::{
     Activity, Command, Config, DIR_NAME, Gate, Gates, Hooks, Links, Memory, RECALL_MAX, Scope,
     UNSEEN_CAP, Workspace, find_dir, link_allowed,

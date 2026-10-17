@@ -1589,6 +1589,8 @@ fn the_sidebar_edge_resizes_it_within_limits_and_snaps_to_the_rail(cx: &mut Test
 fn ctrl_b_and_the_top_bar_button_collapse_and_expand_the_sidebar(cx: &mut TestAppContext) {
     let dir = project();
     let (_app, cx) = open_app(cx, dir.path());
+    // What the toggles do, not the slide, which moves the button while it plays.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
     cx.simulate_keystrokes("secondary-b");
     redraw(cx);
@@ -2764,4 +2766,26 @@ fn the_palette_opens_on_top_of_about(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     app.read_with(cx, |a, _| assert!(!a.palette_open(), "one Esc closes it"));
+}
+
+/// A day clicked in the activity grid shows that day in the feed; Esc shows every day again.
+#[gpui_kit::test]
+fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g a");
+    redraw(cx);
+    let today = livtk_app::model::grid::today();
+    click_on(cx, named(format!("grid-{today}")));
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().grid.pick, Some((today, today)));
+        assert!(!a.model().activity.is_empty(), "today's events");
+    });
+    assert!(
+        cx.debug_bounds("grid-unpick").is_some(),
+        "the pick is shown"
+    );
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().grid.pick, None));
 }

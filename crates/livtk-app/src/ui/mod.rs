@@ -5,6 +5,7 @@
 //! Keys are bound only on the list area. Text fields (the filter, notes, the new-task form) live
 //! outside it, so typing never triggers a command.
 
+mod activity_grid;
 pub mod icons;
 pub mod menus;
 pub mod state_flow;
@@ -544,6 +545,9 @@ pub struct LivtkApp {
     checking_updates: bool,
     /// Notifications opened with Show more.
     expanded: std::collections::HashSet<u64>,
+    /// The activity grid's sideways scrolling, and the range it was last scrolled to the end for.
+    grid_scroll: ScrollHandle,
+    grid_scrolled_for: Option<crate::model::grid::Span>,
     /// Each board column's own scrolling, so a card moved to comes into view.
     column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
@@ -743,6 +747,8 @@ impl LivtkApp {
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             column_scrolls: Default::default(),
+            grid_scroll: ScrollHandle::new(),
+            grid_scrolled_for: None,
             update: None,
             checking_updates: false,
             expanded: Default::default(),
@@ -925,6 +931,8 @@ impl LivtkApp {
             Menu::DetailState => "detail-state",
             Menu::Standing => "standing",
             Menu::Projects => "projects",
+            Menu::GridSpan => "grid-span",
+            Menu::GridWhat => "grid-what",
         })
     }
 
@@ -3260,7 +3268,7 @@ impl LivtkApp {
         }
         match (self.model.view, self.model.layout) {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
-            (View::Activity, _) => self.feed(cx),
+            (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
             // No column to draw: nothing matches, or every column is empty and hidden.
             (View::Tasks, Layout::Board) if self.model.columns().is_empty() => empty(
@@ -3577,14 +3585,37 @@ impl LivtkApp {
 
     /// The activity feed: day headings and one line per event, newest first, virtualised as the
     /// lists are; "Show older" ends it while more pages wait.
+    /// The Activity view: the grid above, the days picked in it, then the feed.
+    fn activity_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let grid = self.activity_grid(cx);
+        let chip = self.grid_pick_chip(cx);
+        let feed = self.feed(cx);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(grid)
+            .children(chip)
+            .child(div().flex_1().min_h_0().child(feed))
+            .into_any_element()
+    }
+
     fn feed(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.model.activity.is_empty() {
             return div()
                 .size_full()
                 .child(empty(
                     Icon::Activity,
-                    "No activity yet",
-                    "What Claude and you do in this project shows up here, newest first.",
+                    if self.model.grid.pick.is_some() {
+                        "Nothing on these days"
+                    } else {
+                        "No activity yet"
+                    },
+                    if self.model.grid.pick.is_some() {
+                        "Pick another day in the grid, or clear the pick above."
+                    } else {
+                        "What Claude and you do in this project shows up here, newest first."
+                    },
                 ))
                 .into_any_element();
         }
@@ -5418,6 +5449,10 @@ impl Render for LivtkApp {
                     this.escape(window, cx);
                 } else if this.help || this.about || this.form.is_some() {
                     this.close_top(window, cx);
+                } else if this.model.detail.is_none() && this.model.grid.pick.is_some() {
+                    // In the feed, the days picked in the grid give way to every day.
+                    this.model.grid_unpick();
+                    cx.notify();
                 } else {
                     this.model.close_detail();
                     cx.notify();
@@ -5723,6 +5758,9 @@ enum Menu {
     Standing,
     /// The projects, from the collapsed sidebar's rail.
     Projects,
+    /// The activity grid's range, and what it counts.
+    GridSpan,
+    GridWhat,
 }
 
 /// The selection's highlight gliding between two neighbouring lines, named as `spot` names them.

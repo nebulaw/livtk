@@ -12,6 +12,7 @@ use uuid::Uuid;
 mod activity;
 mod flow;
 mod graph;
+pub mod grid;
 pub mod keys;
 mod palette;
 mod saved;
@@ -357,6 +358,8 @@ pub struct Model {
     pub leaving: Vec<(Summary, usize, Instant)>,
     /// What the app tells the human in the window.
     toasts: Toasts,
+    /// The activity grid above the feed.
+    pub grid: grid::Grid,
     /// Projects with `[[on]]` hooks the human wrote to since the view last took them: their
     /// hooks are to be run, apart from the window.
     wrote: Vec<(PathBuf, Option<Uuid>)>,
@@ -439,6 +442,7 @@ impl Model {
             flashed: HashMap::new(),
             leaving: Vec::new(),
             toasts: Toasts::default(),
+            grid: grid::Grid::default(),
             wrote: Vec::new(),
             told_no_notifications: false,
             catch_ups: Vec::new(),
@@ -513,6 +517,7 @@ impl Model {
             self.selected = None;
             self.band = None;
             self.detail = None;
+            self.grid.pick = None;
             self.leaving.clear();
             self.flashed.clear();
             self.enter_activity();

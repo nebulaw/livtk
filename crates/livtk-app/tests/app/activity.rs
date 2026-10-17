@@ -360,3 +360,132 @@ fn tab_indents_the_lines_a_selection_touches_and_shift_tab_outdents_them() {
         "and back one level"
     );
 }
+
+mod grid {
+    use jiff::civil::{Date, date};
+    use livtk_app::model::grid::{Grid, Span, What, Who};
+    use livtk_core::DayEvents;
+
+    fn row(day: &str, human: bool, op: &str, state: Option<&str>, count: u64) -> DayEvents {
+        DayEvents {
+            day: day.into(),
+            human,
+            op: op.into(),
+            state: state.map(Into::into),
+            count,
+        }
+    }
+
+    fn grid() -> Grid {
+        let mut g = Grid::default();
+        g.set_days(&[
+            row("2026-10-14", false, "node.create", None, 2),
+            row("2026-10-15", true, "node.set", Some("acked"), 1),
+            row("2026-10-15", false, "node.note", None, 3),
+            row("2026-10-16", false, "node.set", Some("done"), 8),
+            row("2026-10-16", true, "node.set", Some("ratified"), 2),
+            row("2025-03-01", false, "node.create", None, 1),
+        ]);
+        g
+    }
+
+    const TODAY: Date = date(2026, 10, 16);
+
+    fn day(g: &Grid, d: Date) -> (u64, u8) {
+        g.drawn(TODAY)
+            .weeks
+            .iter()
+            .flatten()
+            .flatten()
+            .find(|c| c.day == d)
+            .map(|c| (c.count, c.level))
+            .unwrap_or((0, 0))
+    }
+
+    #[test]
+    fn days_count_by_who_and_what_and_weeks_start_on_monday() {
+        let mut g = grid();
+        let drawn = g.drawn(TODAY);
+        let first = drawn.weeks[0].iter().flatten().next().unwrap().day;
+        assert!(
+            drawn
+                .weeks
+                .iter()
+                .all(|w| w.iter().flatten().all(|c| c.day <= TODAY))
+        );
+        assert_eq!(first, date(2025, 10, 17), "a year back");
+        // Wednesday 2026-10-14 sits in row 2 (Monday is row 0).
+        let week = drawn
+            .weeks
+            .iter()
+            .find(|w| w.iter().flatten().any(|c| c.day == date(2026, 10, 14)))
+            .unwrap();
+        assert_eq!(week[2].as_ref().unwrap().day, date(2026, 10, 14));
+        assert_eq!(day(&g, date(2026, 10, 15)).0, 4, "everyone's");
+        g.who = Who::Human;
+        assert_eq!(day(&g, date(2026, 10, 15)).0, 1, "the human's only");
+        g.who = Who::All;
+        g.what = What::Decisions;
+        assert_eq!(day(&g, date(2026, 10, 16)).0, 2, "the ratification");
+        g.what = What::Done;
+        assert_eq!(day(&g, date(2026, 10, 16)).0, 8);
+    }
+
+    #[test]
+    fn levels_follow_the_ranges_own_busy_days_and_streaks_run_to_today() {
+        let g = grid();
+        assert_eq!(day(&g, date(2026, 10, 13)).1, 0, "nothing");
+        assert!(day(&g, date(2026, 10, 14)).1 < day(&g, date(2026, 10, 16)).1);
+        assert_eq!(day(&g, date(2026, 10, 16)).1, 4, "the busiest");
+        let s = g.drawn(TODAY).summary;
+        assert_eq!(s.total, 16);
+        assert_eq!(s.busiest, Some((date(2026, 10, 16), 10)));
+        assert_eq!((s.current, s.longest), (3, 3), "Oct 14 to 16");
+        assert_eq!((s.done, s.decisions), (8, 3));
+    }
+
+    #[test]
+    fn a_year_shows_that_year_and_a_pick_extends_to_a_span() {
+        let mut g = grid();
+        assert_eq!(g.years(TODAY), [2026, 2025]);
+        g.span = Span::Year(2025);
+        let drawn = g.drawn(TODAY);
+        let days: Vec<_> = drawn.weeks.iter().flatten().flatten().collect();
+        assert_eq!(days.first().unwrap().day, date(2025, 1, 1));
+        assert_eq!(days.last().unwrap().day, date(2025, 12, 31));
+        assert_eq!(drawn.summary.total, 1);
+        g.pick(date(2026, 10, 16), false);
+        g.pick(date(2026, 10, 14), true);
+        assert_eq!(g.pick, Some((date(2026, 10, 14), date(2026, 10, 16))));
+    }
+}
+
+/// A day picked in the grid shows that day's events only; unpicked, all of them again.
+#[test]
+fn a_day_picked_in_the_grid_filters_the_feed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::init(dir.path(), Some("LIV")).unwrap();
+    ws.execute(
+        Command::Create {
+            kind: Kind::Task,
+            title: "today's".into(),
+            body: String::new(),
+            priority: None,
+            links: vec![],
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Activity);
+    let today = livtk_app::model::grid::today();
+    assert!(!m.activity.is_empty());
+    m.grid_pick(today.yesterday().unwrap(), false);
+    assert!(m.activity.is_empty(), "nothing happened yesterday");
+    m.grid_pick(today, true);
+    assert_eq!(m.activity.len(), 1, "yesterday to today");
+    m.grid_unpick();
+    assert_eq!(m.activity.len(), 1);
+    assert!(m.grid.drawn(today).summary.total >= 1, "today counted");
+}

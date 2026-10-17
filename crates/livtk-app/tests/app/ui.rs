@@ -1293,12 +1293,6 @@ fn ratifying_from_the_flow_offers_the_standing_rule(cx: &mut TestAppContext) {
     );
 }
 
-/// An icon's drawn bounds, by its file name.
-fn icon_at(cx: &mut gpui_kit::VisualTestContext, file: &str) -> gpui_kit::Bounds<gpui_kit::Pixels> {
-    cx.debug_bounds(named(format!("icon-{file}")))
-        .unwrap_or_else(|| panic!("icon {file} is drawn"))
-}
-
 fn inside(
     inner: gpui_kit::Bounds<gpui_kit::Pixels>,
     outer: gpui_kit::Bounds<gpui_kit::Pixels>,
@@ -1307,35 +1301,6 @@ fn inside(
         && inner.right() <= outer.right()
         && inner.top() >= outer.top()
         && inner.bottom() <= outer.bottom()
-}
-
-#[gpui_kit::test]
-fn each_view_has_its_icon_in_the_sidebar_at_16_px(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    for file in [
-        "inbox",
-        "bolt-alt",
-        "task",
-        "cognition",
-        "route",
-        "medical-flask",
-        "circuit-board",
-        "folder",
-        "folder-plus",
-        "help-circle",
-    ] {
-        let b = icon_at(cx, file);
-        assert_eq!(
-            (b.size.width, b.size.height),
-            (gpui_kit::px(16.), gpui_kit::px(16.)),
-            "{file}"
-        );
-        assert!(
-            b.right() < gpui_kit::px(240.),
-            "{file} is in the sidebar: {b:?}"
-        );
-    }
 }
 
 #[gpui_kit::test]

@@ -28,9 +28,9 @@ use uuid::Uuid;
 use crate::model::keys;
 use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Model, Ordering, Quiet, Run,
-    Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe, drop_allowed,
-    has_flow, link_choices, link_curve, state_name, steps_with, visible_runs,
+    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Model, Ordering, Palette,
+    Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe,
+    drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -129,6 +129,10 @@ const TOAST_OPEN: f32 = 320.;
 const TOAST_LONG: usize = 220;
 /// The detail panel opening and closing: it grows from the right edge and the list makes room.
 const SLIDE: Duration = Duration::from_millis(240);
+/// The expanded sidebar's rows: the rail's icon size, and a font to match.
+const NAV_ICON: f32 = 18.;
+const NAV_ROW: f32 = 32.;
+const NAV_TEXT: f32 = 15.;
 const SLIDE_OUT: Duration = Duration::from_millis(200);
 /// The selection's highlight gliding to the next row or the one before.
 const GLIDE: Duration = Duration::from_millis(120);
@@ -551,6 +555,17 @@ pub struct LivtkApp {
     /// The sidebar's width when expanded, and whether the human collapsed it to the rail.
     sidebar_width: f32,
     sidebar_collapsed: bool,
+    /// The sidebar's last shape (the rail or not) and its width then, and how many times it
+    /// changed: a change slides it from the one to the other.
+    rail_was: Option<(bool, f32)>,
+    rail_epoch: usize,
+    /// Where the last change slid from: the sidebar's width and the content's top.
+    rail_from: Option<(f32, f32)>,
+    /// The palette as last shown, the one folding away after it closed, and how many times it
+    /// opened or closed.
+    palette_last: Option<Palette>,
+    palette_leaving: Option<Palette>,
+    palette_epoch: usize,
     /// Expanded by hand although the window is narrow enough for the rail; forgotten once the
     /// window is wide again.
     sidebar_peek: bool,
@@ -559,6 +574,8 @@ pub struct LivtkApp {
     resizing: Option<Edge>,
     /// The edge under the pointer (or being dragged), where along it, and since which arrival.
     edge_hover: Option<EdgeHover>,
+    /// The glow the pointer just left, fading out.
+    edge_leaving: Option<EdgeHover>,
     edge_epoch: usize,
     /// The edge the pointer is over, dragging or not.
     edge_inside: Option<Edge>,
@@ -738,10 +755,17 @@ impl LivtkApp {
             graph_press: None,
             sidebar_width: SIDEBAR_WIDTH,
             sidebar_collapsed: false,
+            rail_was: None,
+            rail_epoch: 0,
+            rail_from: None,
+            palette_last: None,
+            palette_leaving: None,
+            palette_epoch: 0,
             sidebar_peek: false,
             panel_width: PANEL_WIDTH,
             resizing: None,
             edge_hover: None,
+            edge_leaving: None,
             edge_epoch: 0,
             edge_inside: None,
             saved_path: None,
@@ -1746,14 +1770,21 @@ impl LivtkApp {
                 .id("open-folder")
                 .group("nav")
                 .px_2()
-                .h(px(28.))
+                .h(px(NAV_ROW))
+                .text_size(px(NAV_TEXT))
                 .flex()
                 .items_center()
                 .gap_2()
                 .rounded_lg()
                 .text_color(color(TEXT_4))
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                .child(icon_hover(Icon::OpenProject, 16., TEXT_4, "nav", TEXT_3))
+                .child(icon_hover(
+                    Icon::OpenProject,
+                    NAV_ICON,
+                    TEXT_4,
+                    "nav",
+                    TEXT_3,
+                ))
                 .child("Open project")
                 .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
         );
@@ -1807,14 +1838,15 @@ impl LivtkApp {
                     .id("shortcuts")
                     .group("nav")
                     .px_2()
-                    .h(px(28.))
+                    .h(px(NAV_ROW))
+                    .text_size(px(NAV_TEXT))
                     .flex()
                     .items_center()
                     .gap_2()
                     .rounded_lg()
                     .text_color(color(TEXT_4))
                     .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                    .child(icon_hover(Icon::Shortcuts, 16., TEXT_4, "nav", TEXT_3))
+                    .child(icon_hover(Icon::Shortcuts, NAV_ICON, TEXT_4, "nav", TEXT_3))
                     .child(div().flex_1().child("Shortcuts"))
                     .child(kbd(keys::MOD))
                     .child(kbd("?"))
@@ -1838,10 +1870,12 @@ impl LivtkApp {
             Edge::Panel => "panel-edge",
         };
         let dragging = self.resizing == Some(edge);
-        let glow = self
-            .edge_hover
-            .filter(|h| h.edge == edge)
-            .map(|h| edge_glow(h, dragging, f32::from(window.viewport_size().height)));
+        let window_h = f32::from(window.viewport_size().height);
+        let glow = match (self.edge_hover, self.edge_leaving) {
+            (Some(h), _) if h.edge == edge => Some(edge_glow(h, dragging, window_h, false)),
+            (_, Some(h)) if h.edge == edge => Some(edge_glow(h, false, window_h, true)),
+            _ => None,
+        };
         div()
             .id(id)
             .debug_selector(move || id.into())
@@ -1860,8 +1894,7 @@ impl LivtkApp {
                 }
                 // Dragging keeps it lit wherever the pointer goes.
                 if this.resizing != Some(edge) && this.edge_hover.is_some_and(|h| h.edge == edge) {
-                    this.edge_hover = None;
-                    cx.notify();
+                    this.let_go_edge(cx);
                 }
             }))
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
@@ -1886,8 +1919,28 @@ impl LivtkApp {
             )
     }
 
+    /// The glow lets go: it fades out where it was, then is gone.
+    fn let_go_edge(&mut self, cx: &mut Context<Self>) {
+        let Some(h) = self.edge_hover.take() else {
+            return;
+        };
+        self.edge_leaving = Some(h);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(GLOW_OUT).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.edge_leaving.is_some_and(|l| l.epoch == h.epoch) {
+                    this.edge_leaving = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// The pointer over `edge` at height `y`: the glow follows it, fading in when it arrives.
     fn hover_edge(&mut self, edge: Edge, y: f32) {
+        self.edge_leaving = None;
         let epoch = match self.edge_hover {
             Some(h) if h.edge == edge => h.epoch,
             _ => {
@@ -4524,8 +4577,47 @@ impl LivtkApp {
     }
 
     /// The command palette: a field, what it finds in sections, and the keys that drive it.
+    /// The palette as it opens (or, from what it last showed, as it closes): fading in, and
+    /// opening from its centre to its sides, as if it unfolded; closing, the same in reverse,
+    /// letting the window through as it goes.
     fn palette_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let p = self.model.palette.clone()?;
+        let epoch = self.palette_epoch;
+        if let Some(p) = self.model.palette.clone() {
+            let card = self.palette_card(&p, cx);
+            let card = unfolding(card, epoch, false);
+            return Some(self.modal("palette-modal", false, card, cx));
+        }
+        let p = self.palette_leaving.clone()?;
+        let card = self.palette_card(&p, cx);
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .pb(px(16.))
+                .child(div().h(px(110.)).min_h(px(16.)).flex_shrink(20.))
+                .child(
+                    unfolding(card, epoch, true)
+                        .overflow_hidden()
+                        .rounded_xl()
+                        .bg(color(SURFACE))
+                        .border_1()
+                        .border_color(color(BORDER_STRONG))
+                        .shadow_lg(),
+                )
+                .with_animation(
+                    SharedString::from(format!("palette-out-{epoch}")),
+                    Animation::new(PALETTE_OUT).with_easing(ease_in_out),
+                    |el, t| el.bg(with_alpha(0x000000, 0.6 * (1. - t))).opacity(1. - t),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The palette's card for `p`.
+    fn palette_card(&mut self, p: &Palette, cx: &mut Context<Self>) -> Div {
         let mut results = div()
             .id("palette-results")
             .track_scroll(&self.palette_scroll)
@@ -4574,10 +4666,10 @@ impl LivtkApp {
             Some(pick) => Some(format!("{} · {}", pick.key, pick.choice.label)),
             None => self.model.acted_on().map(|r| r.key),
         };
-        let card = div()
+        div()
             .debug_selector(|| "palette".into())
             .key_context(PALETTE)
-            .w(px(640.))
+            .w(px(PALETTE_W))
             .flex()
             .flex_col()
             .on_action(cx.listener(|this, _: &PaletteUp, _, cx| this.move_palette(-1, cx)))
@@ -4641,8 +4733,37 @@ impl LivtkApp {
                     .child(div().w(px(8.)))
                     .child(kbd("Esc"))
                     .child("to close"),
-            );
-        Some(self.modal("palette-modal", false, card, cx))
+            )
+    }
+
+    /// Notice the palette opening or closing since the last frame: opening, its unfolding
+    /// plays; closing, what it last showed stays to fold away, then goes.
+    fn track_palette(&mut self, cx: &mut Context<Self>) {
+        match (&self.model.palette, self.palette_last.is_some()) {
+            (Some(p), was_open) => {
+                if !was_open {
+                    self.palette_epoch += 1;
+                    self.palette_leaving = None;
+                }
+                self.palette_last = Some(p.clone());
+            }
+            (None, true) => {
+                self.palette_epoch += 1;
+                self.palette_leaving = self.palette_last.take();
+                let epoch = self.palette_epoch;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(PALETTE_OUT).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.palette_epoch == epoch {
+                            this.palette_leaving = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            (None, false) => {}
+        }
     }
 
     /// An action's icon in the palette, so every row has one: a move shows the state it goes
@@ -5210,6 +5331,43 @@ impl Render for LivtkApp {
         let sidebar = self.sidebar(window, cx);
         let rail = self.rail(window);
         let titlebar = titlebar_height(window);
+        // Collapsing or expanding the sidebar slides it, and the content's top with it (beside
+        // the rail it leaves room for the traffic lights); a drag of its edge does not.
+        let side_w = self.sidebar_px(window);
+        let top = |rail: bool| if rail { titlebar.max(8.) } else { 8. };
+        let from = match self.rail_was {
+            Some((was, w)) if was != rail => {
+                self.rail_epoch += 1;
+                Some((w, top(was)))
+            }
+            _ => None,
+        };
+        if from.is_some() {
+            self.rail_from = from;
+        }
+        self.rail_was = Some((rail, side_w));
+        let (from_w, from_top) = self.rail_from.unwrap_or((side_w, top(rail)));
+        let to_top = top(rail);
+        let epoch = self.rail_epoch;
+        let sidebar = div()
+            .flex_none()
+            .h_full()
+            .overflow_hidden()
+            .child(sidebar)
+            .when(epoch == 0, |d| d.w(px(side_w)))
+            .with_animation(
+                SharedString::from(format!("sidebar-{epoch}")),
+                Animation::new(if epoch == 0 { Duration::ZERO } else { SLIDE })
+                    .with_easing(ease_out_cubic),
+                move |el, t| {
+                    if epoch == 0 {
+                        el
+                    } else {
+                        el.w(px(from_w + (side_w - from_w) * t))
+                            .opacity(0.4 + 0.6 * t)
+                    }
+                },
+            );
         let header = self.header(window, cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
@@ -5283,7 +5441,7 @@ impl Render for LivtkApp {
                         let _ = released.update(cx, |app, cx| {
                             // Let go away from the edge, its glow goes; over it, it stays.
                             if app.edge_inside != app.resizing {
-                                app.edge_hover = None;
+                                app.let_go_edge(cx);
                             }
                             app.resizing = None;
                             cx.notify();
@@ -5298,6 +5456,7 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
+        self.track_palette(cx);
         let palette = self.palette_overlay(cx);
         let notice = self.notice(cx);
         let list_area = div()
@@ -5493,20 +5652,38 @@ impl Render for LivtkApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    // Beside the rail, the traffic lights are wider than it: the content starts
-                    // below their strip, which drags the window there too.
-                    .pt(px(if rail { titlebar.max(8.) } else { 8. }))
                     .pb_2()
                     .pr_2()
                     .relative()
-                    .when(rail, |d| {
-                        d.children(titlebar_strip("content-titlebar", titlebar))
-                    })
+                    .flex()
+                    .flex_col()
+                    // Beside the rail, the traffic lights are wider than it: the content starts
+                    // below their strip, which drags the window there too. Sliding with the
+                    // sidebar.
+                    // The strip that drags the window lies in that room, clipped to it, so it
+                    // never covers the header below, however far the room has grown.
+                    .child(
+                        div()
+                            .flex_none()
+                            .relative()
+                            .overflow_hidden()
+                            .when(rail, |d| {
+                                d.children(titlebar_strip("content-titlebar", titlebar))
+                            })
+                            .with_animation(
+                                SharedString::from(format!("content-top-{epoch}")),
+                                Animation::new(if epoch == 0 { Duration::ZERO } else { SLIDE })
+                                    .with_easing(ease_out_cubic),
+                                move |el, t| el.h(px(from_top + (to_top - from_top) * t)),
+                            ),
+                    )
                     .children(panel_edge.map(|e| e.right_0()))
                     .child(
                         div()
                             .debug_selector(|| "content-box".into())
-                            .size_full()
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
                             .flex()
                             .rounded_xl()
                             .border_1()
@@ -5660,15 +5837,16 @@ const EDGE_W: f32 = 8.;
 /// The glow along a hovered edge, and the handle at its middle.
 const GLOW_LEN: f32 = 120.;
 const HANDLE: f32 = 20.;
-/// The glow fading in as the pointer arrives.
+/// The glow fading in as the pointer arrives, and out as it leaves.
 const GLOW_IN: Duration = Duration::from_millis(140);
+const GLOW_OUT: Duration = Duration::from_millis(180);
 
 /// The glow on an edge at the pointer: a lens of light, accent at its middle and thickest
 /// there, thinning and fading to nothing at both ends, and the handle on it. Three pills of
 /// light make the lens, each shorter and wider than the last; where they overlap the light is
 /// strongest. Drawn last (deferred), so it lies over the panes on either side; it takes no
 /// pointer events. While dragging it is brighter.
-fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32) -> AnyElement {
+fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32, leaving: bool) -> AnyElement {
     let half = GLOW_LEN / 2.;
     let y = h.y.clamp(half, (window_h - half).max(half));
     let strength = if dragging { 1. } else { 0.75 };
@@ -5723,9 +5901,14 @@ fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32) -> AnyElement {
                     .child(icon(Icon::Resize, 12., TEXT)),
             )
             .with_animation(
-                SharedString::from(format!("edge-glow-{}", h.epoch)),
-                Animation::new(GLOW_IN).with_easing(ease_out_cubic),
-                |el, t| el.opacity(t),
+                SharedString::from(format!(
+                    "edge-glow-{}-{}",
+                    h.epoch,
+                    if leaving { "out" } else { "in" }
+                )),
+                Animation::new(if leaving { GLOW_OUT } else { GLOW_IN })
+                    .with_easing(ease_out_cubic),
+                move |el, t| el.opacity(if leaving { 1. - t } else { t }),
             ),
     )
     .into_any_element()
@@ -5862,7 +6045,8 @@ fn nav_item(
         .id(id)
         .group("nav")
         .px_2()
-        .h(px(28.))
+        .h(px(NAV_ROW))
+        .text_size(px(NAV_TEXT))
         .rounded_lg()
         .flex()
         .items_center()
@@ -5873,9 +6057,9 @@ fn nav_item(
                 .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_2)))
         })
         .child(if active {
-            icon(glyph, 16., TEXT)
+            icon(glyph, NAV_ICON, TEXT)
         } else {
-            icon_hover(glyph, 16., TEXT_4, "nav", TEXT_3)
+            icon_hover(glyph, NAV_ICON, TEXT_4, "nav", TEXT_3)
         })
         .child(div().flex_1().truncate().child(label.to_owned()))
         .when(count > 0, |d| {
@@ -6328,6 +6512,36 @@ fn parent_chip(key: &str) -> Div {
         .text_color(color(TEXT_4))
         .child(icon(Icon::SubTask, 12., TEXT_4))
         .child(key.to_owned())
+}
+
+/// The palette's width, and how long it takes to fold away.
+const PALETTE_W: f32 = 640.;
+const PALETTE_IN: Duration = Duration::from_millis(220);
+const PALETTE_OUT: Duration = Duration::from_millis(160);
+
+/// `card` unfolding from its centre to its sides (or, `closing`, folding back to its centre):
+/// its middle shows first, its sides come as it widens, nothing in it moves.
+fn unfolding(card: Div, epoch: usize, closing: bool) -> Div {
+    // Columns that may shrink, so on a short window the card still gives way and scrolls.
+    div().flex().flex_col().min_h_0().child(
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .min_h_0()
+            .overflow_hidden()
+            .child(card.flex_none().min_h_0().flex_shrink(1.))
+            .with_animation(
+                SharedString::from(format!("palette-unfold-{epoch}-{closing}")),
+                Animation::new(if closing { PALETTE_OUT } else { PALETTE_IN })
+                    .with_easing(ease_out_quint()),
+                move |el, t| {
+                    let open = if closing { 1. - t } else { t };
+                    el.w(px(PALETTE_W * (0.55 + 0.45 * open)))
+                        .opacity(0.2 + 0.8 * open)
+                },
+            ),
+    )
 }
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.

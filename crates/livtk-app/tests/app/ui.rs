@@ -1337,6 +1337,23 @@ fn modals_fit_a_short_window_and_scroll_inside(cx: &mut TestAppContext) {
     );
 }
 
+/// The top bar's field opens the palette, as its keys do; Esc closes it. The dock has no palette button.
+#[gpui_kit::test]
+fn the_top_bars_field_opens_the_palette_over_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let bar = cx.debug_bounds("top-bar").expect("the top bar");
+    let field = cx.debug_bounds("top-field").expect("its field");
+    assert!(inside(field, bar));
+    click_on(cx, "top-field");
+    app.read_with(cx, |a, _| assert!(a.palette_open()));
+    cx.simulate_keystrokes("escape");
+    app.read_with(cx, |a, _| assert!(!a.palette_open()));
+    cx.simulate_keystrokes("cmd-k");
+    app.read_with(cx, |a, _| assert!(a.palette_open(), "its keys too"));
+    assert!(cx.debug_bounds("dock-palette").is_none());
+}
+
 /// Which of the dock's buttons are drawn.
 fn dock_holds(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
     [
@@ -1351,7 +1368,6 @@ fn dock_holds(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
         "layout-tabs",
         "layout-list",
         "layout-board",
-        "dock-palette",
     ]
     .into_iter()
     .filter(|b| cx.debug_bounds(b).is_some())
@@ -1362,11 +1378,7 @@ fn dock_holds(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
 fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
     let dir = linked_project();
     let (_app, cx) = open_app(cx, dir.path());
-    assert_eq!(
-        dock_holds(cx),
-        ["filter-button", "dock-palette"],
-        "the inbox"
-    );
+    assert_eq!(dock_holds(cx), ["filter-button"], "the inbox");
     cx.simulate_keystrokes("g t");
     cx.run_until_parked();
     assert_eq!(
@@ -1377,7 +1389,6 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
             "dock-grouping",
             "dock-ordering",
             "dock-view",
-            "dock-palette"
         ],
         "tasks"
     );
@@ -1390,20 +1401,15 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
             "dock-grouping",
             "dock-ordering",
             "dock-view",
-            "dock-palette"
         ],
         "lessons"
     );
     cx.simulate_keystrokes("g a");
     cx.run_until_parked();
-    assert_eq!(dock_holds(cx), ["dock-palette"], "the feed");
+    assert!(dock_holds(cx).is_empty(), "the feed");
     cx.simulate_keystrokes("g r");
     draw_graph(cx);
-    assert_eq!(
-        dock_holds(cx),
-        ["zoom-in", "dock-dismissed", "dock-palette"],
-        "the graph"
-    );
+    assert_eq!(dock_holds(cx), ["zoom-in", "dock-dismissed"], "the graph");
     let header = cx.debug_bounds("view-header").unwrap();
     for gone in ["dock-view", "dock-new-task"] {
         if let Some(b) = cx.debug_bounds(gone) {
@@ -1476,12 +1482,10 @@ fn the_last_row_and_card_scroll_clear_of_the_dock(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_docks_new_task_and_palette_buttons_work(cx: &mut TestAppContext) {
+fn the_docks_new_task_button_works(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    click_on(cx, "dock-palette");
-    app.read_with(cx, |a, _| assert!(a.palette_open()));
-    cx.simulate_keystrokes("escape g t");
+    cx.simulate_keystrokes("g t");
     cx.run_until_parked();
     click_on(cx, "dock-new-task");
     app.read_with(cx, |a, _| assert!(a.form_open()));

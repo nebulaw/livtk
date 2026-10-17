@@ -172,11 +172,22 @@ const _: () = assert!(
     "the room must be whole rows"
 );
 /// On macOS the window's titlebar is the app's own: the traffic lights sit on the window's black
-/// at its top left, in a strip of this height atop the sidebar (or the rail, with the content
-/// below it then) that drags the window. Elsewhere the system's titlebar stays, and this is 0.
-const TITLEBAR: f32 = if cfg!(target_os = "macos") { 36. } else { 0. };
-/// Where the traffic lights sit in that strip, centred in its height.
-const TRAFFIC_LIGHTS: (f32, f32) = (14., 11.);
+/// at the top bar's left, and the bar drags the window. Elsewhere the system's titlebar stays,
+/// and this is 0.
+const TITLEBAR: f32 = if cfg!(target_os = "macos") {
+    TOP_BAR
+} else {
+    0.
+};
+/// The bar across the window's top, over the sidebar, the content and the panel: the palette's
+/// field in its middle, the panels' toggles at its right.
+const TOP_BAR: f32 = 48.;
+/// The palette's field in the top bar, at most this wide, and how long its hover takes to come
+/// up or go.
+const TOP_FIELD_W: f32 = 520.;
+const HOVER_FADE: Duration = Duration::from_millis(150);
+/// Where the traffic lights sit in the top bar, centred in its height.
+const TRAFFIC_LIGHTS: (f32, f32) = (20., 18.);
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
 /// An arrowhead on screen: its tip, and the way it points.
@@ -563,8 +574,12 @@ pub struct LivtkApp {
     /// changed: a change slides it from the one to the other.
     rail_was: Option<(bool, f32)>,
     rail_epoch: usize,
-    /// Where the last change slid from: the sidebar's width and the content's top.
-    rail_from: Option<(f32, f32)>,
+    /// The sidebar's width the last change slid from.
+    rail_from: Option<f32>,
+    /// Whether the pointer is over the top bar's field, and how many times that changed: a
+    /// change fades its hover in or out.
+    top_field_hover: bool,
+    top_field_epoch: usize,
     /// Expanded by hand although the window is narrow enough for the rail; forgotten once the
     /// window is wide again.
     sidebar_peek: bool,
@@ -760,6 +775,8 @@ impl LivtkApp {
             rail_was: None,
             rail_epoch: 0,
             rail_from: None,
+            top_field_hover: false,
+            top_field_epoch: 0,
             sidebar_peek: false,
             panel_width: PANEL_WIDTH,
             resizing: None,
@@ -1731,7 +1748,7 @@ impl LivtkApp {
 
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.rail(window) {
-            return self.rail_bar(titlebar_height(window), cx);
+            return self.rail_bar(cx);
         }
         let mut side = div()
             .debug_selector(|| "sidebar".into())
@@ -1743,9 +1760,8 @@ impl LivtkApp {
             .flex_col()
             .px_2()
             .pb_3()
-            .pt(px(titlebar_height(window).max(12.)))
+            .pt_1()
             .gap(px(2.))
-            .children(titlebar_strip("sidebar-titlebar", titlebar_height(window)))
             .child(section_label("Projects"));
         for (i, p) in self.model.projects.iter().enumerate() {
             let current = i == self.model.current;
@@ -1982,7 +1998,7 @@ impl LivtkApp {
 
     /// The collapsed sidebar: a rail of icons. The project switcher, each view with a dot when
     /// it holds something new, and the shortcuts; names in tooltips.
-    fn rail_bar(&self, titlebar: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn rail_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let inbox = self.model.project().map_or(0, |p| p.inbox);
         let unseen = self.model.project().map_or(0, |p| p.unseen);
         let mut rail = div()
@@ -1995,9 +2011,8 @@ impl LivtkApp {
             .flex_col()
             .items_center()
             .pb_3()
-            .pt(px(titlebar.max(12.)))
-            .gap(px(2.))
-            .children(titlebar_strip("rail-titlebar", titlebar));
+            .pt_1()
+            .gap(px(2.));
         let open = self.menu == Some(Menu::Projects);
         let projects = rail_button(
             "rail-projects".into(),
@@ -2089,6 +2104,109 @@ impl LivtkApp {
 
     /// The top bar: the sidebar's toggle, then the view's name and how many items it holds; its
     /// controls live in the dock.
+    /// The bar across the window's top: on macOS the traffic lights at its left, and a press on
+    /// it drags the window (a double-click zooms it, as the system's titlebar does). In its
+    /// middle, the palette's field at rest: what it searches; a click, or its
+    /// keys, opens the palette. Its right end is kept for the panels' toggles.
+    fn top_bar(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let field = div()
+            .id("top-field")
+            .debug_selector(|| "top-field".into())
+            .w(px(TOP_FIELD_W))
+            .max_w_full()
+            .min_w_0()
+            .h(px(30.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER))
+            .text_sm()
+            .text_color(color(TEXT_3))
+            .relative()
+            // Its hover comes up and goes in a breath: a lighter layer over the field (under its
+            // text), fading, so the field itself (what the pointer is over) never changes.
+            .child({
+                let (over, epoch) = (self.top_field_hover, self.top_field_epoch);
+                div()
+                    .absolute()
+                    .top(px(-1.))
+                    .left(px(-1.))
+                    .right(px(-1.))
+                    .bottom(px(-1.))
+                    .rounded_lg()
+                    .bg(color(HOVER))
+                    .border_1()
+                    .border_color(color(BORDER_STRONG))
+                    .opacity(if over { 1. } else { 0. })
+                    .with_animation(
+                        SharedString::from(format!("top-field-{epoch}")),
+                        Animation::new(if epoch == 0 {
+                            Duration::ZERO
+                        } else {
+                            HOVER_FADE
+                        })
+                        .with_easing(ease_out_cubic),
+                        move |el, t| el.opacity(if over { t } else { 1. - t }),
+                    )
+            })
+            .on_hover(cx.listener(|this, over: &bool, _, cx| {
+                if this.top_field_hover != *over {
+                    this.top_field_hover = *over;
+                    this.top_field_epoch += 1;
+                    cx.notify();
+                }
+            }))
+            .child(icon(Icon::Search, 15., TEXT_4))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child("Search tasks and commands"),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(color(TEXT_4))
+                    .child(keys::PALETTE),
+            )
+            // Its press is its own: it never drags the window.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)));
+        let titlebar = titlebar_height(window) > 0.;
+        div()
+            .id("top-bar")
+            .debug_selector(|| "top-bar".into())
+            .flex_none()
+            .w_full()
+            .h(px(TOP_BAR))
+            .relative()
+            .when(titlebar, |d| {
+                d.on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+                    if e.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        window.start_window_move();
+                    }
+                })
+            })
+            // Centred on the window, whatever sits at either end.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .px(px(120.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(field),
+            )
+    }
+
     fn header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = &self.model;
         let rail = self.rail(window);
@@ -2515,7 +2633,6 @@ impl LivtkApp {
         if !shaping.is_empty() {
             groups.push(shaping);
         }
-        groups.push(vec![self.dock_palette(cx)]);
 
         let mut dock = div()
             .debug_selector(|| "dock".into())
@@ -2733,40 +2850,6 @@ impl LivtkApp {
                 .on_click(cx.listener(|this, _, _, cx| this.zoom_graph(ZOOM_STEP, cx)))
                 .into_any_element(),
         ]
-    }
-
-    /// The palette, set apart from the tools before it: an icon alone at every width, in a
-    /// filled, bordered square of its own.
-    fn dock_palette(&self, cx: &mut Context<Self>) -> AnyElement {
-        let open = self.model.palette.is_some();
-        div()
-            .id("dock-palette")
-            .debug_selector(|| "dock-palette".into())
-            .group("dock-palette")
-            .size(px(30.))
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .rounded_lg()
-            .border_1()
-            .border_color(color(BORDER_STRONG))
-            .when(open, |b| b.bg(color(SELECTED)))
-            .when(!open, |b| b.bg(color(LIFTED)).hover(|h| h.bg(color(HOVER))))
-            .child(if open {
-                icon(Icon::Search, 16., TEXT)
-            } else {
-                icon_hover(Icon::Search, 16., TEXT_2, "dock-palette", TEXT)
-            })
-            .tooltip(|window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(format!(
-                    "Command palette · {}",
-                    keys::PALETTE
-                ))
-                .build(window, cx)
-            })
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)))
-            .into_any_element()
     }
 
     fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -5297,15 +5380,12 @@ impl Render for LivtkApp {
         }
         let sidebar = self.sidebar(window, cx);
         let rail = self.rail(window);
-        let titlebar = titlebar_height(window);
-        // Collapsing or expanding the sidebar slides it, and the content's top with it (beside
-        // the rail it leaves room for the traffic lights); a drag of its edge does not.
+        // Collapsing or expanding the sidebar slides it; a drag of its edge does not.
         let side_w = self.sidebar_px(window);
-        let top = |rail: bool| if rail { titlebar.max(8.) } else { 8. };
         let from = match self.rail_was {
             Some((was, w)) if was != rail => {
                 self.rail_epoch += 1;
-                Some((w, top(was)))
+                Some(w)
             }
             _ => None,
         };
@@ -5313,8 +5393,7 @@ impl Render for LivtkApp {
             self.rail_from = from;
         }
         self.rail_was = Some((rail, side_w));
-        let (from_w, from_top) = self.rail_from.unwrap_or((side_w, top(rail)));
-        let to_top = top(rail);
+        let from_w = self.rail_from.unwrap_or(side_w);
         let epoch = self.rail_epoch;
         let sidebar = div()
             .flex_none()
@@ -5335,6 +5414,7 @@ impl Render for LivtkApp {
                     }
                 },
             );
+        let top_bar = self.top_bar(window, cx);
         let header = self.header(window, cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
@@ -5528,6 +5608,7 @@ impl Render for LivtkApp {
             .size_full()
             .relative()
             .flex()
+            .flex_col()
             .bg(color(WINDOW))
             .text_color(color(TEXT_2))
             .text_sm()
@@ -5619,78 +5700,66 @@ impl Render for LivtkApp {
                 this.nav.focus(window, cx);
                 cx.notify();
             }))
-            .child(sidebar)
+            .child(top_bar)
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .pb_2()
-                    .pr_2()
+                    .min_h_0()
                     .relative()
                     .flex()
-                    .flex_col()
-                    // Beside the rail, the traffic lights are wider than it: the content starts
-                    // below their strip, which drags the window there too. Sliding with the
-                    // sidebar.
-                    // The strip that drags the window lies in that room, clipped to it, so it
-                    // never covers the header below, however far the room has grown.
+                    .child(sidebar)
                     .child(
                         div()
-                            .flex_none()
-                            .relative()
-                            .overflow_hidden()
-                            .when(rail, |d| {
-                                d.children(titlebar_strip("content-titlebar", titlebar))
-                            })
-                            .with_animation(
-                                SharedString::from(format!("content-top-{epoch}")),
-                                Animation::new(if epoch == 0 { Duration::ZERO } else { SLIDE })
-                                    .with_easing(ease_out_cubic),
-                                move |el, t| el.h(px(from_top + (to_top - from_top) * t)),
-                            ),
-                    )
-                    .children(panel_edge.map(|e| e.right_0()))
-                    .child(
-                        div()
-                            .debug_selector(|| "content-box".into())
-                            .w_full()
                             .flex_1()
-                            .min_h_0()
+                            .min_w_0()
+                            .h_full()
+                            .pb_2()
+                            .pr_2()
+                            .relative()
                             .flex()
-                            .rounded_xl()
-                            .border_1()
-                            .border_color(color(BORDER))
-                            .bg(color(CONTENT))
-                            .overflow_hidden()
+                            .flex_col()
+                            .children(panel_edge.map(|e| e.right_0()))
                             .child(
                                 div()
-                                    .relative()
+                                    .debug_selector(|| "content-box".into())
+                                    .w_full()
                                     .flex_1()
-                                    .min_w_0()
-                                    .h_full()
+                                    .min_h_0()
                                     .flex()
-                                    .flex_col()
-                                    .child(header)
-                                    .child(list_area)
-                                    // Floating over the content's bottom, centred on it; it moves
-                                    // with the content as the detail panel opens beside it.
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(color(BORDER))
+                                    .bg(color(CONTENT))
+                                    .overflow_hidden()
                                     .child(
                                         div()
-                                            .absolute()
-                                            .left_0()
-                                            .right_0()
-                                            .bottom(px(DOCK_GAP))
+                                            .relative()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
                                             .flex()
-                                            .justify_center()
-                                            .child(dock),
+                                            .flex_col()
+                                            .child(header)
+                                            .child(list_area)
+                                            // Floating over the content's bottom, centred on it; it moves
+                                            // with the content as the detail panel opens beside it.
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .left_0()
+                                                    .right_0()
+                                                    .bottom(px(DOCK_GAP))
+                                                    .flex()
+                                                    .justify_center()
+                                                    .child(dock),
+                                            ),
                                     ),
                             ),
-                    ),
+                    )
+                    // Beside the content box, on the window's own black, as the sidebar is: the content
+                    // stands alone in the middle.
+                    .children(detail),
             )
-            // Beside the content box, on the window's own black, as the sidebar is: the content
-            // stands alone in the middle.
-            .children(detail)
             .children(form)
             .children(palette)
             .children(help)
@@ -5708,29 +5777,6 @@ fn titlebar_height(window: &Window) -> f32 {
     } else {
         0.
     }
-}
-
-/// The strip of the app's own titlebar, `height` tall across the top of what holds it (which
-/// leaves it that room), where the traffic lights sit: a press drags the window, a double-click
-/// does what the system's titlebar does (zoom, by default). None when it has no height.
-fn titlebar_strip(id: &'static str, height: f32) -> Option<Stateful<Div>> {
-    (height > 0.).then(|| {
-        div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .h(px(height))
-            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
-                if e.click_count == 2 {
-                    window.titlebar_double_click();
-                } else {
-                    window.start_window_move();
-                }
-            })
-    })
 }
 
 fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {

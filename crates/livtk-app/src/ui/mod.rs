@@ -1885,7 +1885,7 @@ impl LivtkApp {
             if view == View::Tasks {
                 side = side.child(div().h(px(14.))).child(section_label("Views"));
             }
-            if view == View::Terminal {
+            if view == View::Graph {
                 side = side.child(div().h(px(14.))).child(section_label("Tools"));
             }
             let count = match view {
@@ -2203,7 +2203,7 @@ impl LivtkApp {
         for view in View::ALL {
             // The inbox and the feed, the views of the work, the tools, as the sidebar groups
             // them.
-            if matches!(view, View::Tasks | View::Terminal) {
+            if matches!(view, View::Tasks | View::Graph) {
                 rail = rail.child(div().h(px(14.)));
             }
             let new = match view {

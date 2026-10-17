@@ -713,3 +713,11 @@
 {"v":1,"id":"01a14a80-b950-7734-abcb-f5747469467f","at":"2026-10-17T15:35:12.464Z","by":"claude","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"doing"}}
 {"v":2,"id":"01a14a82-f1c9-7416-b453-52765649a155","at":"2026-10-17T15:37:37.993Z","by":"claude","op":"node.note","node":"01a14969-2e70-776b-861b-16781710f055","data":{"text":"Built: the view header (the view's name and its count) is gone; each view starts at the top of its pane. The terminal's title went with it."}}
 {"v":1,"id":"01a14a82-f1da-774a-b120-1a1d9a1831f7","at":"2026-10-17T15:37:38.010Z","by":"claude","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"review"}}
+{"v":1,"id":"01a14a89-84f9-722a-80ab-c4961dd7bb88","at":"2026-10-17T15:44:48.889Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"done"}}
+{"v":1,"id":"01a14a89-8c11-75d1-855f-f99313d1262f","at":"2026-10-17T15:44:50.705Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"doing"}}
+{"v":1,"id":"01a14a9c-b267-761a-a49d-39d66e98235a","at":"2026-10-17T16:05:45.703Z","by":"human","op":"edge.add","data":{"src":"01a14969-2e70-776b-861b-16781710f055","dst":"01a14956-4e5c-7716-abea-1fae879653bc","rel":"depends_on"}}
+{"v":1,"id":"01a14a9c-c206-753d-98a2-b64130e4a87b","at":"2026-10-17T16:05:49.702Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"acked"}}
+{"v":1,"id":"01a14a9c-e84f-771e-90d5-f9a7eced66a9","at":"2026-10-17T16:05:59.503Z","by":"human","op":"edge.remove","data":{"src":"01a14969-2e70-776b-861b-16781710f055","dst":"01a14956-4e5c-7716-abea-1fae879653bc","rel":"depends_on"}}
+{"v":1,"id":"01a14a9c-eb7f-77f4-b03f-2ebc4af7cd00","at":"2026-10-17T16:06:00.319Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"doing"}}
+{"v":1,"id":"01a14a9c-eef2-7447-9315-6604a592d7da","at":"2026-10-17T16:06:01.202Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"review"}}
+{"v":1,"id":"01a14a9c-f7bd-7546-9ee3-14b189fdbacc","at":"2026-10-17T16:06:03.453Z","by":"human","op":"node.set","node":"01a14969-2e70-776b-861b-16781710f055","data":{"state":"done"}}

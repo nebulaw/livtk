@@ -88,6 +88,11 @@ icons! {
     Close => "x",
     /// A sub-task, under its parent.
     SubTask => "turn-right",
+    /// The notifications' marks: an error, a warning, an update ready, anything else told.
+    Bug => "bug",
+    Bell => "bell",
+    Meteor => "meteor",
+    Message => "message-circle-notification",
 }
 
 /// Icon `i`, `size` across, in colour `c`.

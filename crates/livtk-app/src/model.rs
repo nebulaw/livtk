@@ -29,7 +29,7 @@ pub use graph::{
 };
 pub use palette::{Action, Ask, Found, Item, LinkPick, Palette, Run, fuzzy};
 pub use saved::{Saved, SavedView, SavedWindow};
-pub use toasts::{Act, Button, Level, Toast, Toasts};
+pub use toasts::{Act, Button, Level, Mark, Toast, Toasts};
 
 /// The views in the sidebar, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1021,7 +1021,7 @@ impl Model {
             let source = failure_source(&p.dir);
             let was_failing = p.failure.is_some();
             match p.went(failure) {
-                Some(text) => failed.push((text, source)),
+                Some(text) => failed.push((sync_failed(&p.name, &text), source)),
                 None if was_failing && p.failure.is_none() => recovered.push(source),
                 None => {}
             }
@@ -1030,8 +1030,8 @@ impl Model {
         for source in recovered {
             self.toasts.clear_source(&source);
         }
-        for (text, source) in failed {
-            self.notify(Toast::error(text).source(source));
+        for (toast, source) in failed {
+            self.notify(toast.source(source));
         }
         if !changed {
             return began;
@@ -1154,7 +1154,8 @@ impl Model {
         let was_failing = p.failure.is_some();
         match p.went(failure) {
             Some(text) => {
-                self.notify(Toast::error(text).source(source));
+                let toast = sync_failed(&p.name, &text).source(source);
+                self.notify(toast);
             }
             None if was_failing && p.failure.is_none() => self.toasts.clear_source(&source),
             None => {}
@@ -1213,7 +1214,7 @@ impl Model {
                 "livtk.app would not open, so this runs here, without notifications."
             }
         };
-        self.notify(Toast::warning(text));
+        self.notify(Toast::warning(text).about("livtk", "Notifications"));
     }
 
     /// Close every notification.
@@ -1782,4 +1783,14 @@ fn nest(
 /// What a project's failure is raised as, so it is taken back once the project works again.
 fn failure_source(dir: &Path) -> String {
     format!("project:{}", dir.display())
+}
+
+/// A project's catching up failed, told as `failure` ("tasks: the disk is full"): its name first,
+/// as the notification's breadcrumb, and the rest as its text.
+fn sync_failed(name: &str, failure: &str) -> Toast {
+    let text = failure
+        .strip_prefix(name)
+        .and_then(|t| t.strip_prefix(": "))
+        .unwrap_or(failure);
+    Toast::error(text).about(name, "Sync failed")
 }

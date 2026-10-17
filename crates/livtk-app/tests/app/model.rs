@@ -283,6 +283,18 @@ fn a_log_rewritten_by_git_is_caught_up_off_the_ticking_thread() {
         "a failure is told: {:?}",
         m.notice()
     );
+    let n = m.notice().unwrap();
+    let name = m.projects[0].name.clone();
+    assert_eq!(
+        n.crumbs(),
+        (name.as_str(), "Sync failed"),
+        "the project, first"
+    );
+    assert!(
+        !n.text.starts_with(&name),
+        "and not again in the text: {}",
+        n.text
+    );
 }
 
 #[test]

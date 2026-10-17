@@ -9,6 +9,19 @@ use std::time::{Duration, Instant};
 
 use super::Arrival;
 
+/// What a notification is about: an error (a bug), a warning (a bell), a node waiting for the
+/// human (the inbox), an update ready (a meteor), anything else told (a message) or done
+/// (sparkles).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Bug,
+    Bell,
+    Inbox,
+    Meteor,
+    Message,
+    Sparkles,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Info,
@@ -49,6 +62,12 @@ pub struct Toast {
     /// Tells each apart, the same one counted again included: the view keys its animations by it.
     pub id: u64,
     pub level: Level,
+    /// What it is about, which picks its icon.
+    pub mark: Mark,
+    /// Where it comes from ("livtk", a project) and what it is ("Update"), shown first as a
+    /// breadcrumb; by its level when not given.
+    pub from: Option<String>,
+    pub what: Option<String>,
     pub title: Option<String>,
     /// Markdown.
     pub text: String,
@@ -69,6 +88,14 @@ impl Toast {
         Toast {
             id: 0,
             level,
+            mark: match level {
+                Level::Error => Mark::Bug,
+                Level::Warning => Mark::Bell,
+                Level::Info => Mark::Message,
+                Level::Success => Mark::Sparkles,
+            },
+            from: None,
+            what: None,
             title: None,
             text: text.into(),
             actions: Vec::new(),
@@ -99,6 +126,32 @@ impl Toast {
     pub fn title(mut self, title: impl Into<String>) -> Toast {
         self.title = Some(title.into());
         self
+    }
+
+    /// What it is about, for its icon.
+    pub fn mark(mut self, mark: Mark) -> Toast {
+        self.mark = mark;
+        self
+    }
+
+    /// Where it comes from and what it is: "tasks", "Sync failed".
+    pub fn about(mut self, from: impl Into<String>, what: impl Into<String>) -> Toast {
+        self.from = Some(from.into());
+        self.what = Some(what.into());
+        self
+    }
+
+    /// Its breadcrumb: where it comes from (the app, unless told) and what it is (by its
+    /// level, unless told).
+    pub fn crumbs(&self) -> (&str, &str) {
+        let from = self.from.as_deref().unwrap_or("livtk");
+        let what = self.what.as_deref().unwrap_or(match self.level {
+            Level::Error => "Error",
+            Level::Warning => "Warning",
+            Level::Info => "Notice",
+            Level::Success => "Done",
+        });
+        (from, what)
     }
 
     /// What raised it, so it can be taken back when that no longer holds.

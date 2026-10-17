@@ -30,8 +30,8 @@ use uuid::Uuid;
 use crate::model::keys;
 use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Model, Ordering, Palette,
-    Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe,
+    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Mark, Model, Ordering,
+    Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe,
     drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
@@ -754,6 +754,14 @@ impl LivtkApp {
                             app.model.notify(
                                 Toast::info(a.title.clone())
                                     .title(format!("{} waits for you", a.key))
+                                    .mark(Mark::Inbox)
+                                    .about(
+                                        app.model
+                                            .projects
+                                            .get(a.project)
+                                            .map_or("livtk".to_owned(), |p| p.name.clone()),
+                                        "Waits for you",
+                                    )
                                     .action("Open", Act::Open(a)),
                             );
                         }
@@ -1649,6 +1657,8 @@ impl LivtkApp {
                         app.model.notify(
                             Toast::success("Restart to install it when it suits you.")
                                 .title(format!("livtk build {} is ready", staged.manifest.build))
+                                .mark(Mark::Meteor)
+                                .about("livtk", "Update")
                                 .action("Restart to Update", Act::RestartToUpdate),
                         );
                         app.update = Some(staged);
@@ -2751,10 +2761,10 @@ impl LivtkApp {
 
     /// The dock: one compact bar floating over the bottom of the content, centred on it, holding
     /// what the view can do: a new task, the filter, grouping, ordering, view options (list or
-    /// board, empty groups, dismissed work; the graph's dismissed work alone), the graph's zoom,
-    /// and the palette. Labels show where there is room; else the icons
+    /// board, empty groups, dismissed work; the graph's dismissed work alone) and the graph's
+    /// zoom; none in a view with nothing for it. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
-    fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         let view = self.model.view;
         let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
@@ -2784,6 +2794,10 @@ impl LivtkApp {
         if !shaping.is_empty() {
             groups.push(shaping);
         }
+        // A view with nothing to do here (the feed) has no dock at all, not an empty one.
+        if groups.is_empty() {
+            return None;
+        }
 
         let mut dock = div()
             .debug_selector(|| "dock".into())
@@ -2808,7 +2822,7 @@ impl LivtkApp {
             }
             dock = dock.children(group);
         }
-        div().child(dock)
+        Some(div().child(dock))
     }
 
     /// A button of the dock: an icon, a label when `label` is given, a tooltip always.
@@ -5315,16 +5329,26 @@ impl LivtkApp {
         Some(stack.into_any_element())
     }
 
-    /// One notification: a bar and an icon in its level's colour, its title and markdown text
-    /// (four lines, then Show more), how many times it came, its buttons, and a close. The pointer
-    /// over it holds it. The newest answers to `notice` in tests.
+    /// One notification, drawn as the new task modal is: a breadcrumb (its icon in its level's
+    /// colour, where it comes from and what it is, how many times it came, and a close), its
+    /// title and markdown text (four lines, then Show more), and its buttons in a footer under a
+    /// hairline. The pointer over it holds it. The newest answers to `notice` in tests.
     fn toast(&self, t: &Toast, newest: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = t.id;
-        let (hue, glyph) = match t.level {
-            Level::Info => (ACCENT, Icon::Info),
-            Level::Success => (REVIEW, Icon::Check),
-            Level::Warning => (PROGRESS, Icon::Error),
-            Level::Error => (RED, Icon::Error),
+        let hue = match t.level {
+            Level::Info => ACCENT,
+            Level::Success => REVIEW,
+            Level::Warning => PROGRESS,
+            Level::Error => RED,
+        };
+        let glyph = match t.mark {
+            Mark::Bug => Icon::Bug,
+            Mark::Bell => Icon::Bell,
+            Mark::Inbox => Icon::Inbox,
+            Mark::Meteor => Icon::Meteor,
+            Mark::Message => Icon::Message,
+            // The sparkles, as Claude's own mark is drawn.
+            Mark::Sparkles => Icon::Claude,
         };
         let name = |what: &str| -> SharedString {
             if newest {
@@ -5352,6 +5376,26 @@ impl LivtkApp {
                 this.model.dismiss(id);
                 cx.notify();
             }));
+        let (from, what) = t.crumbs();
+        let crumbs = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .text_color(color(TEXT_3))
+            .child(icon(glyph, 14., hue))
+            .child(from.to_owned())
+            .child("›")
+            .child(what.to_owned())
+            .child(div().flex_1())
+            .when(t.count > 1, |d| {
+                d.child(
+                    div()
+                        .text_color(color(TEXT_4))
+                        .child(format!("×{}", t.count)),
+                )
+            })
+            .child(close);
         let expanded = self.expanded.contains(&id);
         let long = t.text.len() > TOAST_LONG || t.text.lines().count() > 4;
         let text = div()
@@ -5366,14 +5410,13 @@ impl LivtkApp {
                 t.text.clone(),
             ));
         let mut body = div()
-            .flex_1()
-            .min_w_0()
             .flex()
             .flex_col()
             .gap_1()
             .when_some(t.title.clone(), |d, title| {
                 d.child(
                     div()
+                        .text_base()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(color(TEXT))
                         .child(title),
@@ -5397,24 +5440,34 @@ impl LivtkApp {
                     })),
             );
         }
-        if !t.actions.is_empty() {
-            let mut row = div().flex().gap_2().pt_1();
+        // As the modal's footer: the first button its Create task, the rest quiet.
+        let footer = (!t.actions.is_empty()).then(|| {
+            let mut row = div().flex().justify_end().gap_2();
             for (i, b) in t.actions.iter().enumerate() {
                 let act = b.act.clone();
                 let act_name = name(&format!("-act-{i}"));
+                let first = i == 0;
                 row = row.child(
                     div()
                         .id(act_name.clone())
                         .debug_selector(move || act_name.to_string())
-                        .h(px(24.))
-                        .px_2()
+                        .h(px(28.))
+                        .px_3()
                         .flex()
                         .items_center()
-                        .rounded_md()
-                        .text_xs()
-                        .bg(color(if i == 0 { ACCENT } else { SURFACE }))
-                        .text_color(color(TEXT))
-                        .hover(|s| s.bg(color(if i == 0 { ACCENT_HOVER } else { HOVER })))
+                        .rounded_lg()
+                        .font_weight(FontWeight::MEDIUM)
+                        .when(first, |d| {
+                            d.bg(color(ACCENT))
+                                .text_color(color(TEXT))
+                                .hover(|s| s.bg(color(ACCENT_HOVER)))
+                        })
+                        .when(!first, |d| {
+                            d.border_1()
+                                .border_color(color(BORDER_STRONG))
+                                .text_color(color(TEXT_2))
+                                .hover(|s| s.bg(color(HOVER)))
+                        })
                         .child(b.label.clone())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.model.dismiss(id);
@@ -5422,22 +5475,24 @@ impl LivtkApp {
                         })),
                 );
             }
-            body = body.child(row);
-        }
+            row
+        });
         let card_name = name("");
         let card = div()
             .id(card_name.clone())
             .debug_selector(move || card_name.to_string())
             .w_full()
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_3()
             .rounded_xl()
-            .overflow_hidden()
-            .bg(color(LIFTED))
+            .bg(color(SURFACE))
             .border_1()
             .border_color(color(BORDER_STRONG))
+            .shadow_lg()
             .text_color(color(TEXT))
             .text_sm()
-            .shadow_lg()
-            .flex()
             // Presses here are the notification's: nothing under it is clicked through it.
             .occlude()
             // Only the pointer lets it go: a key pressed with the pointer resting on it, which
@@ -5447,30 +5502,11 @@ impl LivtkApp {
                 this.model.hold(id, *hovered, Instant::now());
                 cx.notify();
             }))
-            .child(div().w(px(3.)).flex_none().bg(color(hue)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .py_3()
-                    .pl_3()
-                    .pr_2()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(icon(glyph, 16., hue))
-                    .child(body)
-                    .when(t.count > 1, |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(color(TEXT_4))
-                                .child(format!("×{}", t.count)),
-                        )
-                    })
-                    .child(close),
-            );
+            .child(crumbs)
+            .child(body)
+            .when_some(footer, |d, footer| {
+                d.child(div().h(px(1.)).bg(color(BORDER))).child(footer)
+            });
         let card = if t.leaving.is_some() {
             card.with_animation(
                 SharedString::from(format!("toast-out-{id}")),
@@ -5904,7 +5940,7 @@ impl Render for LivtkApp {
                                                     .bottom(px(DOCK_GAP))
                                                     .flex()
                                                     .justify_center()
-                                                    .child(dock),
+                                                    .children(dock),
                                             ),
                                     ),
                             )

@@ -1407,6 +1407,7 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g a");
     cx.run_until_parked();
     assert!(dock_holds(cx).is_empty(), "the feed");
+    assert!(cx.debug_bounds("dock").is_none(), "and no empty dock there");
     cx.simulate_keystrokes("g r");
     draw_graph(cx);
     assert_eq!(dock_holds(cx), ["zoom-in", "dock-dismissed"], "the graph");

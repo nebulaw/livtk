@@ -45,7 +45,7 @@ impl Model {
                 if let Some(newest) = events.first()
                     && let Err(e) = p.ws.set_activity_seen(newest.event.id)
                 {
-                    self.notice = Some(e.to_string());
+                    self.warn(e.to_string());
                 }
                 // The highlight stays on the event it was on as newer ones arrive above it.
                 let on = self.activity.get(self.activity_index).map(|a| a.event.id);
@@ -54,7 +54,7 @@ impl Model {
                     .and_then(|id| self.activity.iter().position(|a| a.event.id == id))
                     .unwrap_or(0);
             }
-            Err(e) => self.notice = Some(e.to_string()),
+            Err(e) => self.warn(e.to_string()),
         }
     }
 
@@ -69,7 +69,7 @@ impl Model {
                 self.activity_more = older.len() == PAGE;
                 self.activity.extend(older);
             }
-            Err(e) => self.notice = Some(e.to_string()),
+            Err(e) => self.warn(e.to_string()),
         }
     }
 
@@ -215,4 +215,27 @@ fn capitalised(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
+}
+
+/// A note as markdown that keeps its line breaks: a note is written line by line (Shift+Enter),
+/// where markdown would join single lines into one. Code blocks and blank lines are left as
+/// they are.
+pub fn note_markdown(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len() + lines.len() * 2);
+    let mut code = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            code = !code;
+        }
+        out.push_str(line);
+        if i + 1 < lines.len() {
+            let next = lines[i + 1];
+            if !code && !line.trim().is_empty() && !next.trim().is_empty() {
+                out.push_str("  ");
+            }
+            out.push('\n');
+        }
+    }
+    out
 }

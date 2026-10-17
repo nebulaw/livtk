@@ -3,18 +3,19 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use livtk_core::event::Event;
+use livtk_core::event::{Event, Op};
 use livtk_core::{Actor, Brief, Command, Gate, Kind, Links, Node, Rel, State, Summary, Workspace};
 use uuid::Uuid;
 
 mod activity;
 mod flow;
 mod graph;
+pub mod keys;
 mod palette;
 mod saved;
-pub use activity::{FeedRow, created_as, day_label, describe};
+pub use activity::{FeedRow, created_as, day_label, describe, note_markdown};
 pub use flow::{
     Arrow, Look, Step, arrows, arrows_with, flow_of, has_flow, state_name, state_short, steps,
     steps_with,
@@ -63,6 +64,14 @@ impl View {
         }
     }
 
+    /// Whether the view can show dismissed work: the lists of one kind, and the graph.
+    pub const fn shows_dismissed(self) -> bool {
+        matches!(
+            self,
+            View::Tasks | View::Lessons | View::Decisions | View::Findings | View::Graph
+        )
+    }
+
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
@@ -98,15 +107,23 @@ pub enum Ordering {
     Created,
 }
 
-/// A view's display options, like Linear's Display menu. Kept per view while the app runs.
+/// A view's display options, like Linear's Display menu. Kept per view, and between runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Display {
     /// Shown only when the key or title contains this, ignoring case.
     pub filter: String,
     /// Shown only with one of these priorities; empty shows every priority.
     pub priorities: Vec<u8>,
+    /// Shown only in one of these states, in display order; empty shows every state.
+    pub states: Vec<State>,
     pub grouping: Grouping,
     pub ordering: Ordering,
+    /// Every group of the grouping is listed, an empty one with a count of 0, as in Linear: the
+    /// shape of the work shows, what has nothing in review, nothing planned.
+    pub show_empty: bool,
+    /// Include what was dismissed: canceled, rejected, retired, superseded. Done work is always
+    /// shown.
+    pub show_dismissed: bool,
 }
 
 impl Display {
@@ -114,14 +131,26 @@ impl Display {
         Display {
             filter: String::new(),
             priorities: Vec::new(),
+            states: Vec::new(),
             grouping: if matches!(view, View::Inbox | View::Activity | View::Graph) {
                 Grouping::None
             } else {
                 Grouping::State
             },
             ordering: Ordering::Priority,
+            show_empty: false,
+            show_dismissed: false,
         }
     }
+}
+
+/// Where `state` comes among `kind`'s states, as groups, columns and the filter order them: the
+/// kind's own order, its work flowing from first to last (for a task: backlog, planned,
+/// acknowledged, doing, review, done, then parked and canceled). Without a kind (the inbox mixes
+/// them), the order of all states.
+pub fn state_order(kind: Option<Kind>, state: State) -> u8 {
+    kind.and_then(|k| k.states().iter().position(|s| *s == state))
+        .map_or(state.rank(), |i| u8::try_from(i).unwrap_or(u8::MAX))
 }
 
 /// What a group gathers: a state, a priority, or everything.
@@ -156,16 +185,97 @@ pub struct Choice {
     pub decides: bool,
 }
 
+/// The pause before trying again to catch up a store whose catch-up failed: the first, and the
+/// longest it grows to, doubling each time it fails again.
+pub const RETRY_FIRST: Duration = Duration::from_secs(1);
+pub const RETRY_MAX: Duration = Duration::from_secs(30);
+
+/// How long a notice stays before it starts to leave, unless the pointer holds it.
+pub const NOTICE_FOR: Duration = Duration::from_secs(6);
+
+/// The last thing worth telling the human: a refusal, an error. It leaves on its own
+/// `NOTICE_FOR` after it was shown, fading out, but not while the pointer is over it; it can be
+/// closed; a new one takes its place and its time starts again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub text: String,
+    /// Something went wrong (a refusal, an error), or only something to know (a tool linked).
+    pub error: bool,
+    /// Counts the notices shown, so each is told apart from the one it replaced, even with the
+    /// same text: the view plays its animations afresh.
+    pub id: u64,
+    /// Fading out since then, if it is leaving.
+    pub leaving: Option<Instant>,
+    /// When its time started: when it was shown, or when the pointer last let go of it.
+    since: Instant,
+    /// The pointer is over it, so it stays.
+    held: bool,
+}
+
+/// Why this app posts no system notifications where it runs (macOS posts them only for its
+/// bundle), for the human to be told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quiet {
+    /// Not run from the bundle: told once ever.
+    NoBundle,
+    /// The bundle would not open: told when it happens.
+    OpenFailed,
+}
+
+/// Something that came into a project's inbox from someone else (Claude, an agent): what a
+/// system notification tells while the window is away.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrival {
+    /// The project, as an index into `Model::projects`.
+    pub project: usize,
+    pub id: Uuid,
+    pub key: String,
+    pub title: String,
+}
+
 /// One open project.
 pub struct Project {
     pub name: String,
     pub dir: PathBuf,
     pub inbox: usize,
+    /// What waits in its inbox, as last read.
+    inbox_items: Vec<Summary>,
     /// Events by others since the human last looked at the activity feed, up to a cap.
     pub unseen: usize,
     /// Whether its store is being brought up to date with its log on another thread.
     pub catching_up: bool,
+    /// Why bringing it up to date (looking for changes, catching up) failed last time, if it did.
+    failure: Option<String>,
+    /// After a failed catch-up, when the next may start, and the pause that led there.
+    next_try: Option<Instant>,
+    pause: Duration,
     ws: Workspace,
+}
+
+impl Project {
+    /// Record how bringing it up to date went: `Some` reason it failed, `None` it worked. Returns
+    /// what to tell the human. A failure that lasts is told once, when it begins or changes, not
+    /// on every tick or catch-up: each telling would start the notice's time again, and bring it
+    /// back once closed.
+    fn went(&mut self, failure: Option<String>) -> Option<String> {
+        let tell = failure.clone().filter(|f| self.failure.as_ref() != Some(f));
+        self.failure = failure;
+        tell
+    }
+
+    /// A catch-up failed at `now`: the next waits, a little longer each time, so a failure that
+    /// lasts (a read-only store, a lock held elsewhere) is not retried as fast as it fails.
+    fn try_later(&mut self, now: Instant) {
+        self.pause = (self.pause * 2).clamp(RETRY_FIRST, RETRY_MAX);
+        self.next_try = Some(now + self.pause);
+    }
+
+    /// Catching up worked, or the store is current: the next catch-up, if one is needed, starts
+    /// at once.
+    fn try_now(&mut self) {
+        self.pause = Duration::ZERO;
+        self.next_try = None;
+    }
 }
 
 /// Bringing a project's store up to date with its log: after a git pull, checkout or rebase,
@@ -250,9 +360,6 @@ pub struct Model {
     pub current: usize,
     pub view: View,
     pub layout: Layout,
-    /// Include what was dismissed: canceled, rejected, retired, superseded. Done work is always
-    /// shown.
-    pub show_all: bool,
     /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
     pub rows: Vec<Summary>,
     /// The groups of `rows`, in order.
@@ -265,10 +372,15 @@ pub struct Model {
     /// Rows the human just moved out of the current view, where they were, and when: the view
     /// fades them out in place.
     pub leaving: Vec<(Summary, usize, Instant)>,
-    /// The last thing worth telling the human: a refusal, an error.
-    pub notice: Option<String>,
+    notice: Option<Notice>,
+    /// How many notices were shown: the next one's id.
+    notices: u64,
+    /// Whether the human was told that this app posts no system notifications where it runs.
+    pub told_no_notifications: bool,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
+    /// What came into an inbox from someone else since the view last took it.
+    arrivals: Vec<Arrival>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
@@ -282,6 +394,8 @@ pub struct Model {
     /// The graph view's nodes, links, camera and selection.
     pub graph: Graph,
     selected: Option<Uuid>,
+    /// The group band the selection rests on in a list, instead of a row: Enter folds it.
+    band: Option<GroupKey>,
     /// Everything the view holds, before display options.
     all: Vec<Summary>,
     displays: HashMap<View, Display>,
@@ -292,7 +406,7 @@ impl Model {
     /// Open the given project directories. One that fails to open is reported, not fatal.
     pub fn open(dirs: &[PathBuf]) -> Model {
         let mut projects = Vec::new();
-        let mut notice = None;
+        let mut failed = None;
         for dir in dirs {
             match Workspace::open(dir) {
                 Ok(ws) => {
@@ -312,12 +426,16 @@ impl Model {
                         name,
                         dir: root,
                         inbox: 0,
+                        inbox_items: Vec::new(),
                         unseen: 0,
                         catching_up: false,
+                        failure: None,
+                        next_try: None,
+                        pause: Duration::ZERO,
                         ws,
                     });
                 }
-                Err(e) => notice = Some(format!("{}: {e}", dir.display())),
+                Err(e) => failed = Some(format!("{}: {e}", dir.display())),
             }
         }
         let mut model = Model {
@@ -325,15 +443,17 @@ impl Model {
             current: 0,
             view: View::Inbox,
             layout: Layout::List,
-            show_all: false,
             rows: Vec::new(),
             groups: Vec::new(),
             filtered: Vec::new(),
             detail: None,
             flashed: HashMap::new(),
             leaving: Vec::new(),
-            notice,
+            notice: None,
+            notices: 0,
+            told_no_notifications: false,
             catch_ups: Vec::new(),
+            arrivals: Vec::new(),
             palette: None,
             activity: Vec::new(),
             activity_more: false,
@@ -341,10 +461,14 @@ impl Model {
             activity_seen_before: None,
             graph: Graph::default(),
             selected: None,
+            band: None,
             all: Vec::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),
         };
+        if let Some(text) = failed {
+            model.warn(text);
+        }
         model.reload();
         model
     }
@@ -363,7 +487,9 @@ impl Model {
             self.select_project(before);
             true
         } else {
-            self.notice = more.notice;
+            if let Some(n) = more.notice {
+                self.warn(n.text);
+            }
             false
         }
     }
@@ -394,6 +520,7 @@ impl Model {
         if index < self.projects.len() && index != self.current {
             self.current = index;
             self.selected = None;
+            self.band = None;
             self.detail = None;
             self.leaving.clear();
             self.flashed.clear();
@@ -407,6 +534,7 @@ impl Model {
         if view != self.view {
             self.view = view;
             self.selected = None;
+            self.band = None;
             self.detail = None;
             self.leaving.clear();
             self.enter_activity();
@@ -415,7 +543,16 @@ impl Model {
         }
     }
 
+    /// List or board, as chosen from the View options menu.
+    pub fn set_layout(&mut self, layout: Layout) {
+        if self.layout != layout {
+            self.toggle_layout();
+        }
+    }
+
     pub fn toggle_layout(&mut self) {
+        // A band is a list's; the board has none.
+        self.band = None;
         self.layout = match self.layout {
             Layout::List => Layout::Board,
             Layout::Board => Layout::List,
@@ -426,16 +563,17 @@ impl Model {
         }
     }
 
-    pub fn toggle_show_all(&mut self) {
-        self.show_all = !self.show_all;
-        self.reload();
-    }
-
     // ---- selection ----------------------------------------------------------------------------
 
+    /// The selected node: a row of the list, or on the board any card, a folded group's too.
     pub fn selected(&self) -> Option<&Summary> {
         let id = self.selected?;
-        self.rows.iter().find(|r| r.id == id)
+        let shown = if self.on_board() {
+            &self.filtered
+        } else {
+            &self.rows
+        };
+        shown.iter().find(|r| r.id == id)
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -445,6 +583,7 @@ impl Model {
 
     pub fn select(&mut self, id: Uuid) {
         if self.rows.iter().any(|r| r.id == id) {
+            self.band = None;
             self.selected = Some(id);
             if self.detail.is_some() {
                 self.open_detail();
@@ -452,7 +591,18 @@ impl Model {
         }
     }
 
-    /// Move the selection by `delta` rows, stopping at the ends.
+    /// The group band the selection rests on, if it rests on one.
+    pub fn band(&self) -> Option<GroupKey> {
+        self.band
+    }
+
+    /// Whether the view is the tasks' board.
+    fn on_board(&self) -> bool {
+        self.view == View::Tasks && self.layout == Layout::Board
+    }
+
+    /// Move the selection by `delta`, stopping at the ends: in a list through its group bands
+    /// and their rows; on the board down a column and on into the next (up into the previous).
     pub fn select_by(&mut self, delta: isize) {
         if self.view == View::Activity {
             self.activity_select_by(delta);
@@ -462,24 +612,120 @@ impl Model {
             self.graph_select_by(delta);
             return;
         }
-        if self.rows.is_empty() {
+        if self.on_board() {
+            self.board_select_by(delta);
             return;
         }
-        let next = match self.selected_index() {
+        // A list's stops: each group's band (when grouped), then its rows shown.
+        let mut stops: Vec<(Option<GroupKey>, Option<Uuid>)> = Vec::new();
+        for g in &self.groups {
+            if g.key != GroupKey::All {
+                stops.push((Some(g.key), None));
+            }
+            for r in &self.rows[g.start..g.start + g.shown] {
+                stops.push((None, Some(r.id)));
+            }
+        }
+        if stops.is_empty() {
+            return;
+        }
+        let at = stops.iter().position(|(band, row)| match self.band {
+            Some(k) => *band == Some(k),
+            None => row.is_some() && *row == self.selected,
+        });
+        let next = match at {
             None => 0,
-            Some(i) => i.saturating_add_signed(delta).min(self.rows.len() - 1),
+            Some(i) => i.saturating_add_signed(delta).min(stops.len() - 1),
         };
-        let id = self.rows[next].id;
-        self.select(id);
+        match stops[next] {
+            (Some(k), _) => {
+                self.band = Some(k);
+                self.selected = None;
+            }
+            (_, Some(id)) => self.select(id),
+            _ => {}
+        }
     }
 
-    /// The node actions act on: the selected row, or, where no row is selected (the activity
-    /// feed), the node open in the detail panel.
-    pub fn acted_on(&self) -> Option<Summary> {
-        if let Some(row) = self.selected() {
-            return Some(row.clone());
+    /// The board's columns that hold cards, as their cards' ids, and where the selection is.
+    fn board_at(&self) -> (Vec<Vec<Uuid>>, Option<(usize, usize)>) {
+        let cols: Vec<Vec<Uuid>> = self
+            .columns()
+            .into_iter()
+            .map(|(_, rows)| rows.iter().map(|r| r.id).collect::<Vec<_>>())
+            .filter(|c| !c.is_empty())
+            .collect();
+        let at = self.selected.and_then(|id| {
+            cols.iter()
+                .enumerate()
+                .find_map(|(c, col)| col.iter().position(|x| *x == id).map(|i| (c, i)))
+        });
+        (cols, at)
+    }
+
+    fn board_select_by(&mut self, delta: isize) {
+        let (cols, at) = self.board_at();
+        let Some((c, i)) = at else {
+            if let Some(&id) = cols.first().and_then(|c| c.first()) {
+                self.select_card(id);
+            }
+            return;
+        };
+        let (c, i) = if delta > 0 {
+            if i + 1 < cols[c].len() {
+                (c, i + 1)
+            } else if c + 1 < cols.len() {
+                (c + 1, 0)
+            } else {
+                (c, i)
+            }
+        } else if i > 0 {
+            (c, i - 1)
+        } else if c > 0 {
+            (c - 1, cols[c - 1].len() - 1)
+        } else {
+            (c, i)
+        };
+        self.select_card(cols[c][i]);
+    }
+
+    /// `h` and `l` on the board: to the column `delta` along, as far down as it goes.
+    pub fn select_column_by(&mut self, delta: isize) {
+        if !self.on_board() {
+            return;
         }
-        let n = &self.detail.as_ref()?.node;
+        let (cols, at) = self.board_at();
+        let Some((c, i)) = at else {
+            return self.board_select_by(1);
+        };
+        let to = c.saturating_add_signed(delta).min(cols.len() - 1);
+        self.select_card(cols[to][i.min(cols[to].len() - 1)]);
+    }
+
+    /// Select a card on the board, which shows the cards of groups folded in the list too.
+    fn select_card(&mut self, id: Uuid) {
+        self.band = None;
+        self.selected = Some(id);
+        if self.detail.is_some() {
+            self.open_detail();
+        }
+    }
+
+    /// Enter: fold or unfold the band the selection rests on; else open the selected node.
+    pub fn enter(&mut self) {
+        match self.band {
+            Some(k) => self.toggle_collapsed(k),
+            None => self.open_detail(),
+        }
+    }
+
+    /// The node actions act on: the one open in the panel, which is what the human is looking
+    /// at (a change from elsewhere can move the selection while the panel stays); else the
+    /// selected row.
+    pub fn acted_on(&self) -> Option<Summary> {
+        let Some(n) = self.detail.as_ref().map(|d| &d.node) else {
+            return self.selected().cloned();
+        };
         Some(Summary {
             id: n.id,
             key: n.key.clone(),
@@ -509,7 +755,7 @@ impl Model {
         };
         match load_detail(&project.ws, id) {
             Ok(d) => self.detail = Some(d),
-            Err(e) => self.notice = Some(e.to_string()),
+            Err(e) => self.warn(e.to_string()),
         }
     }
 
@@ -622,14 +868,15 @@ impl Model {
         self.run(Command::Unlink { src, rel, dst }, None);
     }
 
+    /// Add a note to the node acted on: the one open in the panel, whose field it is written in.
     pub fn add_note(&mut self, text: &str) {
-        let Some(row) = self.acted_on() else {
+        let Some(node) = self.acted_on().map(|r| r.id) else {
             return;
         };
         if !text.trim().is_empty() {
             self.run(
                 Command::Note {
-                    node: row.id.to_string(),
+                    node: node.to_string(),
                     text: text.to_owned(),
                 },
                 None,
@@ -663,13 +910,14 @@ impl Model {
                 true
             }
             Err(e) => {
-                self.notice = Some(e.to_string());
+                self.warn(e.to_string());
                 false
             }
         }
     }
 
-    fn run(&mut self, cmd: Command, row: Option<Summary>) {
+    /// Run `cmd` as the human; whether it was made.
+    fn run(&mut self, cmd: Command, row: Option<Summary>) -> bool {
         // Only a row that was on screen can fade out of it, from where it was.
         let at = row
             .as_ref()
@@ -677,7 +925,7 @@ impl Model {
         let row = row.filter(|_| at.is_some());
         let was_selected = row.as_ref().is_some_and(|r| self.selected == Some(r.id));
         let Some(project) = self.projects.get_mut(self.current) else {
-            return;
+            return false;
         };
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(_) => {
@@ -702,8 +950,12 @@ impl Model {
                     }
                 }
             }
-            Err(e) => self.notice = Some(e.to_string()),
+            Err(e) => {
+                self.warn(e.to_string());
+                return false;
+            }
         }
+        true
     }
 
     // ---- staying current ----------------------------------------------------------------------
@@ -712,34 +964,53 @@ impl Model {
     /// It never catches a store up itself: a project whose log is ahead of its store (git
     /// rewrote it) is left as it was shown, and a `CatchUp` for it waits in `take_catch_ups`.
     pub fn tick(&mut self) -> bool {
+        self.tick_at(Instant::now())
+    }
+
+    /// `tick`, at `now`: a store whose last catch-up failed is tried again only once its pause
+    /// is over.
+    pub fn tick_at(&mut self, now: Instant) -> bool {
         let mut changed = false;
         // A catch-up just begun changes only what the sidebar says: a repaint, no reload.
         let mut began = false;
+        let mut failed = None;
         for p in &mut self.projects {
             if p.catching_up {
                 continue;
             }
-            // Any project counts: the sidebar shows every project's inbox.
-            match p.ws.stale() {
-                Ok(true) => {
+            // Any project counts: the sidebar shows every project's inbox. `None`: it is stale.
+            let looked = p.ws.stale().and_then(|stale| {
+                if stale {
+                    Ok(None)
+                } else {
+                    p.ws.refresh().map(Some)
+                }
+            });
+            let failure = match looked {
+                Ok(None) if p.next_try.is_some_and(|t| now < t) => continue,
+                Ok(None) => {
                     p.catching_up = true;
                     self.catch_ups.push(CatchUp {
                         project: p.dir.clone(),
                         livtk: p.ws.dir().to_path_buf(),
                     });
                     began = true;
+                    // Whether catching up works is for the catch-up to tell: a failure of the
+                    // last one stands until one succeeds.
                     continue;
                 }
-                Ok(false) => {}
-                Err(e) => {
-                    self.notice = Some(format!("{}: {e}", p.name));
-                    continue;
+                Ok(Some(changed_here)) => {
+                    // Current again, whoever caught it up.
+                    p.try_now();
+                    changed |= changed_here;
+                    None
                 }
-            }
-            match p.ws.refresh() {
-                Ok(changed_here) => changed |= changed_here,
-                Err(e) => self.notice = Some(format!("{}: {e}", p.name)),
-            }
+                Err(e) => Some(format!("{}: {e}", p.name)),
+            };
+            failed = p.went(failure).or(failed);
+        }
+        if let Some(text) = failed {
+            self.warn(text);
         }
         if !changed {
             return began;
@@ -750,7 +1021,13 @@ impl Model {
             .map(|r| (r.id, r.updated.clone()))
             .collect();
         let newest = self.activity.first().map(|a| a.event.id);
+        let waited: Vec<HashSet<Uuid>> = self
+            .projects
+            .iter()
+            .map(|p| p.inbox_items.iter().map(|r| r.id).collect())
+            .collect();
         self.reload();
+        self.note_arrivals(&waited);
         let now = Instant::now();
         // Events that arrived while the feed is open flash once, as changed rows do.
         for a in &self.activity {
@@ -766,19 +1043,82 @@ impl Model {
         true
     }
 
+    /// What entered each project's inbox since `waited`, put there by anyone but the human: a
+    /// change made elsewhere, as `tick` finds them. Who put it there is who last set its state
+    /// (or created it), whatever came after, a note or a link: the human's own move, from the
+    /// app or a terminal, is not news to them, and Claude's is, even once the human noted it.
+    fn note_arrivals(&mut self, waited: &[HashSet<Uuid>]) {
+        for (i, p) in self.projects.iter().enumerate() {
+            let before = waited.get(i);
+            for r in &p.inbox_items {
+                if before.is_some_and(|b| b.contains(&r.id)) {
+                    continue;
+                }
+                let by_human =
+                    p.ws.history(Some(&r.id.to_string()))
+                        .ok()
+                        .and_then(|h| {
+                            h.iter()
+                                .rev()
+                                .find(|e| match &e.op {
+                                    Op::NodeCreate { .. } => true,
+                                    Op::NodeSet { data, .. } => data.state.is_some(),
+                                    _ => false,
+                                })
+                                .map(|e| e.by == "human")
+                        })
+                        .unwrap_or(true);
+                if !by_human {
+                    self.arrivals.push(Arrival {
+                        project: i,
+                        id: r.id,
+                        key: r.key.clone(),
+                        title: r.title.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// What came into an inbox from someone else since this was last called, each once.
+    pub fn take_arrivals(&mut self) -> Vec<Arrival> {
+        std::mem::take(&mut self.arrivals)
+    }
+
+    /// Open the inbox where `arrival` waits, on it, with its detail.
+    pub fn open_arrival(&mut self, arrival: &Arrival) {
+        self.select_project(arrival.project);
+        self.set_view(View::Inbox);
+        self.select(arrival.id);
+        if self.selected().is_some_and(|r| r.id == arrival.id) {
+            self.open_detail();
+        }
+    }
+
     /// The catching up `tick` found and left to be run elsewhere, each once.
     pub fn take_catch_ups(&mut self) -> Vec<CatchUp> {
         std::mem::take(&mut self.catch_ups)
     }
 
     /// A `CatchUp` finished with `result`: the project is shown from its store again, which the
-    /// next `tick` finds current and changed.
+    /// next `tick` finds current and changed. One that failed is tried again after a pause.
     pub fn caught_up(&mut self, job: &CatchUp, result: Result<(), String>) {
-        if let Some(p) = self.projects.iter_mut().find(|p| p.dir == job.project) {
-            p.catching_up = false;
-            if let Err(e) = result {
-                self.notice = Some(format!("{}: {e}", p.name));
-            }
+        self.caught_up_at(job, result, Instant::now());
+    }
+
+    /// `caught_up`, at `now`: the pause after a failure counts from it.
+    pub fn caught_up_at(&mut self, job: &CatchUp, result: Result<(), String>, now: Instant) {
+        let Some(p) = self.projects.iter_mut().find(|p| p.dir == job.project) else {
+            return;
+        };
+        p.catching_up = false;
+        match result {
+            Ok(()) => p.try_now(),
+            Err(_) => p.try_later(now),
+        }
+        let failure = result.err().map(|e| format!("{}: {e}", p.name));
+        if let Some(text) = p.went(failure) {
+            self.warn(text);
         }
     }
 
@@ -787,6 +1127,98 @@ impl Model {
         self.flashed.retain(|_, at| now.duration_since(*at) < age);
         self.leaving
             .retain(|(_, _, at)| now.duration_since(*at) < age);
+    }
+
+    // ---- the notice ---------------------------------------------------------------------------
+
+    pub fn notice(&self) -> Option<&Notice> {
+        self.notice.as_ref()
+    }
+
+    /// Tell the human something went wrong. It replaces any notice shown, and its time starts now.
+    /// It shows where the one it replaces did, so a pointer over that one is over it, and holds
+    /// it.
+    pub fn warn(&mut self, text: impl Into<String>) {
+        self.notice_of(text.into(), true);
+    }
+
+    /// Tell the human something worth knowing that is no error, as a notice does.
+    pub fn inform(&mut self, text: impl Into<String>) {
+        self.notice_of(text.into(), false);
+    }
+
+    fn notice_of(&mut self, text: String, error: bool) {
+        self.notices += 1;
+        self.notice = Some(Notice {
+            text,
+            error,
+            id: self.notices,
+            leaving: None,
+            since: Instant::now(),
+            held: self.notice.as_ref().is_some_and(|n| n.held),
+        });
+    }
+
+    /// Tell the human why this app posts no system notifications where it runs, and where it
+    /// would. Running outside the bundle is told once ever; a bundle that would not open, each
+    /// time. A notice already showing (a project that would not open, say) is left in place, and
+    /// what was not told then is told another time.
+    pub fn tell_quiet(&mut self, why: Quiet) {
+        if self.notice.is_some() || (why == Quiet::NoBundle && self.told_no_notifications) {
+            return;
+        }
+        let text = match why {
+            Quiet::NoBundle => {
+                self.told_no_notifications = true;
+                "No notifications from here: on macOS they come from livtk.app only. \
+                 scripts/check --install puts it in Applications and livtk-app on PATH, which \
+                 then opens it for you."
+            }
+            Quiet::OpenFailed => {
+                "livtk.app would not open, so this runs here, without notifications."
+            }
+        };
+        self.warn(text);
+    }
+
+    /// Close the notice: the human read it, or what it told of no longer holds.
+    pub fn dismiss_notice(&mut self) {
+        self.notice = None;
+    }
+
+    /// The pointer came over the notice (`held`), which keeps it, a leaving one included, or
+    /// went away at `now`, which gives it its whole time again.
+    pub fn hold_notice(&mut self, held: bool, now: Instant) {
+        if let Some(n) = &mut self.notice {
+            n.held = held;
+            if held {
+                n.leaving = None;
+            } else {
+                n.since = now;
+            }
+        }
+    }
+
+    /// Let the notice's time pass to `now`: it starts to leave once its time is up, unless held,
+    /// and is gone `fade` after that. Returns whether it changed, so the view repaints only then.
+    pub fn age_notice(&mut self, now: Instant, fade: Duration) -> bool {
+        let Some(n) = &mut self.notice else {
+            return false;
+        };
+        if n.held {
+            return false;
+        }
+        match n.leaving {
+            None if now.duration_since(n.since) >= NOTICE_FOR => {
+                n.leaving = Some(now);
+                true
+            }
+            Some(at) if now.duration_since(at) >= fade => {
+                self.notice = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     // ---- display options -----------------------------------------------------------------------
@@ -803,8 +1235,32 @@ impl Model {
         edit(&mut d);
         self.displays.insert(self.view, d);
         self.arrange();
+        self.reselect();
+    }
+
+    /// When what is shown changed under the human's hand (a filter, a group folded) and the
+    /// selection went with it: the first row, the panel following it, so every action still
+    /// acts on the node in view.
+    /// The node open in the panel comes first, when it is shown again (a filter cleared).
+    fn reselect(&mut self) {
+        // Resting on a band is a selection too: folding it keeps it there. A band gone from
+        // view (filtered out) is let go, and the selection found again as below.
+        if let Some(k) = self.band {
+            if self.groups.iter().any(|g| g.key == k) {
+                return;
+            }
+            self.band = None;
+        }
         if self.selected().is_none() {
-            self.selected = self.rows.first().map(|r| r.id);
+            let panel = self
+                .detail
+                .as_ref()
+                .map(|d| d.node.id)
+                .filter(|id| self.rows.iter().any(|r| r.id == *id));
+            match panel.or_else(|| self.rows.first().map(|r| r.id)) {
+                Some(id) => self.select(id),
+                None => self.selected = None,
+            }
         }
     }
 
@@ -823,6 +1279,28 @@ impl Model {
         });
     }
 
+    /// Show only rows in `state`, besides those in the states already chosen, or no longer.
+    pub fn toggle_state(&mut self, state: State) {
+        let kind = self.view.kind();
+        self.edit_display(|d| {
+            if let Some(i) = d.states.iter().position(|s| *s == state) {
+                d.states.remove(i);
+            } else {
+                d.states.push(state);
+                d.states.sort_by_key(|s| state_order(kind, *s));
+            }
+        });
+    }
+
+    /// Clear the view's filter: its text, priorities and states.
+    pub fn clear_filters(&mut self) {
+        self.edit_display(|d| {
+            d.filter.clear();
+            d.priorities.clear();
+            d.states.clear();
+        });
+    }
+
     pub fn set_grouping(&mut self, grouping: Grouping) {
         if self.layout == Layout::Board && grouping == Grouping::None {
             return;
@@ -834,14 +1312,34 @@ impl Model {
         self.edit_display(|d| d.ordering = ordering);
     }
 
+    /// Show or hide the current view's empty groups, where it lists groups of one kind.
+    pub fn toggle_empty(&mut self) {
+        if self.view.kind().is_some() {
+            self.edit_display(|d| d.show_empty = !d.show_empty);
+        }
+    }
+
+    /// Show or hide the current view's dismissed work, where it has any. What a view holds is
+    /// read without it, so it is read again.
+    pub fn toggle_dismissed(&mut self) {
+        if self.view.shows_dismissed() {
+            let mut d = self.display();
+            d.show_dismissed = !d.show_dismissed;
+            // A dismissed state chosen in the filter would show nothing while hidden.
+            if !d.show_dismissed {
+                d.states.retain(|s| !s.is_dismissed());
+            }
+            self.displays.insert(self.view, d);
+            self.reload();
+        }
+    }
+
     pub fn toggle_collapsed(&mut self, key: GroupKey) {
         if !self.collapsed.remove(&(self.view, key)) {
             self.collapsed.insert((self.view, key));
         }
         self.arrange();
-        if self.selected().is_none() {
-            self.selected = self.rows.first().map(|r| r.id);
-        }
+        self.reselect();
     }
 
     /// Apply the view's display options to everything it holds.
@@ -861,6 +1359,7 @@ impl Model {
                     || r.kind != Kind::Task
                     || d.priorities.contains(&r.priority)
             })
+            .filter(|r| d.states.is_empty() || d.states.contains(&r.state))
             .cloned()
             .collect();
         let group_of = |r: &Summary| match d.grouping {
@@ -868,8 +1367,9 @@ impl Model {
             Grouping::Priority => GroupKey::Priority(r.priority),
             Grouping::None => GroupKey::All,
         };
+        let kind = self.view.kind();
         let group_rank = |k: GroupKey| match k {
-            GroupKey::State(s) => s.rank(),
+            GroupKey::State(s) => state_order(kind, s),
             GroupKey::Priority(p) => p,
             GroupKey::All => 0,
         };
@@ -882,32 +1382,61 @@ impl Model {
                     Ordering::Created => b.id.cmp(&a.id),
                 })
         });
-        let mut groups: Vec<Group> = Vec::new();
-        let mut shown: Vec<Summary> = Vec::with_capacity(rows.len());
+        // The groups the rows fall in, in order; with `show_empty`, every group there can be.
+        let mut keys: Vec<GroupKey> = Vec::new();
         for r in &rows {
             let key = group_of(r);
-            if groups.last().map(|g| g.key) != Some(key) {
-                let collapsed = self.collapsed.contains(&(self.view, key));
-                groups.push(Group {
-                    key,
-                    kind: self.view.kind(),
-                    count: 0,
-                    collapsed,
-                    start: shown.len(),
-                    shown: 0,
-                });
+            if keys.last() != Some(&key) {
+                keys.push(key);
             }
-            if let Some(g) = groups.last_mut() {
-                g.count += 1;
-                if !g.collapsed {
-                    g.shown += 1;
+        }
+        if d.show_empty {
+            keys.extend(self.every_group(&d));
+            keys.sort_by_key(|k| group_rank(*k));
+            keys.dedup();
+        }
+        let mut groups: Vec<Group> = Vec::with_capacity(keys.len());
+        let mut shown: Vec<Summary> = Vec::with_capacity(rows.len());
+        let mut next = rows.iter().peekable();
+        for key in keys {
+            let collapsed = self.collapsed.contains(&(self.view, key));
+            let start = shown.len();
+            let mut count = 0;
+            while let Some(r) = next.next_if(|r| group_of(r) == key) {
+                count += 1;
+                if !collapsed {
                     shown.push(r.clone());
                 }
             }
+            groups.push(Group {
+                key,
+                kind: self.view.kind(),
+                count,
+                collapsed,
+                start,
+                shown: shown.len() - start,
+            });
         }
         self.filtered = rows;
         self.rows = shown;
         self.groups = groups;
+    }
+
+    /// Every group the view's grouping has, in no order: each state of the view's kind, the
+    /// dismissed ones only while shown, or each priority. None where the view is ungrouped or
+    /// mixes kinds, as the inbox does.
+    fn every_group(&self, d: &Display) -> Vec<GroupKey> {
+        match (d.grouping, self.view.kind()) {
+            (Grouping::State, Some(kind)) => kind
+                .states()
+                .iter()
+                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .filter(|s| d.states.is_empty() || d.states.contains(s))
+                .map(|&s| GroupKey::State(s))
+                .collect(),
+            (Grouping::Priority, Some(_)) => (1..=4).map(GroupKey::Priority).collect(),
+            _ => Vec::new(),
+        }
     }
 
     // ---- drag and drop ------------------------------------------------------------------------
@@ -926,7 +1455,12 @@ impl Model {
         let Some(r) = self.all.iter().find(|r| r.id == id).cloned() else {
             return;
         };
+        // The card dragged is what the human acts on next: the panel follows it too, even
+        // when its group is folded in the list (the board shows it all the same).
         self.selected = Some(id);
+        if self.detail.is_some() {
+            self.open_detail();
+        }
         let node = id.to_string();
         let cmd = match target {
             GroupKey::State(s) if s == r.state => return,
@@ -944,35 +1478,40 @@ impl Model {
     }
 
     /// The task board: one column per group, as the grouping says (states in working order,
-    /// or priorities from urgent to low), each in the chosen order.
+    /// or priorities from urgent to low), each in the chosen order. As the list's groups, an
+    /// empty column shows only with `show_empty`; a card goes to a state with no column from its
+    /// state's menu.
     pub fn columns(&self) -> Vec<(GroupKey, Vec<&Summary>)> {
-        if self.display().grouping == Grouping::Priority {
-            return (1..=4u8)
-                .map(|p| {
-                    let rows = self.filtered.iter().filter(|r| r.priority == p).collect();
-                    (GroupKey::Priority(p), rows)
-                })
-                .collect();
-        }
-        let mut states = vec![
-            State::Backlog,
-            State::Planned,
-            State::Acked,
-            State::Doing,
-            State::Review,
-            State::Done,
-        ];
-        if self.show_all {
-            states.extend([State::Parked, State::Canceled]);
+        let d = self.display();
+        let keys: Vec<GroupKey> = if d.grouping == Grouping::Priority {
+            (1..=4u8).map(GroupKey::Priority).collect()
         } else {
-            states.insert(5, State::Parked);
-        }
-        states
-            .into_iter()
-            .map(|s| {
-                let rows = self.filtered.iter().filter(|r| r.state == s).collect();
-                (GroupKey::State(s), rows)
+            // The task's states in their own order, as the list's groups; dismissed ones only
+            // while shown. The filter says what the board is about: no column for a state it
+            // leaves out.
+            Kind::Task
+                .states()
+                .iter()
+                .copied()
+                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .filter(|s| d.states.is_empty() || d.states.contains(s))
+                .map(GroupKey::State)
+                .collect()
+        };
+        keys.into_iter()
+            .map(|key| {
+                let rows = self
+                    .filtered
+                    .iter()
+                    .filter(|r| match key {
+                        GroupKey::State(s) => r.state == s,
+                        GroupKey::Priority(p) => r.priority == p,
+                        GroupKey::All => true,
+                    })
+                    .collect::<Vec<_>>();
+                (key, rows)
             })
+            .filter(|(_, rows)| d.show_empty || !rows.is_empty())
             .collect()
     }
 
@@ -984,7 +1523,8 @@ impl Model {
             self.load_graph();
         }
         for p in &mut self.projects {
-            p.inbox = p.ws.inbox().map(|i| i.len()).unwrap_or(0);
+            p.inbox_items = p.ws.inbox().unwrap_or_default();
+            p.inbox = p.inbox_items.len();
             p.unseen = p.ws.unseen_activity().unwrap_or(0);
         }
         let Some(project) = self.projects.get(self.current) else {
@@ -996,7 +1536,7 @@ impl Model {
             None if matches!(self.view, View::Activity | View::Graph) => Ok(Vec::new()),
             None => project.ws.inbox(),
             Some(kind) => {
-                let states: Vec<State> = if self.show_all {
+                let states: Vec<State> = if self.display().show_dismissed {
                     Vec::new()
                 } else {
                     kind.states()
@@ -1010,7 +1550,7 @@ impl Model {
         };
         match rows {
             Ok(rows) => self.all = rows,
-            Err(e) => self.notice = Some(e.to_string()),
+            Err(e) => self.warn(e.to_string()),
         }
         self.arrange();
         if self.selected().is_none() {

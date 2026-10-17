@@ -74,6 +74,7 @@ pub enum Run {
     Group(Grouping),
     Order(Ordering),
     ToggleDismissed,
+    ToggleEmpty,
     FitGraph,
     /// Pick the other end of a link from the selected node.
     PickLink(LinkChoice),
@@ -137,7 +138,7 @@ impl Model {
         if let Some(p) = self.projects.get_mut(self.current)
             && let Err(e) = p.ws.prepare_search()
         {
-            self.notice = Some(e.to_string());
+            self.warn(e.to_string());
         }
         self.palette = Some(Palette::default());
         self.palette_query("");
@@ -149,7 +150,7 @@ impl Model {
         if let Some(p) = self.projects.get_mut(self.current)
             && let Err(e) = p.ws.prepare_search()
         {
-            self.notice = Some(e.to_string());
+            self.warn(e.to_string());
         }
         self.palette = Some(Palette {
             link: Some(LinkPick {
@@ -284,7 +285,11 @@ impl Model {
                     None
                 }
                 Run::ToggleDismissed => {
-                    self.toggle_show_all();
+                    self.toggle_dismissed();
+                    None
+                }
+                Run::ToggleEmpty => {
+                    self.toggle_empty();
                     None
                 }
                 Run::FitGraph => {
@@ -314,8 +319,8 @@ impl Model {
         if !(self.view == View::Inbox && in_view) {
             self.set_view(view);
         }
-        if found.state.is_dismissed() && !self.show_all {
-            self.toggle_show_all();
+        if found.state.is_dismissed() && !self.display().show_dismissed {
+            self.toggle_dismissed();
         }
         if !self.rows.iter().any(|r| r.id == found.id) {
             let view = self.view;
@@ -325,6 +330,7 @@ impl Model {
                 .or_insert_with(|| super::Display::for_view(view));
             d.filter.clear();
             d.priorities.clear();
+            d.states.clear();
             self.collapsed.retain(|(v, _)| *v != view);
             self.arrange();
         }
@@ -340,7 +346,7 @@ impl Model {
         match p.ws.find(query, FOUND) {
             Ok(hits) => hits.into_iter().map(Found::from).collect(),
             Err(e) => {
-                self.notice = Some(e.to_string());
+                self.warn(e.to_string());
                 Vec::new()
             }
         }
@@ -376,7 +382,7 @@ impl Model {
         for c in self.choices(row.kind, row.state) {
             let primary = c.decides && !matches!(c.to, State::Rejected | State::Retired);
             let shortcut = if c.always {
-                Some("S")
+                Some(super::keys::STANDING)
             } else if c.to == State::Rejected {
                 Some("X")
             } else if primary && !decided {
@@ -499,17 +505,29 @@ impl Model {
         if self.view == View::Graph {
             out.push(plain("Zoom to fit", Some("0"), Run::FitGraph));
         }
-        if !matches!(self.view, View::Inbox | View::Activity) {
-            let label = if self.show_all {
+        if self.view.kind().is_some() {
+            let label = if d.show_empty {
+                "Hide empty groups"
+            } else {
+                "Show empty groups"
+            };
+            out.push(plain(
+                label,
+                Some(super::keys::EMPTY_GROUPS),
+                Run::ToggleEmpty,
+            ));
+        }
+        if self.view.shows_dismissed() {
+            let label = if d.show_dismissed {
                 "Hide dismissed work"
             } else {
                 "Show dismissed work"
             };
-            out.push(plain(label, Some("H"), Run::ToggleDismissed));
+            out.push(plain(label, Some("S D"), Run::ToggleDismissed));
         }
         out.push(plain(
             "Keyboard shortcuts",
-            Some("Ctrl ?"),
+            Some(super::keys::HELP),
             Run::Ask(Ask::Help),
         ));
         out

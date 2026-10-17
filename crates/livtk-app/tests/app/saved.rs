@@ -45,7 +45,8 @@ fn how_each_view_was_shown_comes_back_after_a_restart() {
     m.set_ordering(Ordering::Created);
     m.toggle_collapsed(GroupKey::Priority(3));
     m.toggle_layout();
-    m.toggle_show_all();
+    m.toggle_dismissed();
+    m.toggle_empty();
     m.set_view(View::Lessons);
     m.set_ordering(Ordering::Updated);
 
@@ -67,9 +68,14 @@ fn how_each_view_was_shown_comes_back_after_a_restart() {
     assert_eq!(again.view, View::Lessons, "the same view");
     assert_eq!(again.display().ordering, Ordering::Updated);
     assert_eq!(again.layout, Layout::Board);
-    assert!(again.show_all);
+    assert!(
+        !again.display().show_dismissed && !again.display().show_empty,
+        "each view has its own: the lessons were never changed"
+    );
     again.set_view(View::Tasks);
     let d = again.display();
+    assert!(d.show_dismissed, "dismissed work, as the tasks had it");
+    assert!(d.show_empty, "empty groups too");
     assert_eq!(d.filter, "on");
     assert_eq!(d.priorities, [2]);
     assert_eq!(d.grouping, Grouping::Priority);
@@ -122,4 +128,56 @@ fn what_no_longer_applies_is_passed_over() {
     let mut collapsed = m.saved().views["tasks"].collapsed.clone();
     collapsed.sort();
     assert_eq!(collapsed, ["all", "state:doing"]);
+}
+
+#[test]
+fn dismissed_work_shown_everywhere_by_an_older_app_is_shown_in_each_view() {
+    let a = tempfile::tempdir().unwrap();
+    project(a.path());
+    let saved: Saved = toml::from_str("show_all = true\n").unwrap();
+    let mut m = open(&[a.path()]);
+    m.restore(&saved);
+    for view in View::ALL {
+        m.set_view(view);
+        assert_eq!(
+            m.display().show_dismissed,
+            view.shows_dismissed(),
+            "{view:?}"
+        );
+    }
+    let text = toml::to_string(&m.saved()).unwrap();
+    assert!(
+        !text.contains("show_all"),
+        "the old setting is not written again: {text}"
+    );
+}
+
+#[test]
+fn the_states_a_view_was_filtered_to_come_back() {
+    let a = tempfile::tempdir().unwrap();
+    project(a.path());
+    let mut m = open(&[a.path()]);
+    m.set_view(View::Tasks);
+    m.toggle_state(livtk_core::State::Review);
+    m.toggle_state(livtk_core::State::Planned);
+    let saved = m.saved();
+    assert_eq!(saved.views["tasks"].states, ["planned", "review"]);
+
+    let mut again = open(&[a.path()]);
+    again.restore(&saved);
+    again.set_view(View::Tasks);
+    assert_eq!(
+        again.display().states,
+        [livtk_core::State::Planned, livtk_core::State::Review]
+    );
+
+    // Names that are no state of the kind, or dismissed ones while those are hidden, are dropped.
+    let odd: Saved = toml::from_str(
+        "[views.tasks]\nstates = [\"doing\", \"ratified\", \"nonsense\", \"canceled\"]\n",
+    )
+    .unwrap();
+    let mut m = open(&[a.path()]);
+    m.restore(&odd);
+    m.set_view(View::Tasks);
+    assert_eq!(m.display().states, [livtk_core::State::Doing]);
 }

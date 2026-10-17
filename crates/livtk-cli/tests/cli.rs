@@ -534,3 +534,18 @@ fn list_of_10k_tasks_stays_under_10ms_warm() {
     );
     assert!(median < Duration::from_millis(10), "list took {median:?}");
 }
+
+#[test]
+fn version_says_which_build_this_is() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_livtk"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success());
+    assert!(
+        text.starts_with(&format!("livtk {} (build ", livtk_build::VERSION)),
+        "{text}"
+    );
+    assert!(text.contains(livtk_build::COMMIT), "{text}");
+}

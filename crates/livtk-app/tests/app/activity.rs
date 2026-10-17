@@ -310,3 +310,19 @@ fn each_event_reads_as_a_few_words() {
         ]
     );
 }
+
+#[test]
+fn a_notes_line_breaks_are_kept_and_its_code_left_alone() {
+    use livtk_app::model::note_markdown;
+    assert_eq!(note_markdown("a quick\njot"), "a quick  \njot");
+    assert_eq!(
+        note_markdown("one\n\ntwo"),
+        "one\n\ntwo",
+        "a paragraph stays one"
+    );
+    assert_eq!(
+        note_markdown("see\n```rust\nlet a = 1;\nlet b = 2;\n```\ndone"),
+        "see  \n```rust\nlet a = 1;\nlet b = 2;\n```  \ndone",
+        "lines inside code are code"
+    );
+}

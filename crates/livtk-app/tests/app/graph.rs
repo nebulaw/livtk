@@ -263,7 +263,7 @@ fn the_graph_shows_every_kind_and_hides_dismissed_work_until_h() {
     assert_eq!(keys(&m), ["LES-1", "LIV-1", "LIV-2"]);
     assert_eq!(m.graph.edges.len(), 2);
     assert!(m.rows.is_empty(), "the graph has no rows");
-    m.toggle_show_all();
+    m.toggle_dismissed();
     assert_eq!(keys(&m), ["LES-1", "LIV-1", "LIV-2", "LIV-3"]);
     let lesson = m.graph.nodes.iter().find(|n| n.key == "LES-1").unwrap();
     let plan = m.graph.nodes.iter().find(|n| n.key == "LIV-2").unwrap();

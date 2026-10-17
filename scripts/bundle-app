@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# livtk on macOS as one app bundle, livtk.app in cargo's target directory: the app and the
+# command line tool together, so one update covers both. macOS posts notifications only for an app
+# bundle (GPUI turns them off for a bare binary). Info.plist carries the build's identity, read
+# from the built app itself, so the two always agree.
+#   scripts/bundle-app            build livtk.app in the target directory from a release build
+#   scripts/bundle-app --install  then move it to ~/Applications
+#   --quick                       from the quick profile instead: release speed without LTO,
+#                                 rebuilt in seconds, for trying a change in the real app
+# `livtk-app --install-cli` (scripts/check --install runs it) links livtk and livtk-app onto PATH.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ "$(uname)" != Darwin ]; then
+  echo "bundle-app: an app bundle is for macOS; elsewhere run livtk-app itself" >&2
+  exit 1
+fi
+
+# The identifier the app gives itself (APP_ID in crates/livtk-app/src/ui/mod.rs); a test holds
+# the two together.
+id=com.github.nebulaw.livtk
+
+# Where cargo builds, as cargo itself says, whatever sets it (CARGO_TARGET_DIR, a config file).
+target=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)
+profile=release
+install=false
+for arg in "$@"; do
+  case "$arg" in
+    --install) install=true ;;
+    --quick) profile=quick ;;
+    *) echo "bundle-app: unknown option $arg" >&2; exit 2 ;;
+  esac
+done
+cargo build -q --locked --profile "$profile" -p livtk-app -p livtk-cli
+built=$target/$profile
+# "livtk-app 0.4.0 (build 87, abc1234)", with ", modified" when the sources had changes.
+identity=$("$built/livtk-app" --version)
+version=$(echo "$identity" | sed -n 's/^livtk-app \([^ ]*\) .*/\1/p')
+build=$(echo "$identity" | sed -n 's/.*(build \([0-9]*\),.*/\1/p')
+commit=$(echo "$identity" | sed -n 's/.*(build [0-9]*, \([^,)]*\).*/\1/p')
+case "$identity" in *", modified)"*) modified=true ;; *) modified=false ;; esac
+app=$target/livtk.app
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS"
+cp "$built/livtk-app" "$built/livtk" "$app/Contents/MacOS/"
+cat >"$app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>$id</string>
+  <key>CFBundleName</key><string>livtk</string>
+  <key>CFBundleDisplayName</key><string>livtk</string>
+  <key>CFBundleExecutable</key><string>livtk-app</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$build</string>
+  <key>LivtkCommit</key><string>$commit</string>
+  <key>LivtkModified</key><$modified/>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+EOF
+# Signed ad hoc, as macOS asks of every app on Apple silicon; nothing leaves this machine.
+codesign --force --deep --sign - "$app" 2>/dev/null
+echo "built $app: $identity"
+
+if $install; then
+  mkdir -p "$HOME/Applications"
+  rm -rf "$HOME/Applications/livtk.app"
+  # Moved, not copied: two bundles with one identifier leave macOS to pick either to launch.
+  mv "$app" "$HOME/Applications/livtk.app"
+  echo "installed $HOME/Applications/livtk.app"
+fi

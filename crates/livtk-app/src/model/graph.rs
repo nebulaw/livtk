@@ -527,8 +527,10 @@ impl Model {
             return;
         };
         let mut all = Vec::new();
+        let mut failed = None;
+        let show_dismissed = self.display().show_dismissed;
         for kind in [Kind::Task, Kind::Decision, Kind::Lesson, Kind::Finding] {
-            let states: Vec<State> = if self.show_all {
+            let states: Vec<State> = if show_dismissed {
                 Vec::new()
             } else {
                 kind.states()
@@ -539,13 +541,16 @@ impl Model {
             };
             match p.ws.list(kind, &states) {
                 Ok(rows) => all.extend(rows),
-                Err(e) => self.notice = Some(e.to_string()),
+                Err(e) => failed = Some(e.to_string()),
             }
         }
         let links = p.ws.edges().unwrap_or_else(|e| {
-            self.notice = Some(e.to_string());
+            failed = Some(e.to_string());
             Vec::new()
         });
+        if let Some(text) = failed {
+            self.warn(text);
+        }
         let old = std::mem::take(&mut self.graph);
         let mut graph = Graph::build(all, &links);
         let selected = old.selected.and_then(|i| old.nodes.get(i)).map(|n| n.id);

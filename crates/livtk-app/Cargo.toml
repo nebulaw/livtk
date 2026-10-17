@@ -13,9 +13,29 @@ name = "livtk-app"
 path = "src/main.rs"
 
 [dependencies]
+livtk-build.workspace = true
 livtk-core.workspace = true
 gpui-kit.workspace = true
+# Code blocks in descriptions and notes coloured by language: the tree-sitter grammars of the
+# gpui-component gpui-kit is built on (and JSON, which comes with them), switched on here;
+# Cargo unifies the features. A language is one more feature, at some build time and size.
+gpui-component = { version = "=0.7.3", features = [
+    "tree-sitter-bash",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-javascript",
+    "tree-sitter-markdown",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 jiff.workspace = true
+log.workspace = true
 serde.workspace = true
 toml.workspace = true
 uuid.workspace = true

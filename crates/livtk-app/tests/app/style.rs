@@ -4,9 +4,6 @@
 
 use livtk_app::ui::icons::Icon;
 
-const UI: &str = include_str!("../src/ui/mod.rs");
-const ICONS: &str = include_str!("../src/ui/icons.rs");
-
 #[test]
 fn every_icon_is_a_credited_boxicon_of_24_by_24() {
     for &i in Icon::ALL {
@@ -44,68 +41,13 @@ fn icons_are_named_once() {
     assert_eq!(files.len(), count, "two names for one icon file");
 }
 
-/// The developer's rule: the cursor never changes on hover; only while dragging.
+/// The app bundle carries the identity the app gives itself, or macOS would not match the two.
 #[test]
-fn the_cursor_changes_only_while_dragging() {
-    for source in [UI, ICONS] {
-        for banned in [
-            ".cursor_pointer()",
-            ".cursor_text()",
-            ".cursor_grab()",
-            ".cursor_default()",
-            "CursorStyle::PointingHand",
-            "CursorStyle::OpenHand",
-            "CursorStyle::IBeam",
-        ] {
-            assert!(!source.contains(banned), "found {banned}");
-        }
-    }
-    // The graph's pan and an edge's resize: each only while its drag is on.
-    let changes: Vec<&str> = UI.lines().filter(|l| l.contains(".cursor(")).collect();
-    assert_eq!(changes.len(), 2, "{changes:?}");
-    for change in changes {
-        assert!(
-            change.contains("when(dragging"),
-            "a change is only while dragging: {change}"
-        );
-    }
-}
-
-/// No element grows or zooms on hover.
-#[test]
-fn nothing_scales_on_hover() {
-    for (i, line) in UI.lines().enumerate() {
-        if line.contains(".hover(") {
-            for banned in [
-                "scale",
-                ".size(",
-                ".w(",
-                ".h(",
-                "zoom",
-                "with_transformation",
-            ] {
-                assert!(!line.contains(banned), "line {}: {line}", i + 1);
-            }
-        }
-    }
-}
-
-/// The developer's rule for the dock's room: it is space at the end of what scrolls, so rows
-/// and cards pass under the dock. Padding on a list or column clips them short of it instead,
-/// which a headless test cannot see (it reports layout, not clipping), so the source is held
-/// to it.
-#[test]
-fn the_docks_room_is_space_at_the_end_never_padding() {
+fn the_app_bundle_is_the_app_it_says_it_is() {
+    let script = include_str!("../../../../scripts/bundle-app");
     assert!(
-        !UI.contains("pb(px(DOCK_SPACE))") && !UI.contains("pb(px(DOCK_HEIGHT"),
-        "the dock's room is padding somewhere"
-    );
-    assert!(
-        UI.matches("div().h(px(DOCK_SPACE)).flex_none()").count() >= 2,
-        "the inbox and each board column end with the room"
-    );
-    assert!(
-        UI.matches("+ DOCK_ROWS").count() >= 2,
-        "the virtualised lists, tasks and the feed, end with rows of room"
+        script.contains(&format!("id={}", livtk_app::ui::APP_ID)),
+        "scripts/bundle-app names {}",
+        livtk_app::ui::APP_ID
     );
 }

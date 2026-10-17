@@ -6,9 +6,12 @@
 //! outside it, so typing never triggers a command.
 
 pub mod icons;
+pub mod menus;
+pub mod state_flow;
 mod theme;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -22,11 +25,12 @@ use livtk_core::event::{Event, Op};
 use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
+use crate::model::keys;
 use crate::model::{
-    Arrow, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Run, Saved,
+    Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
+    Item as PaletteItem, Layout, LinkChoice, LinkGroup, Look, Model, Ordering, Quiet, Run, Saved,
     SavedWindow, Step, View, arrows_with, created_as, describe, drop_allowed, has_flow,
-    link_choices, link_curve, state_name, state_short, steps_with, visible_runs,
+    link_choices, link_curve, state_name, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -44,6 +48,9 @@ actions!(
         NewTask,
         ToggleLayout,
         ToggleAll,
+        PrevColumn,
+        NextColumn,
+        ToggleEmpty,
         GoInbox,
         GoActivity,
         GoTasks,
@@ -69,9 +76,26 @@ actions!(
         PaletteUp,
         PaletteDown,
         Submit,
-        Cancel
+        Cancel,
+        // The menu bar's own: the app, the window, and what has no key of its own.
+        Quit,
+        HideApp,
+        HideOthers,
+        ShowAll,
+        BringToFront,
+        CloseWindow,
+        Minimize,
+        ZoomWindow,
+        About,
+        AddLinkMenu,
+        InstallCli,
+        OpenGitHub,
+        ReportIssue
     ]
 );
+
+/// Where livtk lives, for Help.
+const REPOSITORY: &str = "https://github.com/nebulaw/tasks";
 
 const NAV: &str = "LivtkNav";
 const FORM: &str = "LivtkForm";
@@ -80,8 +104,21 @@ const PALETTE: &str = "LivtkPalette";
 const PALETTE_FIELD: &str = "LivtkPalette > Input";
 
 const POLL: Duration = Duration::from_millis(200);
+/// Who the app is to the system: what notifications are posted as, and the identifier of the
+/// macOS app bundle (`scripts/bundle-app`).
+pub const APP_ID: &str = "com.github.nebulaw.livtk";
+pub const APP_NAME: &str = "livtk";
+/// The system notifications the app posts are tagged with this and their number. Each tells
+/// only what is new since the last, so none tells of what another already did and a click opens
+/// what that one told of; the system groups them as it does any app's (Linux's ignore tags).
+const NOTIFICATION: &str = "livtk-inbox";
+/// How many notifications are remembered for their clicks; older ones open the inbox.
+const NOTIFIED_KEPT: usize = 32;
 const FADE: Duration = Duration::from_millis(180);
 const FLASH: Duration = Duration::from_millis(900);
+/// A notice coming in, and fading out when its time is up.
+const NOTICE_IN: Duration = Duration::from_millis(140);
+const NOTICE_FADE: Duration = Duration::from_millis(240);
 /// The detail panel opening and closing: it grows from the right edge and the list makes room.
 const SLIDE: Duration = Duration::from_millis(240);
 const SLIDE_OUT: Duration = Duration::from_millis(200);
@@ -120,6 +157,12 @@ const _: () = assert!(
     DOCK_ROWS as f32 * ROW == DOCK_SPACE,
     "the room must be whole rows"
 );
+/// On macOS the window's titlebar is the app's own: the traffic lights sit on the window's black
+/// at its top left, in a strip of this height atop the sidebar (or the rail, with the content
+/// below it then) that drags the window. Elsewhere the system's titlebar stays, and this is 0.
+const TITLEBAR: f32 = if cfg!(target_os = "macos") { 36. } else { 0. };
+/// Where the traffic lights sit in that strip, centred in its height.
+const TRAFFIC_LIGHTS: (f32, f32) = (14., 11.);
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
 /// An arrowhead on screen: its tip, and the way it points.
@@ -140,22 +183,34 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
+/// Cmd+W hides the window on macOS only: elsewhere closing it is the window's own business.
+const CLOSE_WINDOW: &str = "Close the window; the app keeps watching";
+
 /// Every shortcut, in the order the shortcuts modal shows them: (section, keys, what it does).
 /// In `keys`, the words "then", "or" and "+" are separators; everything else is a key cap.
 const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     (
         "Navigate",
-        &["Ctrl", "+", "K"],
+        &[keys::MOD, "+", "K"],
         "Command palette and search",
     ),
     (
         "Navigate",
-        &["Ctrl", "+", "B"],
+        &[keys::MOD, "+", "B"],
         "Collapse or expand the sidebar",
     ),
-    ("Navigate", &["J", "or", "↓"], "Next row"),
-    ("Navigate", &["K", "or", "↑"], "Previous row"),
-    ("Navigate", &["Enter"], "Open the detail panel"),
+    ("Navigate", &["J", "or", "↓"], "Next row or group"),
+    ("Navigate", &["K", "or", "↑"], "Previous row or group"),
+    (
+        "Navigate",
+        &["H", "L", "or", "←", "→"],
+        "Board: the next column left or right",
+    ),
+    (
+        "Navigate",
+        &["Enter"],
+        "Open the detail panel; on a group, fold it",
+    ),
     ("Navigate", &["Esc"], "Close the panel or a modal"),
     ("Navigate", &["G", "then", "I"], "Inbox"),
     ("Navigate", &["G", "then", "A"], "Activity"),
@@ -166,9 +221,13 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "R"], "Graph"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
-    ("Decide", &["S"], "Ratify as a standing rule"),
+    (
+        "Decide",
+        &[keys::SHIFT, "+", "A"],
+        "Ratify as a standing rule",
+    ),
     ("Decide", &["X"], "Reject"),
-    ("Work", &["N"], "New task"),
+    ("Work", &["N", "or", keys::MOD, "+", "N"], "New task"),
     ("Work", &["C"], "Add a note"),
     (
         "Work",
@@ -180,40 +239,112 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Display", &["B"], "List or board"),
     (
         "Display",
-        &["H"],
+        &["S", "then", "D"],
         "Show dismissed: canceled, rejected, retired",
     ),
-    ("Display", &["O"], "Open a project folder"),
-    ("Display", &["Ctrl", "+", "?"], "These shortcuts"),
+    ("Display", &[keys::SHIFT, "+", "H"], "Show empty groups"),
+    (
+        "Display",
+        &["O", "or", keys::MOD, "+", "O"],
+        "Open a project folder",
+    ),
+    ("Window", &[keys::MOD, "+", "W"], CLOSE_WINDOW),
+    ("Window", &[keys::MOD, "+", "Q"], "Quit"),
+    ("Display", &[keys::MOD, "+", "?"], "These shortcuts"),
 ];
 
-pub fn run(dirs: Vec<PathBuf>) {
-    gpui_kit::application().run(move |cx| {
+/// Open the app on `dirs`. `quiet`: why the system posts none of its notifications where it
+/// runs (a bare binary on macOS), which it tells the human.
+pub fn run(dirs: Vec<PathBuf>, quiet: Option<Quiet>) {
+    let application = gpui_kit::application();
+    // The Dock's icon clicked with no window shown brings the app forward. Hidden by Cmd+W,
+    // AppKit shows it again itself.
+    application.on_reopen(|cx| cx.activate(true));
+    application.run(move |cx| {
         gpui_kit::init(cx);
+        // Before any window or notification, as GPUI asks.
+        cx.set_app_identity(APP_ID, APP_NAME);
         theme::apply(cx);
         bind_keys(cx);
+        app_actions(cx);
+        let own_titlebar = TITLEBAR > 0.;
         let options = WindowOptions {
             app_id: Some("livtk".into()),
             titlebar: Some(TitlebarOptions {
                 title: Some("livtk".into()),
-                ..Default::default()
+                appears_transparent: own_titlebar,
+                traffic_light_position: own_titlebar
+                    .then(|| point(px(TRAFFIC_LIGHTS.0), px(TRAFFIC_LIGHTS.1))),
             }),
+            // The app's strip drags the window, so AppKit neither drags from the titlebar nor
+            // delays clicks there to tell a double-click.
+            app_owns_titlebar_drag: own_titlebar,
             window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         };
-        if let Err(e) = gpui_kit::open_window(options, cx, move |window, cx| {
+        match gpui_kit::open_window(options, cx, move |window, cx| {
             cx.new(|cx| {
                 let mut app = LivtkApp::new(Model::open(&dirs), window, cx);
                 if let Some(path) = Saved::path() {
                     app.remember(path, window, cx);
                 }
+                if let Some(why) = quiet {
+                    app.model.tell_quiet(why);
+                }
+                app.follow_system(cx);
                 app
             })
         }) {
-            eprintln!("livtk-app: cannot open a window: {e}");
-            cx.quit();
+            Ok((window, app)) => dock_actions(window, app.downgrade(), cx),
+            Err(e) => {
+                eprintln!("livtk-app: cannot open a window: {e}");
+                cx.quit();
+            }
         }
     });
+}
+
+/// The Dock menu's items, heard with no window active: hidden by Cmd+W, or another app in front.
+/// Then only the app's own handlers hear an action, and macOS greys an item none hears; these
+/// bring the window forward and act in it. While the window is active, its own take them first.
+pub fn dock_actions(window: AnyWindowHandle, app: WeakEntity<LivtkApp>, cx: &mut App) {
+    fn on<A: Action>(
+        window: AnyWindowHandle,
+        app: &WeakEntity<LivtkApp>,
+        cx: &mut App,
+        act: impl Fn(&mut LivtkApp, &mut Window, &mut Context<LivtkApp>) + 'static,
+    ) {
+        let app = app.clone();
+        cx.on_action(move |_: &A, cx| {
+            cx.activate(true);
+            let _ = window.update(cx, |_, window, cx| {
+                window.activate_window();
+                app.update(cx, |app, cx| act(app, window, cx))
+            });
+        });
+    }
+    on::<NewTask>(window, &app, cx, |app, w, cx| app.open_form(w, cx));
+    on::<GoInbox>(window, &app, cx, |app, w, cx| app.go(View::Inbox, w, cx));
+    on::<menus::Project1>(window, &app, cx, |app, w, cx| app.switch_project(0, w, cx));
+    on::<menus::Project2>(window, &app, cx, |app, w, cx| app.switch_project(1, w, cx));
+    on::<menus::Project3>(window, &app, cx, |app, w, cx| app.switch_project(2, w, cx));
+    on::<menus::Project4>(window, &app, cx, |app, w, cx| app.switch_project(3, w, cx));
+    on::<menus::Project5>(window, &app, cx, |app, w, cx| app.switch_project(4, w, cx));
+    on::<menus::Project6>(window, &app, cx, |app, w, cx| app.switch_project(5, w, cx));
+    on::<menus::Project7>(window, &app, cx, |app, w, cx| app.switch_project(6, w, cx));
+    on::<menus::Project8>(window, &app, cx, |app, w, cx| app.switch_project(7, w, cx));
+    on::<menus::Project9>(window, &app, cx, |app, w, cx| app.switch_project(8, w, cx));
+}
+
+/// What the app does whatever window, field or menu has the keys: quit, hide, Help's links.
+fn app_actions(cx: &mut App) {
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &HideApp, cx| cx.hide());
+    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+    cx.on_action(|_: &BringToFront, cx| cx.activate(true));
+    cx.on_action(|_: &OpenGitHub, cx| cx.open_url(REPOSITORY));
+    cx.on_action(|_: &ReportIssue, cx| cx.open_url(&format!("{REPOSITORY}/issues/new")));
 }
 
 pub fn bind_keys(cx: &mut App) {
@@ -226,11 +357,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Open, nav),
         KeyBinding::new("escape", Close, nav),
         KeyBinding::new("a", Decide, nav),
-        KeyBinding::new("s", Standing, nav),
+        KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
         KeyBinding::new("n", NewTask, nav),
         KeyBinding::new("b", ToggleLayout, nav),
-        KeyBinding::new("h", ToggleAll, nav),
+        KeyBinding::new("s d", ToggleAll, nav),
+        KeyBinding::new("h", PrevColumn, nav),
+        KeyBinding::new("left", PrevColumn, nav),
+        KeyBinding::new("l", NextColumn, nav),
+        KeyBinding::new("right", NextColumn, nav),
+        KeyBinding::new("shift-h", ToggleEmpty, nav),
         KeyBinding::new("c", Note, nav),
         KeyBinding::new("o", OpenFolder, nav),
         KeyBinding::new("/", FocusFilter, nav),
@@ -251,20 +387,35 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("2", Priority2, nav),
         KeyBinding::new("3", Priority3, nav),
         KeyBinding::new("4", Priority4, nav),
-        // Everywhere, typing included: Ctrl+? is never text. Keyboards report it either as the
-        // `?` character or as Shift with `/`, so both spellings are bound.
-        KeyBinding::new("ctrl-?", ToggleHelp, None),
-        KeyBinding::new("ctrl-shift-/", ToggleHelp, None),
-        KeyBinding::new("ctrl-k", OpenPalette, None),
-        KeyBinding::new("ctrl-b", ToggleSidebar, None),
+        // Everywhere, typing included: Cmd+? on macOS, Ctrl+? elsewhere (`secondary`), is never
+        // text. Keyboards report it either as the `?` character or as Shift with `/`, so both
+        // spellings are bound.
+        KeyBinding::new("secondary-?", ToggleHelp, None),
+        KeyBinding::new("secondary-shift-/", ToggleHelp, None),
+        KeyBinding::new("secondary-k", OpenPalette, None),
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
+        // Ctrl+N and Ctrl+P are Control on every platform, as in every Mac text field.
         KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
         KeyBinding::new("down", PaletteDown, Some(PALETTE_FIELD)),
         KeyBinding::new("ctrl-p", PaletteUp, Some(PALETTE_FIELD)),
         KeyBinding::new("ctrl-n", PaletteDown, Some(PALETTE_FIELD)),
         KeyBinding::new("escape", Cancel, Some(FORM)),
-        KeyBinding::new("ctrl-enter", Submit, Some(FORM)),
+        KeyBinding::new("secondary-enter", Submit, Some(FORM)),
+        // The menu bar's, everywhere: Cmd on macOS, Ctrl elsewhere.
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-n", NewTask, None),
+        KeyBinding::new("secondary-o", OpenFolder, None),
     ]);
+    // What a Mac app's window and app do; other platforms close and quit their own way.
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+            KeyBinding::new("cmd-h", HideApp, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+        ]);
+    }
 }
 
 /// What is being dragged: a node, with what it takes to judge a drop target.
@@ -339,9 +490,21 @@ struct NewTaskForm {
 pub struct LivtkApp {
     model: Model,
     nav: FocusHandle,
+    /// What has the keys while the shortcuts or About are shown.
+    modal_focus: FocusHandle,
+    /// The detail panel's state flow: the state it last showed, so a change transitions.
+    flow: Entity<state_flow::FlowState>,
+    /// Whether the app follows the system's settings it is told of only by asking (Reduce
+    /// Motion): the app does; a test sets them itself.
+    follows_system: bool,
     list_scroll: UniformListScrollHandle,
     filter: Entity<InputState>,
-    note: Entity<InputState>,
+    note: Entity<TextareaState>,
+    /// The node the note field is for, and each other node's unsent draft, by project and node:
+    /// a draft stays with its own node, as switching the panel to another swaps them, and two
+    /// projects that share node ids (two clones of one repository) never share a draft.
+    note_for: Option<(PathBuf, Uuid)>,
+    note_drafts: HashMap<(PathBuf, Uuid), String>,
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
@@ -373,6 +536,10 @@ pub struct LivtkApp {
     last_saved: Saved,
     form: Option<NewTaskForm>,
     help: bool,
+    /// The About modal is open.
+    about: bool,
+    /// What the menu bar and the Dock menu were last made from.
+    menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
     /// The detail panel's last frame while open, kept to animate it out after it closes.
     last_detail: Option<Detail>,
@@ -387,6 +554,15 @@ pub struct LivtkApp {
     menu: Option<Menu>,
     /// The menu the mouse-down being dispatched closed, if any: see `toggle_menu`.
     menu_closed: Option<Menu>,
+    /// Whether the window is in front; while it is not, what arrives in the inbox is told by a
+    /// system notification.
+    window_active: bool,
+    /// What each recent system notification told of, by its tag, oldest first, for a click on
+    /// it to open; how many were posted, which numbers the next; and this launch, which tells
+    /// its tags from an earlier run's still in the system's list (a tag in use replaces).
+    notified: Vec<(String, Vec<Arrival>)>,
+    notifications: u64,
+    launch: Uuid,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
 }
@@ -394,7 +570,16 @@ pub struct LivtkApp {
 impl LivtkApp {
     pub fn new(model: Model, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nav = cx.focus_handle();
-        let note = cx.new(|cx| InputState::new(window, cx).placeholder("Leave a note…"));
+        let flow = cx.new(|_| state_flow::FlowState::default());
+        // The flow's hover (its drifting light) draws the window again.
+        cx.observe(&flow, |_, _, cx| cx.notify()).detach();
+        // Enter adds the note; Shift+Enter breaks the line. It grows with what is written.
+        let note = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Leave a note…")
+                .auto_grow(1, 8)
+                .submit_on_enter(true)
+        });
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter…"));
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
@@ -406,19 +591,82 @@ impl LivtkApp {
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
             cx.on_focus_lost(window, |this, window, cx| this.restore_focus(window, cx)),
+            cx.observe_window_activation(window, |this, window, cx| {
+                this.window_active = window.is_window_active();
+                if this.window_active && this.follows_system {
+                    this.read_reduce_motion(cx);
+                }
+            }),
+            // Quitting writes what the app remembers first, not a beat later.
+            cx.on_app_quit(|this, _| {
+                this.persist();
+                std::future::ready(())
+            }),
         ];
+        // A Mac app's window closes, the app stays: closing (Cmd+W, the red button) hides it, so
+        // it keeps watching the projects and telling of what arrives; the Dock brings it back.
+        if cfg!(target_os = "macos") {
+            window.on_window_should_close(cx, |_, cx| {
+                cx.hide();
+                false
+            });
+        }
+        // A click on the notification brings the window forward on what it told of.
+        let this = cx.entity().downgrade();
+        let handle = window.window_handle();
+        cx.on_system_notification_response(move |response, cx| {
+            if !response.tag.starts_with(NOTIFICATION) {
+                return;
+            }
+            cx.activate(true);
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            let _ = this.update(cx, |app, cx| {
+                app.open_notified(&response.tag);
+                cx.notify();
+            });
+        });
         // Claude, the CLI and git change the log from outside; look every 200 ms.
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
                 let alive = this.update(cx, |app, cx| {
+                    // Whatever below tells the human something (a tick, a write that failed),
+                    // or lets a notice go, shows now: a notice is drawn only when painted.
+                    let noticed = app.model.notice().map(|n| (n.id, n.leaving.is_some()));
                     let changed = app.model.tick();
+                    // A hidden window draws nothing, and the Dock's count must still be right.
+                    app.sync_menus(cx);
+                    let arrived = app.model.take_arrivals();
+                    if !arrived.is_empty() {
+                        log::info!(
+                            "inbox: {} arrived ({}), window {}",
+                            arrived.len(),
+                            arrived
+                                .iter()
+                                .map(|a| a.key.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            if app.window_active {
+                                "in front: not told"
+                            } else {
+                                "away: telling"
+                            }
+                        );
+                    }
+                    if !arrived.is_empty() && !app.window_active {
+                        app.notify_arrived(arrived, cx);
+                    }
                     app.run_catch_ups(cx);
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
-                    app.model.settle(Instant::now(), FLASH.max(FADE) + POLL);
+                    let now = Instant::now();
+                    app.model.settle(now, FLASH.max(FADE) + POLL);
+                    if app.model.age_notice(now, NOTICE_FADE) {
+                        app.end_notice_fade(cx);
+                    }
                     // What the app remembers is written within a beat of changing.
                     app.persist();
-                    if changed || busy {
+                    let told = app.model.notice().map(|n| (n.id, n.leaving.is_some())) != noticed;
+                    if changed || busy || told {
                         cx.notify();
                     }
                 });
@@ -431,6 +679,9 @@ impl LivtkApp {
         LivtkApp {
             model,
             nav,
+            modal_focus: cx.focus_handle(),
+            flow,
+            follows_system: false,
             list_scroll: UniformListScrollHandle::new(),
             palette_input,
             palette_scroll: ScrollHandle::new(),
@@ -449,8 +700,12 @@ impl LivtkApp {
             last_saved: Saved::default(),
             filter,
             note,
+            note_for: None,
+            note_drafts: HashMap::new(),
             form: None,
             help: false,
+            about: false,
+            menu_state: None,
             editing: None,
             last_detail: None,
             detail_leaving: None,
@@ -459,6 +714,10 @@ impl LivtkApp {
             glide_epoch: 0,
             menu: None,
             menu_closed: None,
+            window_active: window.is_window_active(),
+            notified: Vec::new(),
+            notifications: 0,
+            launch: Uuid::now_v7(),
             _subscriptions: subscriptions,
             _poll: poll,
         }
@@ -476,6 +735,86 @@ impl LivtkApp {
 
     pub fn help_open(&self) -> bool {
         self.help
+    }
+
+    /// Tell of what arrived in the inbox while the window is away: one item by its key and
+    /// title, several by their count and keys, in a notification of its own.
+    fn notify_arrived(&mut self, arrived: Vec<Arrival>, cx: &mut Context<Self>) {
+        let many = self.model.projects.len() > 1;
+        let (title, body) = match arrived.as_slice() {
+            [one] => {
+                let project = self
+                    .model
+                    .projects
+                    .get(one.project)
+                    .filter(|_| many)
+                    .map_or(String::new(), |p| format!("{} · ", p.name));
+                (
+                    format!("{project}{} waits for you", one.key),
+                    one.title.clone(),
+                )
+            }
+            all => (
+                format!("{} things wait for you", all.len()),
+                all.iter()
+                    .map(
+                        |a| match self.model.projects.get(a.project).filter(|_| many) {
+                            Some(p) => format!("{} {}", p.name, a.key),
+                            None => a.key.clone(),
+                        },
+                    )
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        };
+        self.notifications += 1;
+        let tag = format!("{NOTIFICATION}-{}-{}", self.launch, self.notifications);
+        cx.show_system_notification(SystemNotification {
+            tag: tag.clone().into(),
+            title: title.into(),
+            body: body.into(),
+            actions: Vec::new(),
+        });
+        self.notified.push((tag, arrived));
+        if self.notified.len() > NOTIFIED_KEPT {
+            self.notified.remove(0);
+        }
+    }
+
+    /// The notification tagged `tag` was clicked: its one item open in the inbox, or the inbox
+    /// of the first of several; one too old to be remembered opens the inbox.
+    fn open_notified(&mut self, tag: &str) {
+        let told = self
+            .notified
+            .iter()
+            .find(|(t, _)| t == tag)
+            .map(|(_, arrived)| arrived.clone())
+            .unwrap_or_default();
+        match told.as_slice() {
+            [one] => self.model.open_arrival(one),
+            [first, ..] => {
+                self.model.select_project(first.project);
+                self.model.set_view(View::Inbox);
+            }
+            [] => self.model.set_view(View::Inbox),
+        }
+    }
+
+    /// A notice began to fade: take it away the moment the fade ends, not at the next poll, as
+    /// it would otherwise stand there unseen, taking clicks meant for what is under it.
+    fn end_notice_fade(&mut self, cx: &mut Context<Self>) {
+        if self.model.notice().is_none_or(|n| n.leaving.is_none()) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_FADE).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.model.age_notice(Instant::now(), NOTICE_FADE) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Catch stores up off the window's thread: a replay after a git pull takes as long as the
@@ -512,11 +851,13 @@ impl LivtkApp {
             Menu::Filter => "filter",
             Menu::Grouping => "grouping",
             Menu::Ordering => "ordering",
+            Menu::View => "view",
             Menu::Priority => "priority",
             Menu::RowPriority(_) => "row-priority",
             Menu::DetailPriority => "detail-priority",
             Menu::AddLink => "add-link",
             Menu::RowState(_) => "row-state",
+            Menu::DetailState => "detail-state",
             Menu::Standing => "standing",
             Menu::Projects => "projects",
         })
@@ -524,12 +865,13 @@ impl LivtkApp {
 
     fn on_note(
         &mut self,
-        state: &Entity<InputState>,
+        state: &Entity<TextareaState>,
         event: &InputEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let InputEvent::PressEnter { .. } = event {
+        // The field reports Shift+Enter too, after breaking the line: only Enter adds the note.
+        if let InputEvent::PressEnter { shift: false, .. } = event {
             let text = state.read(cx).value().to_string();
             self.model.add_note(&text);
             state.update(cx, |s, cx| s.set_value("", window, cx));
@@ -582,7 +924,9 @@ impl LivtkApp {
 
     /// Give the keys to what is in front: the new-task form, the palette, else the list.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(form) = &self.form {
+        if self.help || self.about {
+            self.modal_focus.focus(window, cx);
+        } else if let Some(form) = &self.form {
             form.title.read(cx).focus_handle(cx).focus(window, cx);
         } else if self.model.palette.is_some() {
             self.palette_input
@@ -615,7 +959,9 @@ impl LivtkApp {
         if self.form.is_some() {
             return;
         }
+        // The shortcuts and About give way: the palette must be on top to have the keys.
         self.help = false;
+        self.about = false;
         self.menu = None;
         self.model.open_palette();
         self.reset_palette_input(window, cx);
@@ -683,7 +1029,7 @@ impl LivtkApp {
                 self.start_edit(ask == Some(Ask::EditBody), window, cx);
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
-            Some(Ask::Help) => self.help = true,
+            Some(Ask::Help) => self.set_help(true, window, cx),
             Some(Ask::PickLink) | None => {}
         }
         self.after_move(cx);
@@ -807,7 +1153,7 @@ impl LivtkApp {
     fn choice_where(&mut self, pick: impl Fn(&Choice) -> bool, cx: &mut Context<Self>) {
         let found = self
             .model
-            .selected()
+            .acted_on()
             .map(|r| self.model.choices(r.kind, r.state))
             .and_then(|c| c.into_iter().find(|c| pick(c)));
         if let Some(c) = found {
@@ -815,8 +1161,14 @@ impl LivtkApp {
         }
     }
 
+    /// New Task, from anywhere: the form, over whatever else was open. One already open keeps its
+    /// half-typed text and gets the keys back.
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.help = false;
+        if let Some(form) = &self.form {
+            form.title.read(cx).focus_handle(cx).focus(window, cx);
+            return;
+        }
+        self.close_overlays(window, cx);
         let title = cx.new(|cx| InputState::new(window, cx).placeholder("Task title"));
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -1058,11 +1410,70 @@ impl LivtkApp {
             .into_any_element()
     }
 
+    /// Show the shortcuts, or hide them. While shown they have the keys, as About does, so a key
+    /// meant for the list never acts on a task behind them; hidden, what is under them has the
+    /// keys again: a half-typed form, or the list.
+    fn set_help(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if show {
+            self.show_over_form(window, cx);
+            self.help = true;
+            self.modal_focus.focus(window, cx);
+        } else {
+            self.help = false;
+            self.restore_focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Make way for the shortcuts or About: every other overlay goes but a new task's form,
+    /// which stays under them with its text, as nothing typed is ever lost behind an overlay.
+    fn show_over_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_menu(window, cx);
+        self.model.close_palette();
+        self.help = false;
+        self.about = false;
+    }
+
+    /// Follow the system's settings from now on: Reduce Motion now, and again each time the
+    /// window comes forward (it may have changed meanwhile).
+    pub fn follow_system(&mut self, cx: &mut Context<Self>) {
+        self.follows_system = true;
+        self.read_reduce_motion(cx);
+    }
+
+    /// Ask the system whether it wants less motion, off the main thread, and do as it says.
+    fn read_reduce_motion(&mut self, cx: &mut Context<Self>) {
+        let asked = cx.background_spawn(async { crate::system::reduce_motion() });
+        cx.spawn(async move |_, cx| {
+            let calm = asked.await;
+            cx.update(|cx| cx.set_reduce_motion(calm));
+        })
+        .detach();
+    }
+
+    /// Close the overlay on top, and only it (About, the shortcuts, the palette, then the form),
+    /// and give the keys to what is now on top.
+    fn close_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.about {
+            self.about = false;
+        } else if self.help {
+            self.help = false;
+        } else if self.model.palette.is_some() {
+            self.model.close_palette();
+        } else {
+            self.form = None;
+        }
+        self.menu = None;
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
     fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.close_palette();
         self.menu = None;
         self.form = None;
         self.help = false;
+        self.about = false;
         self.nav.focus(window, cx);
         cx.notify();
     }
@@ -1117,7 +1528,7 @@ impl LivtkApp {
 
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.rail(window) {
-            return self.rail_bar(cx);
+            return self.rail_bar(titlebar_height(window), cx);
         }
         let mut side = div()
             .debug_selector(|| "sidebar".into())
@@ -1128,8 +1539,10 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .px_2()
-            .py_3()
+            .pb_3()
+            .pt(px(titlebar_height(window).max(12.)))
             .gap(px(2.))
+            .children(titlebar_strip("sidebar-titlebar", titlebar_height(window)))
             .child(section_label("Projects"));
         for (i, p) in self.model.projects.iter().enumerate() {
             let current = i == self.model.current;
@@ -1200,12 +1613,11 @@ impl LivtkApp {
                     .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
                     .child(icon_hover(Icon::Shortcuts, 16., TEXT_4, "nav", TEXT_3))
                     .child(div().flex_1().child("Shortcuts"))
-                    .child(kbd("Ctrl"))
+                    .child(kbd(keys::MOD))
                     .child(kbd("?"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.help = !this.help;
-                        cx.notify();
-                    })),
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx)),
+                    ),
             )
             .child(self.edge(Edge::Sidebar, window, cx).right_0())
             .into_any_element()
@@ -1314,7 +1726,7 @@ impl LivtkApp {
 
     /// The collapsed sidebar: a rail of icons. The project switcher, each view with a dot when
     /// it holds something new, and the shortcuts; names in tooltips.
-    fn rail_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn rail_bar(&self, titlebar: f32, cx: &mut Context<Self>) -> AnyElement {
         let inbox = self.model.project().map_or(0, |p| p.inbox);
         let unseen = self.model.project().map_or(0, |p| p.unseen);
         let mut rail = div()
@@ -1322,11 +1734,14 @@ impl LivtkApp {
             .w(px(RAIL_WIDTH))
             .flex_none()
             .h_full()
+            .relative()
             .flex()
             .flex_col()
             .items_center()
-            .py_3()
-            .gap(px(2.));
+            .pb_3()
+            .pt(px(titlebar.max(12.)))
+            .gap(px(2.))
+            .children(titlebar_strip("rail-titlebar", titlebar));
         let open = self.menu == Some(Menu::Projects);
         let projects = rail_button(
             "rail-projects".into(),
@@ -1378,12 +1793,9 @@ impl LivtkApp {
                     Icon::Shortcuts,
                     self.help,
                     false,
-                    "Shortcuts · Ctrl ?".into(),
+                    format!("Shortcuts · {}", keys::HELP).into(),
                 )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.help = !this.help;
-                    cx.notify();
-                })),
+                .on_click(cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx))),
             )
             .into_any_element()
     }
@@ -1445,9 +1857,9 @@ impl LivtkApp {
             ))
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(if rail {
-                    "Expand the sidebar · Ctrl B"
+                    format!("Expand the sidebar · {}", keys::SIDEBAR)
                 } else {
-                    "Collapse the sidebar · Ctrl B"
+                    format!("Collapse the sidebar · {}", keys::SIDEBAR)
                 })
                 .build(window, cx)
             })
@@ -1525,7 +1937,7 @@ impl LivtkApp {
         if self.menu.is_some() {
             self.close_menu(window, cx);
         } else {
-            self.close_overlays(window, cx);
+            self.close_top(window, cx);
         }
     }
 
@@ -1678,16 +2090,42 @@ impl LivtkApp {
                     })),
             );
         }
-        if !d.priorities.is_empty() || !d.filter.trim().is_empty() {
+        // The states of the view's kind, in its own order, as its groups are; the inbox mixes
+        // kinds and has none. Dismissed states only while dismissed work is shown.
+        if let Some(kind) = self.model.view.kind() {
+            let states: Vec<State> = kind
+                .states()
+                .iter()
+                .copied()
+                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .collect();
+            if states.len() > 1 {
+                panel = panel.child(menu_divider()).child(menu_heading("State"));
+                for st in states {
+                    let on = d.states.contains(&st);
+                    let id = format!("filter-state-{}", st.as_str());
+                    panel = panel.child(
+                        option_row(SharedString::from(id.clone()))
+                            .debug_selector(move || id.clone())
+                            .child(checkbox(on))
+                            .child(state_mark(kind, st))
+                            .child(state_name(st))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.model.toggle_state(st);
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
+        }
+        if !d.priorities.is_empty() || !d.states.is_empty() || !d.filter.trim().is_empty() {
             panel = panel.child(menu_divider()).child(
                 option_row("clear-filters".into())
+                    .debug_selector(|| "clear-filters".into())
                     .text_color(color(TEXT_3))
                     .child("Clear filters")
                     .on_click(cx.listener(|this, _, window, cx| {
-                        for p in this.model.display().priorities {
-                            this.model.toggle_priority(p);
-                        }
-                        this.model.set_filter("");
+                        this.model.clear_filters();
                         this.sync_filter(window, cx);
                         cx.notify();
                     })),
@@ -1780,15 +2218,16 @@ impl LivtkApp {
         let now = self.to_save();
         if now != self.last_saved {
             if let Err(e) = now.save(path) {
-                self.model.notice = Some(format!("cannot save the app's state: {e}"));
+                self.model.warn(format!("cannot save the app's state: {e}"));
             }
             self.last_saved = now;
         }
     }
 
     /// The dock: one compact bar floating over the bottom of the content, centred on it, holding
-    /// what the view can do: a new task, the filter, grouping, ordering, dismissed work, list or
-    /// board, the graph's zoom, and the palette. Labels show where there is room; else the icons
+    /// what the view can do: a new task, the filter, grouping, ordering, view options (list or
+    /// board, empty groups, dismissed work; the graph's dismissed work alone), the graph's zoom,
+    /// and the palette. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
     fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let view = self.model.view;
@@ -1812,14 +2251,13 @@ impl LivtkApp {
             shaping.push(self.dock_choice(Menu::Grouping, wide, cx));
             shaping.push(self.dock_choice(Menu::Ordering, wide, cx));
         }
-        if lists || view == View::Graph {
+        if lists {
+            shaping.push(self.dock_view_options(wide, cx));
+        } else if view == View::Graph {
             shaping.push(self.dock_dismissed(cx));
         }
         if !shaping.is_empty() {
             groups.push(shaping);
-        }
-        if view == View::Tasks {
-            groups.push(self.dock_layout(wide, cx));
         }
         groups.push(vec![self.dock_palette(cx)]);
 
@@ -1931,6 +2369,7 @@ impl LivtkApp {
                 let panel = match menu {
                     Menu::Filter => self.filter_menu(cx),
                     Menu::Grouping => self.grouping_menu(cx),
+                    Menu::View => self.view_menu(cx),
                     _ => self.ordering_menu(cx),
                 };
                 d.child(self.popover_up(menu, false, panel, cx))
@@ -1940,8 +2379,9 @@ impl LivtkApp {
 
     fn dock_filter(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let d = self.model.display();
-        let active =
-            usize::from(!d.filter.trim().is_empty()) + usize::from(!d.priorities.is_empty());
+        let active = usize::from(!d.filter.trim().is_empty())
+            + usize::from(!d.priorities.is_empty())
+            + usize::from(!d.states.is_empty());
         let label = match (wide, active) {
             (false, _) => None,
             (true, 0) => Some("Filter".to_owned()),
@@ -1979,8 +2419,23 @@ impl LivtkApp {
         self.dock_menu(menu, button, cx)
     }
 
+    /// How the list is shown, in a menu: lit while it is open or an option is on.
+    fn dock_view_options(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let d = self.model.display();
+        let open = self.menu == Some(Menu::View);
+        let button = Self::dock_button(
+            "dock-view",
+            Icon::ViewOptions,
+            wide.then(|| "View".to_owned()),
+            "View options",
+            open || d.show_empty || d.show_dismissed,
+        );
+        self.dock_menu(Menu::View, button, cx)
+    }
+
+    /// The graph's dismissed work: shown or hidden with a press, as it has nothing else to show.
     fn dock_dismissed(&self, cx: &mut Context<Self>) -> AnyElement {
-        let on = self.model.show_all;
+        let on = self.model.display().show_dismissed;
         Self::dock_button(
             "dock-dismissed",
             if on { Icon::Show } else { Icon::Hide },
@@ -1993,77 +2448,10 @@ impl LivtkApp {
             on,
         )
         .on_click(cx.listener(|this, _, _, cx| {
-            this.model.toggle_show_all();
+            this.model.toggle_dismissed();
             cx.notify();
         }))
         .into_any_element()
-    }
-
-    /// List or Board as tabs: a recessed track as tall as the dock's buttons, the chosen tab
-    /// raised inside it, its corners following the track's.
-    fn dock_layout(&self, wide: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let board = self.model.layout == Layout::Board;
-        let mut track = div()
-            .debug_selector(|| "layout-tabs".into())
-            .h(px(30.))
-            .p(px(2.))
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(2.))
-            .rounded_lg()
-            .bg(color(WINDOW))
-            .border_1()
-            .border_color(color(BORDER));
-        for (id, glyph, label, tip, on) in [
-            ("layout-list", Icon::List, "List", "List · B", !board),
-            ("layout-board", Icon::Board, "Board", "Board · B", board),
-        ] {
-            track = track.child(
-                div()
-                    .id(id)
-                    .debug_selector(move || id.into())
-                    .group(id)
-                    // The track's 30 px, less its border and its inset.
-                    .h(px(24.))
-                    .min_w(px(26.))
-                    .px(px(if wide { 9. } else { 5. }))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .when(on, |t| {
-                        t.bg(color(SELECTED))
-                            .border_color(color(BORDER_STRONG))
-                            .text_color(color(TEXT))
-                    })
-                    .when(!on, |t| {
-                        t.border_color(with_alpha(BORDER, 0.))
-                            .text_color(color(TEXT_3))
-                            .hover(|h| h.text_color(color(TEXT_2)))
-                    })
-                    .child(if on {
-                        icon(glyph, 14., TEXT)
-                    } else {
-                        icon_hover(glyph, 14., TEXT_4, id, TEXT_2)
-                    })
-                    .when(wide, |t| t.child(label))
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.model.layout == Layout::Board && label == "List"
-                            || this.model.layout == Layout::List && label == "Board"
-                        {
-                            this.model.toggle_layout();
-                            cx.notify();
-                        }
-                    })),
-            );
-        }
-        vec![track.into_any_element()]
     }
 
     fn dock_zoom(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -2114,8 +2502,11 @@ impl LivtkApp {
                 icon_hover(Icon::Search, 16., TEXT_2, "dock-palette", TEXT)
             })
             .tooltip(|window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new("Command palette · Ctrl K")
-                    .build(window, cx)
+                gpui_kit::component::tooltip::Tooltip::new(format!(
+                    "Command palette · {}",
+                    keys::PALETTE
+                ))
+                .build(window, cx)
             })
             .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)))
             .into_any_element()
@@ -2142,6 +2533,58 @@ impl LivtkApp {
             );
         }
         panel
+    }
+
+    /// How the list is shown, set in one visit, so no choice closes it: the tasks' list or board
+    /// first, then a line, then options that each turn on or off: empty groups, dismissed work.
+    fn view_menu(&self, cx: &mut Context<Self>) -> Div {
+        let d = self.model.display();
+        let mut panel = menu_panel(232.).debug_selector(|| "view-menu".into());
+        if self.model.view == View::Tasks {
+            for (id, glyph, label, layout) in [
+                ("view-layout-list", Icon::List, "List", Layout::List),
+                ("view-layout-board", Icon::Board, "Board", Layout::Board),
+            ] {
+                let on = self.model.layout == layout;
+                panel = panel.child(
+                    option_row(id.into())
+                        .debug_selector(move || id.into())
+                        .child(icon(glyph, 14., if on { TEXT } else { TEXT_3 }))
+                        .child(label)
+                        // B goes to the other one: its key is shown there.
+                        .child(
+                            div()
+                                .ml_auto()
+                                .flex()
+                                .items_center()
+                                .when(!on, |k| k.child(kbd("B")))
+                                .child(check(on)),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.set_layout(layout);
+                            cx.notify();
+                        })),
+                );
+            }
+            panel = panel.child(menu_divider().debug_selector(|| "view-menu-divider".into()));
+        }
+        panel
+            .child(view_option(
+                "view-show-empty",
+                "Show empty groups",
+                Some(keys::EMPTY_GROUPS),
+                d.show_empty,
+                Model::toggle_empty,
+                cx,
+            ))
+            .child(view_option(
+                "view-show-dismissed",
+                "Show dismissed work",
+                Some("H"),
+                d.show_dismissed,
+                Model::toggle_dismissed,
+                cx,
+            ))
     }
 
     fn ordering_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -2222,28 +2665,47 @@ impl LivtkApp {
         })
     }
 
-    /// A node's state mark that opens the states of its kind, as Linear's status menu: the
-    /// moves it can make enabled, the human's own decisions in the accent, the rest greyed so
-    /// the whole flow shows. A press here neither selects the row nor starts a drag.
-    fn state_button(&self, id: Uuid, kind: Kind, state: State, cx: &mut Context<Self>) -> Div {
+    /// A node's state mark, with its `name` in the panel, that opens the states of its kind, as
+    /// Linear's status menu: the moves it can make enabled, the human's own decisions in the
+    /// accent, the rest greyed so the whole flow shows. A press here neither selects the row nor
+    /// starts a drag.
+    fn state_button(
+        &self,
+        menu: Menu,
+        id: Uuid,
+        kind: Kind,
+        state: State,
+        name: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         if !has_flow(kind) {
-            return div().flex_none().child(state_mark(kind, state));
+            return div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(state_mark(kind, state))
+                .when(name, |d| d.child(state_name(state)));
         }
-        let menu = Menu::RowState(id);
         let open = self.menu == Some(menu);
-        let selector = format!("state-of-{id}");
+        let selector = match menu {
+            Menu::DetailState => "detail-state".to_owned(),
+            _ => format!("state-of-{id}"),
+        };
         let button = div()
             .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector.clone())
-            .size(px(22.))
+            .h(px(22.))
             .flex()
             .flex_none()
             .items_center()
-            .justify_center()
             .rounded_lg()
+            .when(name, |b| b.px(px(4.)).gap_2())
+            .when(!name, |b| b.w(px(22.)).justify_center())
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
             .child(state_mark(kind, state))
+            .when(name, |b| b.child(state_name(state)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
@@ -2330,163 +2792,41 @@ impl LivtkApp {
         }
     }
 
-    /// The flow of the open node's states: the main path left to right with arrows, the states
-    /// off it below. Where it is now is filled; where it can go is outlined and clickable, in
-    /// the accent when that move is the human's own decision; the rest is dim.
-    fn state_flow(&self, id: Uuid, kind: Kind, state: State, cx: &mut Context<Self>) -> Div {
-        let all = steps_with(kind, state, self.model.gates());
-        let mut path = div()
-            .debug_selector(|| "state-flow".into())
-            .w_full()
-            .flex()
-            .items_start();
-        let lit = arrows_with(kind, state, self.model.gates());
-        for (i, s) in all.iter().filter(|s| s.main).enumerate() {
-            if i > 0 {
-                path = path.child(flow_arrow(i - 1, lit[i - 1]));
-            }
-            path = path.child(self.flow_step(id, kind, s, cx));
-        }
-        let off: Vec<&Step> = all.iter().filter(|s| !s.main).collect();
-        let mut out = div().flex().flex_col().gap_3().child(path);
-        if !off.is_empty() {
-            let mut row = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_xs().text_color(color(TEXT_4)).child("Or"));
-            for s in off {
-                row = row.child(self.flow_pill(id, kind, s, cx));
-            }
-            out = out.child(row);
-        }
-        out
-    }
-
-    /// How a step looks for what it is. Where the node is: tinted with its state's own colour
-    /// and ringed in it. A move waiting for the human's decision: a dotted accent ring. A move
-    /// anyone can make: a plain ring. Out of reach: dim.
-    fn step_style(s: &Step, el: Stateful<Div>) -> Stateful<Div> {
-        let el = el.border(px(1.5));
-        match s.look() {
-            Look::Current => {
-                let c = state_color(s.state);
-                el.bg(with_alpha(c, 0.18)).border_color(color(c))
-            }
-            Look::Decision => el
-                .border_dashed()
-                .border_color(color(ACCENT_HOVER))
-                .hover(|h| h.bg(with_alpha(ACCENT, 0.16))),
-            Look::Move => el
-                .bg(color(SURFACE))
-                .border_color(color(TEXT_3))
-                .hover(|h| h.bg(color(HOVER)).border_color(color(TEXT))),
-            Look::Out => el.border_color(color(BORDER)).opacity(0.3),
-        }
-    }
-
-    /// A step's label colour, by the same look.
-    fn step_text(s: &Step) -> u32 {
-        match s.look() {
-            Look::Current => TEXT,
-            Look::Decision => ACCENT_HOVER,
-            Look::Move => TEXT,
-            Look::Out => TEXT_4,
-        }
-    }
-
-    /// What a click on a step does: ratify offers the standing-rule choice first.
-    fn on_step(
+    /// The node's states as a flow (see `state_flow`): a click makes the move, and ratifying a
+    /// lesson opens the standing-rule menu first.
+    fn state_flow(
         &self,
         id: Uuid,
-        s: &Step,
-        el: Stateful<Div>,
+        kind: Kind,
+        state: State,
+        width: f32,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let tip: SharedString = match (&s.to, s.current) {
-            (Some(c), _) => c.label.into(),
-            (None, true) => "Where it is now".into(),
-            (None, false) => "Not a move from here".into(),
-        };
-        let el = el.tooltip(move |window, cx| {
-            gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-        });
-        if s.standing.is_some() {
-            el.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.toggle_menu(Menu::Standing, window, cx);
-                }),
-            )
-        } else if let Some(choice) = s.to.clone() {
-            el.on_click(cx.listener(move |this, _, _, cx| {
-                this.model.choose_on(id, &choice);
-                cx.notify();
-            }))
-        } else {
-            el
-        }
-    }
-
-    /// A step on the main path: its mark in a ring, its name below.
-    fn flow_step(&self, id: Uuid, kind: Kind, s: &Step, cx: &mut Context<Self>) -> Div {
-        let name = s.state.as_str();
-        let ring_id = format!("flow-{name}");
-        let ring = div()
-            .id(SharedString::from(ring_id.clone()))
-            .debug_selector(move || ring_id.clone())
-            .size(px(26.))
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .child(flow_mark(kind, s));
-        let ring = self.on_step(id, s, Self::step_style(s, ring), cx);
-        let label_id = format!("flow-label-{name}");
-        let label = div()
-            .debug_selector(move || label_id.clone())
-            .text_xs()
-            .whitespace_nowrap()
-            .text_color(color(Self::step_text(s)))
-            .when(s.current, |l| l.font_weight(FontWeight::SEMIBOLD))
-            .child(state_short(s.state));
-        let standing_open = self.menu == Some(Menu::Standing) && s.standing.is_some();
-        div()
-            .relative()
-            .w(px(56.))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(6.))
-            .child(ring)
-            .child(label)
-            .when(standing_open, |d| {
+    ) -> AnyElement {
+        let steps = steps_with(kind, state, self.model.gates());
+        let arrows = arrows_with(kind, state, self.model.gates());
+        let standing = (self.menu == Some(Menu::Standing))
+            .then(|| steps.iter().find(|s| s.standing.is_some()))
+            .flatten()
+            .map(|s| {
                 let panel = self.standing_menu(id, s, cx);
-                d.child(self.popover(Menu::Standing, false, 30., panel, cx))
-            })
-    }
-
-    /// A state off the main path, as a pill: parked, canceled, rejected.
-    fn flow_pill(&self, id: Uuid, kind: Kind, s: &Step, cx: &mut Context<Self>) -> Stateful<Div> {
-        let pill_id = format!("flow-{}", s.state.as_str());
-        let pill = div()
-            .id(SharedString::from(pill_id.clone()))
-            .debug_selector(move || pill_id.clone())
-            .h(px(26.))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .rounded_full()
-            .text_xs()
-            .text_color(color(Self::step_text(s)))
-            .when(s.current, |p| p.font_weight(FontWeight::SEMIBOLD))
-            .child(flow_mark(kind, s))
-            .child(state_name(s.state));
-        self.on_step(id, s, Self::step_style(s, pill), cx)
+                self.popover(Menu::Standing, false, 30., panel, cx)
+                    .into_any_element()
+            });
+        let this = cx.entity().downgrade();
+        let choose = move |choice: &Choice, _: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |app, cx| {
+                app.model.choose_on(id, choice);
+                cx.notify();
+            });
+        };
+        let this = cx.entity().downgrade();
+        let standing_open = move |window: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |app, cx| app.toggle_menu(Menu::Standing, window, cx));
+        };
+        state_flow::StateFlow::new(id, kind, steps, arrows, width, self.flow.clone(), choose)
+            .on_standing(standing_open)
+            .standing_menu(standing)
+            .into_any_element()
     }
 
     /// Ratify, or ratify as a standing rule shown at every session start.
@@ -2663,6 +3003,17 @@ impl LivtkApp {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.feed(cx),
             (View::Graph, _) => self.graph_view(cx),
+            // No column to draw: nothing matches, or every column is empty and hidden.
+            (View::Tasks, Layout::Board) if self.model.columns().is_empty() => empty(
+                view_icon(View::Tasks),
+                "No tasks here",
+                &format!(
+                    "Clear the filter, press {} for every column, or N for a new task.",
+                    keys::EMPTY_GROUPS
+                ),
+            )
+            .debug_selector(|| "board-empty".into())
+            .into_any_element(),
             (View::Tasks, Layout::Board) => self.board(cx).into_any_element(),
             _ => self.list(window, cx).into_any_element(),
         }
@@ -2943,6 +3294,12 @@ impl LivtkApp {
                     cx.notify();
                 }),
             )
+            // A trackpad's pinch zooms at its centre, as Cmd+scroll (Ctrl+scroll) does.
+            .on_pinch(cx.listener(|this, e: &PinchEvent, _, cx| {
+                let (x, y) = this.graph_point(e.position);
+                this.model.graph_zoom(1. + e.delta, Some((x, y)));
+                cx.notify();
+            }))
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
                 let d = e.delta.pixel_delta(px(20.));
                 if e.modifiers.control || e.modifiers.platform {
@@ -3207,7 +3564,11 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
-            .bg(color(SURFACE))
+            .bg(color(if self.model.band() == Some(key) {
+                SELECTED
+            } else {
+                SURFACE
+            }))
             .border_b_1()
             .border_color(color(BORDER))
             .hover(|s| s.bg(color(HOVER)))
@@ -3297,7 +3658,7 @@ impl LivtkApp {
                     .text_color(color(TEXT_4))
                     .child(r.key.clone()),
             )
-            .child(self.state_button(id, r.kind, r.state, cx))
+            .child(self.state_button(Menu::RowState(id), id, r.kind, r.state, false, cx))
             .child(
                 div()
                     .flex_1()
@@ -3385,6 +3746,11 @@ impl LivtkApp {
             let (mark, label) = group_label(key, Kind::Task);
             let mut col = div()
                 .id(SharedString::from(format!("col-{key:?}")))
+                .debug_selector(move || match key {
+                    GroupKey::State(s) => format!("column-{}", s.as_str()),
+                    GroupKey::Priority(p) => format!("column-priority-{p}"),
+                    GroupKey::All => "column-all".to_owned(),
+                })
                 .w(px(288.))
                 .flex_none()
                 .h_full()
@@ -3484,7 +3850,14 @@ impl LivtkApp {
                                 false,
                                 cx,
                             ))
-                            .child(self.state_button(id, Kind::Task, r.state, cx)),
+                            .child(self.state_button(
+                                Menu::RowState(id),
+                                id,
+                                Kind::Task,
+                                r.state,
+                                false,
+                                cx,
+                            )),
                     )
                     .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
@@ -3533,7 +3906,34 @@ impl LivtkApp {
 
     // ---- rendering: the detail panel ----------------------------------------------------------
 
-    /// Notice the panel opening or closing since the last frame.
+    /// The panel shows another node (or none): put the note field's draft by the node it was
+    /// written for, and bring back the new one's own.
+    fn track_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self
+            .model
+            .detail
+            .as_ref()
+            .zip(self.model.project())
+            .map(|(d, p)| (p.dir.clone(), d.node.id));
+        if open == self.note_for {
+            return;
+        }
+        let draft = self.note.read(cx).value().to_string();
+        if let Some(was) = self.note_for.take() {
+            if draft.is_empty() {
+                self.note_drafts.remove(&was);
+            } else {
+                self.note_drafts.insert(was, draft);
+            }
+        }
+        let back = open
+            .as_ref()
+            .and_then(|key| self.note_drafts.remove(key))
+            .unwrap_or_default();
+        self.note.update(cx, |s, cx| s.set_value(back, window, cx));
+        self.note_for = open;
+    }
+
     fn track_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match (&self.model.detail, self.last_detail.is_some()) {
             (Some(d), was_open) => {
@@ -3600,12 +4000,7 @@ impl LivtkApp {
         let n = &d.node;
         let mut props = div().flex().flex_col().gap_2().child(prop_row(
             "Status",
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(state_mark(n.kind, n.state))
-                .child(title_case(n.state.as_str())),
+            self.state_button(Menu::DetailState, n.id, n.kind, n.state, true, cx),
         ));
         if n.kind == Kind::Task {
             props = props.child(prop_row(
@@ -3625,24 +4020,31 @@ impl LivtkApp {
             "Created",
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
         ));
-        let mut links = div().flex().flex_col().gap_3().child(
-            div()
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(color(TEXT_4))
-                        .child("Links"),
-                )
-                .child(div().flex_1())
-                .child(self.add_link_button(n.kind, cx)),
-        );
+        let mut links = div()
+            .debug_selector(|| "detail-links".into())
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(color(TEXT_4))
+                            .child("Links"),
+                    )
+                    .child(div().flex_1())
+                    .child(self.add_link_button(n.kind, cx)),
+            );
         for g in &d.link_groups {
             links = links.child(self.link_group(g, cx));
         }
-        let flow = self.state_flow(n.id, n.kind, n.state, cx);
+        // The panel's content: its width less its padding either side.
+        let flow = self.state_flow(n.id, n.kind, n.state, width - 40., cx);
+
         let title = self.detail_title(n, cx);
         let body = self.detail_body(n, cx);
         let mut timeline = div().flex().flex_col().gap_3();
@@ -3710,8 +4112,9 @@ impl LivtkApp {
                     .child(title)
                     .when(has_flow(n.kind), |d| d.child(flow))
                     .child(props)
-                    .child(body)
+                    // What it waits for and what it blocks come before what it says.
                     .child(links)
+                    .child(body)
                     .child(section_label("Activity"))
                     .child(timeline),
             )
@@ -3721,14 +4124,22 @@ impl LivtkApp {
                     .p_3()
                     .border_t_1()
                     .border_color(color(BORDER))
-                    .child(Input::new(&self.note).prefix(icon(Icon::Notes, 14., TEXT_4))),
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_2()
+                            .child(div().pt(px(7.)).child(icon(Icon::Notes, 14., TEXT_4)))
+                            .child(div().flex_1().child(Textarea::new(&self.note).xsmall())),
+                    ),
             )
     }
 
     // ---- rendering: overlays ------------------------------------------------------------------
 
     /// A modal: a dim backdrop that closes it when clicked, around a card sized to its content.
-    fn modal(&self, id: &'static str, card: Div, cx: &mut Context<Self>) -> AnyElement {
+    /// `keys`: the modal itself has the keys (the shortcuts, About), rather than a field in it.
+    fn modal(&self, id: &'static str, keys: bool, card: Div, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id(id)
             .absolute()
@@ -3736,6 +4147,8 @@ impl LivtkApp {
             // Nothing behind it is hovered, scrolled or clicked while it is open.
             .occlude()
             .key_context(FORM)
+            // So no key reaches the list, or a form, behind it.
+            .when(keys, |d| d.track_focus(&self.modal_focus))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &Submit, window, cx| this.submit_form(window, cx)))
@@ -3746,9 +4159,15 @@ impl LivtkApp {
             // On a short window the gap above gives way first, then the card, whose content
             // scrolls inside it: a modal never runs past the window's bottom edge.
             .pb(px(16.))
+            // A click outside closes it, but not the click that brings the window back from
+            // another app: that one only activates it, so nothing half typed is lost.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| this.close_overlays(window, cx)),
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    if !e.first_mouse {
+                        this.close_top(window, cx);
+                    }
+                }),
             )
             .child(div().h(px(110.)).min_h(px(16.)).flex_shrink(20.))
             .child(
@@ -3803,7 +4222,7 @@ impl LivtkApp {
                 div()
                     .text_xs()
                     .text_color(with_alpha(TEXT, 0.7))
-                    .child("Ctrl ↵"),
+                    .child(keys::SUBMIT),
             )
             .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
         let card = div()
@@ -3854,7 +4273,7 @@ impl LivtkApp {
                     .child(div().flex_1())
                     .child(create),
             );
-        Some(self.modal("new-task-modal", card, cx))
+        Some(self.modal("new-task-modal", false, card, cx))
     }
 
     /// The command palette: a field, what it finds in sections, and the keys that drive it.
@@ -3976,7 +4395,7 @@ impl LivtkApp {
                     .child(kbd("Esc"))
                     .child("to close"),
             );
-        Some(self.modal("palette-modal", card, cx))
+        Some(self.modal("palette-modal", false, card, cx))
     }
 
     /// An action's icon in the palette, so every row has one: a move shows the state it goes
@@ -4000,8 +4419,9 @@ impl LivtkApp {
             Run::ToggleLayout => Icon::List,
             Run::Group(_) => Icon::Grouping,
             Run::Order(_) => Icon::Ordering,
-            Run::ToggleDismissed if self.model.show_all => Icon::Hide,
+            Run::ToggleDismissed if self.model.display().show_dismissed => Icon::Hide,
             Run::ToggleDismissed => Icon::Show,
+            Run::ToggleEmpty => Icon::ViewOptions,
             Run::FitGraph => Icon::Fit,
             Run::PickLink(_) | Run::Ask(Ask::PickLink) => Icon::Link,
             Run::Ask(Ask::NewTask) => Icon::NewTask,
@@ -4082,7 +4502,10 @@ impl LivtkApp {
         let mut sections = div().flex().flex_col().gap_4();
         let mut current = "";
         let mut block = div().flex().flex_col();
-        for (section, keys, what) in SHORTCUTS {
+        let shown = SHORTCUTS
+            .iter()
+            .filter(|(_, _, what)| cfg!(target_os = "macos") || *what != CLOSE_WINDOW);
+        for (section, keys, what) in shown {
             if *section != current {
                 if !current.is_empty() {
                     sections = sections.child(block);
@@ -4149,11 +4572,213 @@ impl LivtkApp {
                     .p_4()
                     .child(sections),
             );
-        Some(self.modal("shortcuts-modal", card, cx))
+        Some(self.modal("shortcuts-modal", true, card, cx))
     }
 
-    fn notice(&self) -> Option<AnyElement> {
-        let text = self.model.notice.clone()?;
+    /// Make the menu bar and the Dock menu again when what they show changed: the projects, the
+    /// view and its options, what waits in the inbox.
+    fn sync_menus(&mut self, cx: &mut Context<Self>) {
+        let m = &self.model;
+        let d = m.display();
+        let state = menus::MenuState {
+            projects: m.projects.iter().map(|p| p.name.clone()).collect(),
+            current: m.current,
+            view: View::ALL.iter().position(|v| *v == m.view).unwrap_or(0),
+            board: m.layout == Layout::Board,
+            show_empty: d.show_empty,
+            show_dismissed: d.show_dismissed,
+            inbox: m.projects.iter().map(|p| p.inbox).sum(),
+        };
+        if self.menu_state.as_ref() != Some(&state) {
+            cx.set_menus(menus::menu_bar(&state));
+            cx.set_dock_menu(menus::dock_menu(&state));
+            self.menu_state = Some(state);
+        }
+    }
+
+    /// Switch to project `i`, as the File and Dock menus' Projects do.
+    fn switch_project(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.select_project(i);
+        self.sync_filter(window, cx);
+        cx.notify();
+    }
+
+    /// Add Link…, from the Task menu: the palette, showing the links the node can gain.
+    fn add_link_from_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.palette.is_none() {
+            self.toggle_palette(window, cx);
+        }
+        self.palette_input
+            .update(cx, |s, cx| s.set_value("Add link", window, cx));
+        self.model.palette_query("Add link");
+        cx.notify();
+    }
+
+    /// Install Command Line Tool, from the livtk menu: link livtk and livtk-app onto PATH from
+    /// the bundle this runs in, and say how it went.
+    fn install_cli(&mut self) {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let bundle = std::env::current_exe()
+            .ok()
+            .and_then(|e| std::fs::canonicalize(e).ok())
+            .and_then(|e| crate::launch::bundle_of(&e))
+            .or_else(|| home.as_ref().map(|h| h.join(crate::launch::IN_HOME)))
+            .filter(|b| b.exists());
+        let (Some(bundle), Some(home)) = (bundle, home) else {
+            self.model.warn(
+                "No livtk.app to link the command line tools to: scripts/check --install puts it \
+                 in Applications.",
+            );
+            return;
+        };
+        let bin = home.join(crate::launch::BIN_IN_HOME);
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        match crate::launch::install_cli(&bundle, &bin, &path) {
+            Ok(done) if !done.refused.is_empty() => self.model.warn(format!(
+                "Not linked, a file is in the way: {}",
+                done.refused
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Ok(done) => {
+                let mut text = format!("livtk and livtk-app are linked in {}.", bin.display());
+                if !done.on_path {
+                    text.push_str(" That folder is not on PATH: add it in your shell's profile.");
+                }
+                if let Some(first) = done.shadowed.first() {
+                    text.push_str(&format!(
+                        " {} comes earlier on PATH and runs instead: remove it.",
+                        first.display()
+                    ));
+                } else if let Some(first) = done.leftover.first() {
+                    text.push_str(&format!(
+                        " {} is left over from an earlier install: it never runs, so you can \
+                         remove it.",
+                        first.display()
+                    ));
+                }
+                self.model.inform(text);
+            }
+            Err(e) => self
+                .model
+                .warn(format!("Cannot link the command line tools: {e}")),
+        }
+    }
+
+    /// About livtk: its name, which build this is, what it is for, where it lives.
+    fn about_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.about {
+            return None;
+        }
+        let card = div()
+            .debug_selector(|| "about".into())
+            .w(px(380.))
+            .p_6()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .rounded_xl()
+            .bg(color(LIFTED))
+            .border_1()
+            .border_color(color(BORDER_STRONG))
+            .shadow_lg()
+            .child(icon(Icon::Inbox, 32., ACCENT))
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color(TEXT))
+                    .child("livtk"),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "about-build".into())
+                    .text_color(color(TEXT_3))
+                    .child(livtk_build::DESCRIBE),
+            )
+            .child(
+                div()
+                    .pt_2()
+                    .text_center()
+                    .text_color(color(TEXT_2))
+                    .child("Durable tasks and memory for Claude Code and its human."),
+            )
+            .child(div().text_xs().text_color(color(TEXT_4)).child(REPOSITORY));
+        Some(self.modal("about-modal", true, card, cx))
+    }
+
+    /// The notice, at the bottom right above the dock's level, with its ×. The pointer over it
+    /// holds it; when its time is up it fades out. Its id stays the same from one notice to the
+    /// next, so a pointer over it stays over it; its animations are each notice's own, so a new
+    /// one comes in afresh.
+    fn notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let n = self.model.notice()?;
+        let id = n.id;
+        let close = div()
+            .id("notice-close")
+            .debug_selector(|| "notice-close".into())
+            .group("notice-close")
+            .size(px(20.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .hover(|s| s.bg(color(HOVER)))
+            .child(icon_hover(Icon::Close, 14., TEXT_4, "notice-close", TEXT))
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("Close").build(window, cx)
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.model.dismiss_notice();
+                cx.notify();
+            }));
+        let card = div()
+            .id("notice")
+            .debug_selector(|| "notice".into())
+            .py_3()
+            .pl_3()
+            .pr_2()
+            .rounded_xl()
+            .bg(color(LIFTED))
+            .border_1()
+            .border_color(with_alpha(if n.error { RED } else { ACCENT }, 0.5))
+            .text_color(color(TEXT))
+            .shadow_lg()
+            .flex()
+            .items_start()
+            .gap_2()
+            // Presses here are the notice's: nothing under it is clicked through it.
+            .occlude()
+            // Only the pointer lets it go: a key pressed with the pointer resting on it, which
+            // GPUI by default takes as leaving, does not.
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.model.hold_notice(*hovered, Instant::now());
+                cx.notify();
+            }))
+            .child(if n.error {
+                icon(Icon::Error, 16., RED)
+            } else {
+                icon(Icon::Info, 16., ACCENT)
+            })
+            .child(div().flex_1().child(n.text.clone()))
+            .child(close);
+        let card = if n.leaving.is_some() {
+            card.with_animation(
+                SharedString::from(format!("notice-out-{id}")),
+                Animation::new(NOTICE_FADE).with_easing(ease_in_out),
+                |el, t| el.opacity(1.0 - t),
+            )
+            .into_any_element()
+        } else {
+            card.into_any_element()
+        };
+        // The coming in is drawn whether or not the card is leaving, so it plays once per
+        // notice: one caught while fading comes back at full strength, not in again from nothing.
         Some(
             div()
                 .absolute()
@@ -4161,18 +4786,12 @@ impl LivtkApp {
                 .bottom(px(DOCK_SPACE + 8.))
                 .right(px(16.))
                 .max_w(px(520.))
-                .p_3()
-                .rounded_xl()
-                .bg(color(LIFTED))
-                .border_1()
-                .border_color(with_alpha(RED, 0.5))
-                .text_color(color(TEXT))
-                .shadow_lg()
-                .flex()
-                .items_start()
-                .gap_2()
-                .child(icon(Icon::Error, 16., RED))
-                .child(div().flex_1().child(text))
+                .child(card)
+                .with_animation(
+                    SharedString::from(format!("notice-in-{id}")),
+                    Animation::new(NOTICE_IN).with_easing(ease_out_quint()),
+                    |el, t| el.opacity(t),
+                )
                 .into_any_element(),
         )
     }
@@ -4184,10 +4803,13 @@ impl Render for LivtkApp {
             self.sidebar_peek = false;
         }
         let sidebar = self.sidebar(window, cx);
+        let rail = self.rail(window);
+        let titlebar = titlebar_height(window);
         let header = self.header(window, cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
+        self.track_note(window, cx);
         let panel_w = self.panel_px(window);
         let floats = self.panel_floats(window);
         // A narrow window has no room for the panel beside the content: it floats over it.
@@ -4203,6 +4825,9 @@ impl Render for LivtkApp {
             if floats {
                 div()
                     .debug_selector(|| "panel-float".into())
+                    // Presses here are the panel's: none reaches the titlebar strip or the
+                    // content under it.
+                    .occlude()
                     .absolute()
                     .top_0()
                     .bottom_0()
@@ -4264,10 +4889,12 @@ impl Render for LivtkApp {
             .absolute()
             .size_full()
         });
+        self.sync_menus(cx);
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
+        let about = self.about_overlay(cx);
         let palette = self.palette_overlay(cx);
-        let notice = self.notice();
+        let notice = self.notice(cx);
         let list_area = div()
             .flex_1()
             .min_h_0()
@@ -4276,14 +4903,22 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &Down, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &Up, _, cx| this.step(-1, cx)))
             .on_action(cx.listener(|this, _: &Open, _, cx| {
-                this.model.open_detail();
+                this.model.enter();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PrevColumn, _, cx| {
+                this.model.select_column_by(-1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NextColumn, _, cx| {
+                this.model.select_column_by(1);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if this.menu.is_some() {
                     this.escape(window, cx);
-                } else if this.help || this.form.is_some() {
-                    this.close_overlays(window, cx);
+                } else if this.help || this.about || this.form.is_some() {
+                    this.close_top(window, cx);
                 } else {
                     this.model.close_detail();
                     cx.notify();
@@ -4297,8 +4932,6 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &Reject, _, cx| {
                 this.choice_where(|c| c.to == State::Rejected, cx)
             }))
-            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)))
-            .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
                 this.menu = Some(Menu::Filter);
                 this.filter.read(cx).focus_handle(cx).focus(window, cx);
@@ -4308,7 +4941,11 @@ impl Render for LivtkApp {
                 if this.model.detail.is_none() {
                     this.model.open_detail();
                 }
-                this.note.read(cx).focus_handle(cx).focus(window, cx);
+                // Only into a panel that is there: with nothing to open (the graph with no card
+                // chosen), the keys stay where they are.
+                if this.model.detail.is_some() {
+                    this.note.read(cx).focus_handle(cx).focus(window, cx);
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| {
@@ -4318,16 +4955,13 @@ impl Render for LivtkApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleAll, _, cx| {
-                this.model.toggle_show_all();
+                this.model.toggle_dismissed();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &GoInbox, w, cx| this.go(View::Inbox, w, cx)))
-            .on_action(cx.listener(|this, _: &GoActivity, w, cx| this.go(View::Activity, w, cx)))
-            .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
-            .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
-            .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
-            .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
-            .on_action(cx.listener(|this, _: &GoGraph, w, cx| this.go(View::Graph, w, cx)))
+            .on_action(cx.listener(|this, _: &ToggleEmpty, _, cx| {
+                this.model.toggle_empty();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_graph(ZOOM_STEP, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx)))
             .on_action(cx.listener(|this, _: &ZoomFit, _, cx| {
@@ -4364,14 +4998,82 @@ impl Render for LivtkApp {
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
             )
+            // From anywhere, typing included, as their keys (Cmd on macOS) and the menu bar do.
+            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
+            .on_action(cx.listener(|this, _: &GoInbox, w, cx| this.go(View::Inbox, w, cx)))
+            .on_action(cx.listener(|this, _: &GoActivity, w, cx| this.go(View::Activity, w, cx)))
+            .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
+            .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
+            .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
+            .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
+            .on_action(cx.listener(|this, _: &GoGraph, w, cx| this.go(View::Graph, w, cx)))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                if cfg!(target_os = "macos") {
+                    cx.hide();
+                } else {
+                    window.remove_window();
+                }
+                let _ = this;
+            }))
+            .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
+            .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &About, window, cx| {
+                this.show_over_form(window, cx);
+                this.about = true;
+                this.modal_focus.focus(window, cx);
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &AddLinkMenu, window, cx| {
+                    this.add_link_from_menu(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &InstallCli, _, cx| {
+                this.install_cli();
+                cx.notify();
+            }))
+            .on_action(
+                cx.listener(|this, _: &menus::Project1, w, cx| this.switch_project(0, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project2, w, cx| this.switch_project(1, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project3, w, cx| this.switch_project(2, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project4, w, cx| this.switch_project(3, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project5, w, cx| this.switch_project(4, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project6, w, cx| this.switch_project(5, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project7, w, cx| this.switch_project(6, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project8, w, cx| this.switch_project(7, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &menus::Project9, w, cx| this.switch_project(8, w, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &ToggleHelp, window, cx| {
-                this.help = !this.help;
-                if !this.help {
-                    this.nav.focus(window, cx);
-                }
+            .on_action(
+                cx.listener(|this, _: &ToggleHelp, window, cx| {
+                    this.set_help(!this.help, window, cx)
+                }),
+            )
+            // Esc in a text field gives the keys back to the list, wherever the field is: the
+            // one rule for every field that does nothing more with it. Those that do (the filter
+            // closes its menu, an editor cancels, a modal closes) take it first, as GPUI stops an
+            // action at the first handler, so it reaches here only from the rest (a note).
+            .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
+                this.nav.focus(window, cx);
                 cx.notify();
             }))
             .child(sidebar)
@@ -4380,9 +5082,15 @@ impl Render for LivtkApp {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .py_2()
+                    // Beside the rail, the traffic lights are wider than it: the content starts
+                    // below their strip, which drags the window there too.
+                    .pt(px(if rail { titlebar.max(8.) } else { 8. }))
+                    .pb_2()
                     .pr_2()
                     .relative()
+                    .when(rail, |d| {
+                        d.children(titlebar_strip("content-titlebar", titlebar))
+                    })
                     .children(panel_edge.map(|e| e.right_0()))
                     .child(
                         div()
@@ -4425,9 +5133,43 @@ impl Render for LivtkApp {
             .children(form)
             .children(palette)
             .children(help)
+            .children(about)
             .children(notice)
             .children(drag)
     }
+}
+
+/// How tall the app's own titlebar is: `TITLEBAR` on macOS, none in full screen, where macOS
+/// hides the traffic lights, and none elsewhere.
+fn titlebar_height(window: &Window) -> f32 {
+    if TITLEBAR > 0. && !window.is_fullscreen() {
+        TITLEBAR
+    } else {
+        0.
+    }
+}
+
+/// The strip of the app's own titlebar, `height` tall across the top of what holds it (which
+/// leaves it that room), where the traffic lights sit: a press drags the window, a double-click
+/// does what the system's titlebar does (zoom, by default). None when it has no height.
+fn titlebar_strip(id: &'static str, height: f32) -> Option<Stateful<Div>> {
+    (height > 0.).then(|| {
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(height))
+            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+                if e.click_count == 2 {
+                    window.titlebar_double_click();
+                } else {
+                    window.start_window_move();
+                }
+            })
+    })
 }
 
 fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {
@@ -4440,6 +5182,8 @@ enum Menu {
     Filter,
     Grouping,
     Ordering,
+    /// How a list is shown: the tasks' list or board, its empty groups, its dismissed work.
+    View,
     /// The new task's priority, in the form.
     Priority,
     /// A task's priority, from its row or card.
@@ -4450,6 +5194,8 @@ enum Menu {
     AddLink,
     /// A node's state, from its row or card.
     RowState(Uuid),
+    /// The open node's state, in the detail panel.
+    DetailState,
     /// Ratify or ratify as a standing rule, from the flow in the detail panel.
     Standing,
     /// The projects, from the collapsed sidebar's rail.
@@ -4786,51 +5532,6 @@ fn flow_mark(kind: Kind, s: &Step) -> Div {
     }
 }
 
-/// The arrow between two neighbouring states of the flow: lit and pointing the way when a move
-/// from here passes along it, in the accent for the human's decision; faint otherwise.
-fn flow_arrow(gap: usize, arrow: Arrow) -> Div {
-    let (glyph, line, tip) = match arrow {
-        Arrow::Idle => ("›", with_alpha(BORDER, 1.), with_alpha(TEXT_4, 0.5)),
-        Arrow::Forward(look) | Arrow::Back(look) => {
-            let c = if look == Look::Decision {
-                ACCENT_HOVER
-            } else {
-                TEXT_2
-            };
-            let glyph = if matches!(arrow, Arrow::Forward(_)) {
-                "›"
-            } else {
-                "‹"
-            };
-            (glyph, color(c), color(c))
-        }
-    };
-    let back = matches!(arrow, Arrow::Back(_));
-    let lit = arrow != Arrow::Idle;
-    let selector = format!("flow-arrow-{gap}");
-    let bar = div().flex_1().h(px(if lit { 1.5 } else { 1. })).bg(line);
-    let head = div()
-        .text_size(px(13.))
-        .line_height(px(13.))
-        .when(lit, |h| h.font_weight(FontWeight::BOLD))
-        .text_color(tip)
-        .child(glyph);
-    let arrow = div()
-        .debug_selector(move || selector.clone())
-        .flex_1()
-        .min_w(px(10.))
-        .h(px(26.))
-        .flex()
-        .items_center()
-        .gap(px(1.));
-    // The head sits at the end the move goes to.
-    if back {
-        arrow.child(head).child(bar)
-    } else {
-        arrow.child(bar).child(head)
-    }
-}
-
 /// Who did something, in the feed and the timeline: you, or Claude (sparkles, as AI is drawn).
 fn avatar(human: bool) -> Div {
     div()
@@ -4900,6 +5601,26 @@ fn option_row(id: SharedString) -> Stateful<Div> {
         .rounded_lg()
         .text_color(color(TEXT_2))
         .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+}
+
+/// A row of the View options menu: its box, its label and its key, `act` on a click.
+fn view_option(
+    id: &'static str,
+    label: &'static str,
+    key: Option<&'static str>,
+    on: bool,
+    act: fn(&mut Model),
+    cx: &mut Context<LivtkApp>,
+) -> Stateful<Div> {
+    option_row(id.into())
+        .debug_selector(move || id.into())
+        .child(checkbox(on))
+        .child(label)
+        .when_some(key, |row, k| row.child(div().ml_auto().child(kbd(k))))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            act(&mut this.model);
+            cx.notify();
+        }))
 }
 
 /// The mark of the chosen option in a menu that picks one, at the row's right end.
@@ -5145,7 +5866,11 @@ fn event_line(e: &Event, key: &str) -> Div {
                 .border_1()
                 .border_color(color(BORDER))
                 .text_color(color(TEXT))
-                .child(what),
+                // Markdown, as the description: emphasis, lists, links, code by language.
+                .child(TextView::markdown(
+                    SharedString::from(format!("note-{}", e.id)),
+                    crate::model::note_markdown(&what),
+                )),
         )
     })
 }

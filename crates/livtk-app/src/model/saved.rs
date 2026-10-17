@@ -1,6 +1,6 @@
 //! What the app remembers between runs: where the human was (project, view), how each view is
-//! shown (filter, priorities, grouping, ordering, collapsed groups), list or board, dismissed
-//! work, and the window's own layout (the sidebar's width and whether it is collapsed, the
+//! shown (filter, priorities, grouping, ordering, empty groups, dismissed work, collapsed
+//! groups), list or board, and the window's own layout (the sidebar's width and whether it is collapsed, the
 //! panel's width). Kept in `app.toml` in livtk's config directory; GPU-free, so tested as plain
 //! Rust. The model restores its part; the view restores the window's.
 
@@ -22,9 +22,14 @@ pub struct Saved {
     pub view: Option<String>,
     /// "list" or "board".
     pub layout: Option<String>,
+    /// Dismissed work shown in every view, as the app kept it before each view had its own: read
+    /// from an older file, so its setting carries over, and never written.
+    #[serde(skip_serializing)]
     pub show_all: bool,
     /// Each view's display, by the view's name.
     pub views: BTreeMap<String, SavedView>,
+    /// The human was told this app posts no notifications where it ran: not again.
+    pub told_no_notifications: bool,
     pub window: SavedWindow,
 }
 
@@ -33,8 +38,12 @@ pub struct Saved {
 pub struct SavedView {
     pub filter: String,
     pub priorities: Vec<u8>,
+    /// The states the view is filtered to, by name.
+    pub states: Vec<String>,
     pub grouping: String,
     pub ordering: String,
+    pub show_empty: bool,
+    pub show_dismissed: bool,
     /// Collapsed groups: "state:doing", "priority:2", "all".
     pub collapsed: Vec<String>,
 }
@@ -130,6 +139,7 @@ impl Model {
                 SavedView {
                     filter: d.filter,
                     priorities: d.priorities,
+                    states: d.states.iter().map(|s| s.as_str().to_owned()).collect(),
                     grouping: GROUPINGS
                         .iter()
                         .find(|g| g.0 == d.grouping)
@@ -140,6 +150,8 @@ impl Model {
                         .find(|o| o.0 == d.ordering)
                         .map_or("priority", |o| o.1)
                         .to_owned(),
+                    show_empty: d.show_empty,
+                    show_dismissed: d.show_dismissed,
                     collapsed,
                 },
             );
@@ -154,8 +166,9 @@ impl Model {
                 }
                 .to_owned(),
             ),
-            show_all: self.show_all,
+            show_all: false,
             views,
+            told_no_notifications: self.told_no_notifications,
             window: SavedWindow::default(),
         }
     }
@@ -175,11 +188,27 @@ impl Model {
                 .copied()
                 .filter(|p| (1..=4).contains(p))
                 .collect();
+            // Only states the view's kind has, in display order; any other name is passed over.
+            let kind_states = view.kind().map_or(&[][..], |k| k.states());
+            d.states = s
+                .states
+                .iter()
+                .filter_map(|name| name.parse::<State>().ok())
+                .filter(|st| kind_states.contains(st))
+                .collect();
+            d.states
+                .sort_by_key(|st| super::state_order(view.kind(), *st));
+            d.states.dedup();
             if let Some(g) = GROUPINGS.iter().find(|g| g.1 == s.grouping) {
                 d.grouping = g.0;
             }
             if let Some(o) = ORDERINGS.iter().find(|o| o.1 == s.ordering) {
                 d.ordering = o.0;
+            }
+            d.show_empty = s.show_empty && view.kind().is_some();
+            d.show_dismissed = s.show_dismissed && view.shows_dismissed();
+            if !d.show_dismissed {
+                d.states.retain(|st| !st.is_dismissed());
             }
             self.displays.insert(view, d);
             self.collapsed.retain(|(v, _)| *v != view);
@@ -187,11 +216,19 @@ impl Model {
                 self.collapsed.insert((view, key));
             }
         }
+        self.told_no_notifications |= saved.told_no_notifications;
         self.layout = match saved.layout.as_deref() {
             Some("board") => Layout::Board,
             _ => Layout::List,
         };
-        self.show_all = saved.show_all;
+        if saved.show_all {
+            for view in View::ALL.into_iter().filter(|v| v.shows_dismissed()) {
+                self.displays
+                    .entry(view)
+                    .or_insert_with(|| Display::for_view(view))
+                    .show_dismissed = true;
+            }
+        }
         if let Some(dir) = &saved.project
             && let Some(i) = self.projects.iter().position(|p| &p.dir == dir)
         {

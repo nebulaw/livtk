@@ -1,0 +1,191 @@
+//! The menu bar and the Dock menu: one table of the commands the app already has, so the menus,
+//! the keys and the command palette never disagree. GPUI shows each item's key from its binding, and
+//! macOS greys an item no focused handler takes. The table is the same on every platform; one
+//! without a menu bar shows none.
+
+use gpui_kit::component::input;
+use gpui_kit::*;
+
+use super::{
+    About, AddLinkMenu, BringToFront, CloseWindow, Decide, GoActivity, GoDecisions, GoFindings,
+    GoGraph, GoInbox, GoLessons, GoTasks, HideApp, HideOthers, InstallCli, Minimize, NewTask, Note,
+    OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2, Priority3, Priority4, Quit, Reject,
+    ReportIssue, ShowAll, Standing, ToggleAll, ToggleEmpty, ToggleHelp, ToggleLayout,
+    ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
+};
+
+/// What the menus show of the app's state: the projects and which is open, the view and its
+/// options, ticked as a Mac app ticks them, and what waits in the inbox. The menus are made again
+/// only when it changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MenuState {
+    pub projects: Vec<String>,
+    pub current: usize,
+    /// The view, as an index into `View::ALL`.
+    pub view: usize,
+    pub board: bool,
+    pub show_empty: bool,
+    pub show_dismissed: bool,
+    pub inbox: usize,
+}
+
+/// An item that runs `action`, ticked when `checked`.
+fn item(name: impl Into<SharedString>, action: impl Action, checked: bool) -> MenuItem {
+    MenuItem::Action {
+        name: name.into(),
+        action: Box::new(action),
+        os_action: None,
+        checked,
+        disabled: false,
+    }
+}
+
+/// How many projects the menus list by name, each with an action of its own.
+pub const PROJECTS_LISTED: usize = 9;
+
+actions!(
+    livtk,
+    [
+        Project1, Project2, Project3, Project4, Project5, Project6, Project7, Project8, Project9
+    ]
+);
+
+/// The action that switches to project `i` (from 0), for the first `PROJECTS_LISTED`.
+pub fn project_action(i: usize) -> Option<Box<dyn Action>> {
+    let action: Box<dyn Action> = match i {
+        0 => Box::new(Project1),
+        1 => Box::new(Project2),
+        2 => Box::new(Project3),
+        3 => Box::new(Project4),
+        4 => Box::new(Project5),
+        5 => Box::new(Project6),
+        6 => Box::new(Project7),
+        7 => Box::new(Project8),
+        8 => Box::new(Project9),
+        _ => return None,
+    };
+    Some(action)
+}
+
+/// The projects, by name, each switching to it, the open one ticked.
+fn projects(state: &MenuState) -> Vec<MenuItem> {
+    state
+        .projects
+        .iter()
+        .take(PROJECTS_LISTED)
+        .enumerate()
+        .filter_map(|(i, name)| {
+            project_action(i).map(|action| MenuItem::Action {
+                name: name.clone().into(),
+                action,
+                os_action: None,
+                checked: i == state.current,
+                disabled: false,
+            })
+        })
+        .collect()
+}
+
+/// The menu bar, as `state` has it.
+pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
+    let view = |i: usize| state.view == i;
+    vec![
+        Menu::new("livtk").items([
+            MenuItem::action("About livtk", About),
+            MenuItem::separator(),
+            MenuItem::action("Install Command Line Tool", InstallCli),
+            MenuItem::separator(),
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Hide livtk", HideApp),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Show All", ShowAll),
+            MenuItem::separator(),
+            MenuItem::action("Quit livtk", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("New Task", NewTask),
+            MenuItem::action("Open Project…", OpenFolder),
+            MenuItem::submenu(Menu::new("Projects").items(projects(state))),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", CloseWindow),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
+        ]),
+        Menu::new("View").items([
+            item("Inbox", GoInbox, view(0)),
+            item("Activity", GoActivity, view(1)),
+            item("Tasks", GoTasks, view(2)),
+            item("Lessons", GoLessons, view(3)),
+            item("Decisions", GoDecisions, view(4)),
+            item("Findings", GoFindings, view(5)),
+            item("Graph", GoGraph, view(6)),
+            MenuItem::separator(),
+            item("Board", ToggleLayout, state.board),
+            item("Show Empty Groups", ToggleEmpty, state.show_empty),
+            item("Show Dismissed Work", ToggleAll, state.show_dismissed),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Command Palette", OpenPalette),
+            MenuItem::separator(),
+            MenuItem::action("Zoom Graph In", ZoomIn),
+            MenuItem::action("Zoom Graph Out", ZoomOut),
+            MenuItem::action("Fit Graph", ZoomFit),
+        ]),
+        Menu::new("Task").items([
+            MenuItem::action("Acknowledge, Ratify or Accept", Decide),
+            MenuItem::action("Ratify as Standing Rule", Standing),
+            MenuItem::action("Reject", Reject),
+            MenuItem::separator(),
+            MenuItem::submenu(Menu::new("Priority").items([
+                MenuItem::action("Urgent", Priority1),
+                MenuItem::action("High", Priority2),
+                MenuItem::action("Medium", Priority3),
+                MenuItem::action("Low", Priority4),
+            ])),
+            MenuItem::separator(),
+            MenuItem::action("Add Note", Note),
+            MenuItem::action("Add Link…", AddLinkMenu),
+        ]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", Minimize),
+            MenuItem::action("Zoom", ZoomWindow),
+            MenuItem::separator(),
+            MenuItem::action("Bring All to Front", BringToFront),
+        ]),
+        Menu::new("Help").items([
+            MenuItem::action("Keyboard Shortcuts", ToggleHelp),
+            MenuItem::separator(),
+            MenuItem::action("livtk on GitHub", OpenGitHub),
+            MenuItem::action("Report an Issue", ReportIssue),
+        ]),
+    ]
+}
+
+/// The Dock's menu: a new task, the inbox with what waits in it, and the projects.
+pub fn dock_menu(state: &MenuState) -> Vec<MenuItem> {
+    let mut items = vec![
+        MenuItem::action("New Task", NewTask),
+        MenuItem::action(
+            if state.inbox == 0 {
+                "Inbox".to_owned()
+            } else {
+                format!("Inbox ({})", state.inbox)
+            },
+            GoInbox,
+        ),
+    ];
+    let listed = projects(state);
+    if listed.len() > 1 {
+        items.push(MenuItem::separator());
+        items.extend(listed);
+    }
+    items
+}

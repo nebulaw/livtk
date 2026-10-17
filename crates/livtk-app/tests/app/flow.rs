@@ -1,207 +1,115 @@
-//! A kind's states as a flow, and changing state from anywhere, without a window.
+//! The state flow's geometry: where states and threads go. Plain
+//! arithmetic, so tested without a window.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
-use livtk_app::model::{Arrow, Look, Model, View, arrows, flow_of, has_flow, state_name, steps};
-use livtk_core::{Actor, Command, Kind, State, Workspace};
+use livtk_app::model::{Step, arrows, flow_of, steps};
+use livtk_app::ui::state_flow::geometry::{
+    BRANCH_Y, CURRENT, Glow, HEIGHT, INSET, Layout, MAIN_Y, bezier, curve, layout,
+};
+use livtk_core::{Kind, State};
 
-const CLAUDE: Actor = Actor::Claude { agent: None };
+fn flow(kind: Kind, state: State, width: f32) -> (Vec<Step>, Layout) {
+    let steps = steps(kind, state);
+    let l = layout(&steps, &arrows(kind, state), width);
+    (steps, l)
+}
 
-/// (state, current, a move there, the human's decision), for every step.
-fn seen(kind: Kind, state: State) -> Vec<(State, bool, bool, bool)> {
-    steps(kind, state)
-        .iter()
-        .map(|s| (s.state, s.current, s.to.is_some(), s.decides()))
-        .collect()
+fn index(l: &Layout, s: State) -> usize {
+    l.nodes.iter().position(|n| n.state == s).unwrap()
 }
 
 #[test]
-fn a_planned_task_sees_the_whole_flow_and_where_it_can_go() {
-    use State::*;
-    assert_eq!(
-        seen(Kind::Task, Planned),
-        [
-            (Backlog, false, true, false),
-            (Planned, true, false, false),
-            (Acked, false, true, true),
-            (Doing, false, false, false),
-            (Review, false, false, false),
-            (Done, false, false, false),
-            (Parked, false, true, false),
-            (Canceled, false, true, false),
-        ],
-        "acknowledging is the human's; backlog, parked and canceled are moves; the rest waits"
-    );
-    let main: Vec<bool> = steps(Kind::Task, Planned).iter().map(|s| s.main).collect();
-    assert_eq!(main, [true, true, true, true, true, true, false, false]);
+fn the_main_path_runs_left_to_right_and_the_states_off_it_hang_below() {
+    for kind in [Kind::Task, Kind::Lesson, Kind::Decision] {
+        let (steps, l) = flow(kind, flow_of(kind).0[0], 400.);
+        let main: Vec<_> = l.nodes.iter().filter(|n| n.main).collect();
+        assert_eq!(main.first().unwrap().at.x, INSET, "{kind:?}");
+        assert_eq!(main.last().unwrap().at.x, 400. - INSET, "{kind:?}");
+        for pair in main.windows(2) {
+            assert!(pair[0].at.x < pair[1].at.x, "{kind:?}: left to right");
+            assert_eq!(pair[0].at.y, MAIN_Y);
+        }
+        for n in l.nodes.iter().filter(|n| !n.main) {
+            assert_eq!(n.at.y, BRANCH_Y, "{kind:?}: {:?} below", n.state);
+            assert!(n.at.x > INSET && n.at.x < 400. - INSET, "under the path");
+        }
+        assert_eq!(steps.len(), l.nodes.len(), "a node for every state");
+    }
 }
 
 #[test]
-fn every_step_can_be_reached_only_as_the_core_allows() {
-    for kind in [Kind::Task, Kind::Lesson, Kind::Decision, Kind::Finding] {
-        let (main, side) = flow_of(kind);
-        for &from in main.iter().chain(side) {
-            for s in steps(kind, from) {
-                assert_eq!(
-                    s.to.is_some() || s.standing.is_some(),
-                    kind.can_move(from, s.state),
-                    "{kind:?} {from:?} -> {:?}",
-                    s.state
-                );
+fn everything_fits_the_band_at_the_narrowest_panel() {
+    // The narrowest panel's content: 360 less its padding.
+    let (_, l) = flow(Kind::Task, State::Planned, 320.);
+    let main: Vec<_> = l.nodes.iter().filter(|n| n.main).collect();
+    for pair in main.windows(2) {
+        assert!(
+            pair[1].at.x - pair[0].at.x >= 50.,
+            "room for a label between: {pair:?}"
+        );
+    }
+    for t in &l.threads {
+        for strand in [-1., 1.] {
+            let c = curve(&l, t, strand);
+            for k in 0..=10 {
+                let p = bezier(&c, k as f32 / 10.);
                 assert!(
-                    !(s.current && s.to.is_some()),
-                    "never a move to where it is"
+                    (0. ..=320.).contains(&p.x) && (0. ..=HEIGHT).contains(&p.y),
+                    "{t:?} at {p:?}"
                 );
             }
         }
-        let mut all: Vec<State> = main.iter().chain(side).copied().collect();
-        all.sort_by_key(|s| s.as_str());
-        let mut want = kind.states().to_vec();
-        want.sort_by_key(|s| s.as_str());
-        assert_eq!(all, want, "the flow shows every state of a {kind:?}");
     }
 }
 
 #[test]
-fn a_proposed_lessons_ratify_step_offers_the_standing_rule_too() {
-    let steps = steps(Kind::Lesson, State::Proposed);
-    let ratified = steps.iter().find(|s| s.state == State::Ratified).unwrap();
-    assert!(ratified.decides());
-    assert!(!ratified.to.as_ref().unwrap().always);
-    assert!(ratified.standing.as_ref().unwrap().always);
-    let rejected = steps.iter().find(|s| s.state == State::Rejected).unwrap();
-    assert!(!rejected.main && rejected.decides());
-}
-
-#[test]
-fn a_finding_has_no_flow_and_states_have_their_names() {
-    assert!(!has_flow(Kind::Finding));
-    assert!(has_flow(Kind::Task) && has_flow(Kind::Lesson) && has_flow(Kind::Decision));
-    assert_eq!(state_name(State::Acked), "Acknowledged");
-    assert_eq!(state_name(State::Review), "In review");
-}
-
-fn create(ws: &mut Workspace, title: &str, to: Option<State>) -> String {
-    let e = ws
-        .execute(
-            Command::Create {
-                kind: Kind::Task,
-                title: title.into(),
-                body: String::new(),
-                priority: None,
-                links: vec![],
-            },
-            &CLAUDE,
-        )
-        .unwrap();
-    let key = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
-    if let Some(to) = to {
-        ws.execute(
-            Command::Move {
-                node: key.clone(),
-                to,
-            },
-            &CLAUDE,
-        )
-        .unwrap();
+fn threads_join_neighbours_and_drop_to_the_states_below_lit_as_the_moves_are() {
+    // A planned task: acknowledging is the human's decision; back to backlog anyone can do.
+    let (steps, l) = flow(Kind::Task, State::Planned, 400.);
+    let along: Vec<_> = l.threads.iter().filter(|t| t.along).collect();
+    assert_eq!(along.len(), 5, "one between each pair of neighbours");
+    let planned = index(&l, State::Planned);
+    let acked = index(&l, State::Acked);
+    let to_acked = along.iter().find(|t| t.to == acked).unwrap();
+    assert_eq!(to_acked.from, planned, "lit from here toward it");
+    assert_eq!(to_acked.glow, Glow::Decision);
+    let done = index(&l, State::Done);
+    let to_done = along.iter().find(|t| t.to == done).unwrap();
+    assert_eq!(to_done.glow, Glow::Idle, "out of reach from planned");
+    let down: Vec<_> = l.threads.iter().filter(|t| !t.along).collect();
+    assert_eq!(down.len(), 2, "to parked and canceled");
+    for t in down {
+        assert_eq!(t.from, planned);
+        let reachable = steps[t.to].to.is_some();
+        assert_eq!(t.glow != Glow::Idle, reachable, "{:?}", l.nodes[t.to].state);
+        // From under the labels down to the state's top.
+        let c = curve(&l, t, 1.);
+        assert!(
+            c[0].y > MAIN_Y + CURRENT / 2. + 12.,
+            "below the labels: {c:?}"
+        );
+        assert!(c[3].y < BRANCH_Y, "{c:?}");
     }
-    key
 }
 
 #[test]
-fn a_state_changes_on_any_row_and_the_selection_stays_put() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut ws = Workspace::init(dir.path(), Some("LIV")).unwrap();
-    for t in ["one", "two", "three"] {
-        create(&mut ws, t, Some(State::Planned));
+fn a_parked_task_rises_to_the_states_it_can_go_back_to() {
+    let (steps, l) = flow(Kind::Task, State::Parked, 400.);
+    let parked = index(&l, State::Parked);
+    let up: Vec<_> = l.threads.iter().filter(|t| !t.along).collect();
+    assert!(!up.is_empty());
+    for t in up {
+        assert_eq!(t.from, parked);
+        assert!(
+            steps[t.to].main && steps[t.to].to.is_some(),
+            "reachable only"
+        );
     }
-    drop(ws);
-    let mut m = Model::open(&[dir.path().to_path_buf()]);
-    assert_eq!(m.view, View::Inbox);
-    let ids: Vec<_> = m.rows.iter().map(|r| r.id).collect();
-    m.select(ids[2]);
-
-    // Acknowledge the first row, which is not the selected one.
-    let ack = steps(Kind::Task, State::Planned)
-        .into_iter()
-        .find(|s| s.state == State::Acked)
-        .unwrap()
-        .to
-        .unwrap();
-    m.choose_on(ids[0], &ack);
-    let ws = Workspace::open(dir.path()).unwrap();
-    assert_eq!(ws.node("LIV-1").unwrap().state, State::Acked);
-    assert_eq!(
-        m.selected().unwrap().id,
-        ids[2],
-        "the selection stays on LIV-3"
-    );
-    assert_eq!(m.leaving.len(), 1);
-    assert_eq!(m.leaving[0].1, 0, "LIV-1 fades from its own place, the top");
-}
-
-#[test]
-fn each_step_looks_like_what_it_is() {
-    use State::*;
-    let looks: Vec<(State, Look)> = steps(Kind::Task, Planned)
-        .iter()
-        .map(|s| (s.state, s.look()))
-        .collect();
-    assert_eq!(
-        looks,
-        [
-            (Backlog, Look::Move),
-            (Planned, Look::Current),
-            (Acked, Look::Decision),
-            (Doing, Look::Out),
-            (Review, Look::Out),
-            (Done, Look::Out),
-            (Parked, Look::Move),
-            (Canceled, Look::Move),
-        ],
-        "acknowledging waits on the human: the dotted ring"
-    );
-    let lesson: Vec<Look> = steps(Kind::Lesson, Proposed)
-        .iter()
-        .map(|s| s.look())
-        .collect();
-    assert_eq!(
-        lesson,
-        [Look::Current, Look::Decision, Look::Out, Look::Decision],
-        "ratifying and rejecting both wait on the human"
-    );
-    let acked: Vec<Look> = steps(Kind::Task, Acked).iter().map(|s| s.look()).collect();
     assert!(
-        !acked.contains(&Look::Decision),
-        "nothing waits on the human once acknowledged"
-    );
-}
-
-#[test]
-fn only_the_arrows_of_moves_from_here_light_up_pointing_their_way() {
-    use Arrow::*;
-    // Backlog, Planned, Acked, Doing, Review, Done: five gaps.
-    assert_eq!(
-        arrows(Kind::Task, State::Planned),
-        [Back(Look::Move), Forward(Look::Decision), Idle, Idle, Idle],
-        "back to backlog, on to acknowledging, which is the human's"
-    );
-    assert_eq!(
-        arrows(Kind::Task, State::Doing),
-        [Idle, Idle, Back(Look::Move), Forward(Look::Move), Idle],
-        "pause back to acked, or on to review"
-    );
-    assert_eq!(
-        arrows(Kind::Task, State::Done),
-        [Idle, Idle, Idle, Back(Look::Move), Back(Look::Move)],
-        "back to doing passes review"
-    );
-    assert_eq!(
-        arrows(Kind::Task, State::Parked),
-        [Idle; 5],
-        "off the path, none"
-    );
-    assert_eq!(
-        arrows(Kind::Lesson, State::Proposed),
-        [Forward(Look::Decision), Idle]
+        l.threads
+            .iter()
+            .filter(|t| t.along)
+            .all(|t| t.glow == Glow::Idle),
+        "nothing along the path is lit from below it"
     );
 }

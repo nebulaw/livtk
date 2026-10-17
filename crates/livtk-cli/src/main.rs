@@ -16,7 +16,7 @@ use livtk_core::{Actor, Command, Error, Kind, Rel, Scope, State, Workspace};
 #[derive(Parser)]
 #[command(
     name = "livtk",
-    version,
+    version = livtk_build::DESCRIBE,
     about = "Durable tasks for Claude Code and its human"
 )]
 struct Cli {

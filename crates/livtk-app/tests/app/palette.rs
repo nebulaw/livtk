@@ -201,7 +201,10 @@ fn choosing_a_node_goes_to_it_wherever_it_hides() {
     m.open_palette();
     m.palette_query("nobody");
     m.palette_run();
-    assert!(m.show_all, "dismissed work is shown to show it");
+    assert!(
+        m.display().show_dismissed,
+        "dismissed work is shown in its view to show it"
+    );
     assert_eq!(m.display().filter, "", "the filter that hid it is cleared");
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-4"));
     assert!(m.detail.is_some());
@@ -233,4 +236,85 @@ fn what_only_the_view_can_do_comes_back_to_it() {
         assert_eq!(m.palette_run(), Some(ask), "{query}");
         assert!(m.palette.is_none());
     }
+}
+
+#[test]
+fn the_palette_turns_empty_groups_on_and_off_in_the_lists_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    m.palette_query("empty groups");
+    assert!(
+        !labels(&m).iter().any(|l| l.contains("empty groups")),
+        "the inbox has no groups of one kind: {:?}",
+        labels(&m)
+    );
+
+    m.set_view(View::Tasks);
+    m.open_palette();
+    m.palette_query("empty groups");
+    assert_eq!(
+        labels(&m).first().map(String::as_str),
+        Some("Show empty groups")
+    );
+    let shortcut = match &m.palette.as_ref().unwrap().items[0] {
+        Item::Action(a) => a.shortcut,
+        Item::Node(_) => None,
+    };
+    assert_eq!(
+        shortcut,
+        Some(livtk_app::model::keys::EMPTY_GROUPS),
+        "its key is shown, as the platform names it"
+    );
+    m.palette_run();
+    assert!(m.display().show_empty);
+    m.open_palette();
+    m.palette_query("empty groups");
+    assert_eq!(
+        labels(&m).first().map(String::as_str),
+        Some("Hide empty groups")
+    );
+
+    m.set_view(View::Graph);
+    m.open_palette();
+    m.palette_query("dismissed");
+    assert_eq!(
+        labels(&m).first().map(String::as_str),
+        Some("Show dismissed work"),
+        "the graph keeps its dismissed work"
+    );
+    m.palette_query("empty groups");
+    assert!(!labels(&m).iter().any(|l| l.contains("empty groups")));
+}
+
+#[test]
+fn keys_are_named_as_the_platform_names_them() {
+    use livtk_app::model::keys;
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            (keys::MOD, keys::PALETTE, keys::EMPTY_GROUPS),
+            ("⌘", "⌘ K", "⇧ H")
+        );
+    } else {
+        assert_eq!(
+            (keys::MOD, keys::PALETTE, keys::EMPTY_GROUPS),
+            ("Ctrl", "Ctrl K", "Shift H")
+        );
+    }
+}
+
+#[test]
+fn choosing_a_node_clears_a_state_filter_that_hides_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.set_view(View::Tasks);
+    m.toggle_state(State::Planned);
+    m.open_palette();
+    m.palette_query("monitors");
+    m.palette_run();
+    assert!(
+        m.display().states.is_empty(),
+        "the state filter that hid it is cleared"
+    );
+    assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-3"));
 }

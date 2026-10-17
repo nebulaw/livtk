@@ -88,6 +88,9 @@ pub fn apply(cx: &mut App) {
     c.window_border = color(BORDER);
     c.drag_border = color(ACCENT);
     c.drop_target = with_alpha(ACCENT, 0.15);
+    // Edited in place, so pushed down by hand: the markdown views and the scrollbars paint
+    // from the copy gpui-component keeps below.
+    Theme::sync_base(cx);
     cx.refresh_windows();
 }
 

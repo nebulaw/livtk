@@ -16,6 +16,9 @@ fn hook(event: &str, input: &Value) -> Output {
 fn hook_with_models(event: &str, input: &Value, models: &Path) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_livtk"))
         .args(["hook", event])
+        // Input without a `cwd` falls back to the hook's own directory: never this repository,
+        // which is a livtk project itself.
+        .current_dir(std::env::temp_dir())
         .env("CLAUDECODE", "1")
         .env("LIVTK_MODELS_DIR", models)
         .stdin(Stdio::piped())

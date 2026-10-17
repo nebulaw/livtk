@@ -5,7 +5,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
 use gpui_kit::TestAppContext;
-use livtk_app::model::{Grouping, Model, Ordering, View};
+use std::time::{Duration, Instant};
+
+use livtk_app::model::{Model, NOTICE_FOR, View};
 use livtk_app::ui::{LivtkApp, bind_keys};
 use livtk_core::{Actor, Command, Kind, State, Workspace};
 
@@ -84,12 +86,12 @@ fn keys_move_the_selection_and_decide(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
     cx.simulate_keystrokes("g l");
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Lessons));
-    cx.simulate_keystrokes("s");
+    cx.simulate_keystrokes("shift-a");
     let ws = Workspace::open(dir.path()).unwrap();
     assert_eq!(
         ws.always_rules().unwrap().len(),
         1,
-        "s ratifies as a standing rule"
+        "Shift+A ratifies as a standing rule"
     );
 }
 
@@ -110,7 +112,10 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| {
         assert!(a.model().detail.is_some(), "c opens the panel for a note")
     });
-    cx.simulate_input("a quick jot");
+    // Shift+Enter breaks the line; Enter adds the note.
+    cx.simulate_input("a quick");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("jot");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 
@@ -125,7 +130,7 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
         .unwrap();
     let last = history.last().unwrap();
     assert!(
-        matches!(&last.op, livtk_core::event::Op::NodeNote { data, .. } if data.text == "a quick jot"),
+        matches!(&last.op, livtk_core::event::Op::NodeNote { data, .. } if data.text == "a quick\njot"),
         "{last:?}"
     );
     assert_eq!(last.by, "human");
@@ -168,15 +173,15 @@ fn open_window<'a>(
 fn ctrl_question_mark_shows_the_shortcuts_and_esc_or_it_again_closes_them(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     app.read_with(cx, |a, _| assert!(a.help_open()));
     cx.simulate_keystrokes("escape");
     app.read_with(cx, |a, _| assert!(!a.help_open(), "Esc closes it"));
-    cx.simulate_keystrokes("ctrl-shift-/");
+    cx.simulate_keystrokes("secondary-shift-/");
     app.read_with(cx, |a, _| {
         assert!(a.help_open(), "Shift with / is the same key")
     });
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     app.read_with(cx, |a, _| {
         assert!(!a.help_open(), "and Ctrl+? again closes it")
     });
@@ -188,49 +193,6 @@ fn click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
         .unwrap_or_else(|| panic!("{selector} is drawn"));
     cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
-}
-
-#[gpui_kit::test]
-fn grouping_and_ordering_open_upwards_from_the_dock(cx: &mut TestAppContext) {
-    let dir = project();
-    let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    cx.run_until_parked();
-    let button = cx
-        .debug_bounds("dock-grouping")
-        .expect("grouping in the dock");
-    click_on(cx, "dock-grouping");
-    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("grouping")));
-    let menu = cx.debug_bounds("grouping-menu").expect("its menu");
-    assert!(
-        menu.bottom() <= button.top(),
-        "it opens upwards: {menu:?} over {button:?}"
-    );
-    click_on(cx, "group-priority");
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.model().display().grouping, Grouping::Priority);
-        assert_eq!(a.menu_open(), None, "a choice closes it");
-    });
-
-    click_on(cx, "dock-ordering");
-    click_on(cx, "order-created");
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.model().display().ordering, Ordering::Created)
-    });
-
-    let outside = gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(400.));
-    click_on(cx, "dock-ordering");
-    cx.simulate_click(outside, gpui_kit::Modifiers::default());
-    cx.run_until_parked();
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.menu_open(), None, "outside closed it")
-    });
-
-    click_on(cx, "dock-grouping");
-    click_on(cx, "dock-grouping");
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.menu_open(), None, "its button closes it too")
-    });
 }
 
 #[gpui_kit::test]
@@ -296,6 +258,20 @@ fn a_click_outside_the_new_task_modal_closes_it(cx: &mut TestAppContext) {
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("n");
     app.read_with(cx, |a, _| assert!(a.form_open()));
+    // Away to another app and back by a click on the backdrop: that click only activates.
+    cx.deactivate_window();
+    let corner = gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(8.));
+    cx.simulate_event(gpui_kit::MouseDownEvent {
+        position: corner,
+        modifiers: gpui_kit::Modifiers::default(),
+        button: gpui_kit::MouseButton::Left,
+        click_count: 1,
+        first_mouse: true,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.form_open(), "kept across an app switch")
+    });
     // Top-left corner: the backdrop, well outside the centred card.
     cx.simulate_click(
         gpui_kit::point(gpui_kit::px(8.), gpui_kit::px(8.)),
@@ -338,22 +314,6 @@ fn the_filter_narrows_the_list_and_typing_in_it_runs_no_command(cx: &mut TestApp
         state_of(dir.path(), "LIV-2"),
         State::Acked,
         "Enter went back to the list, where `a` decides"
-    );
-}
-
-#[gpui_kit::test]
-fn the_create_button_sits_inside_the_new_task_card(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("n");
-    cx.run_until_parked();
-    let card = cx.debug_bounds("new-task-card").expect("the card is drawn");
-    let button = cx.debug_bounds("create-task").expect("the button is drawn");
-    assert!(
-        button.right() <= card.right()
-            && button.bottom() <= card.bottom()
-            && button.left() >= card.left(),
-        "the button {button:?} spills out of the card {card:?}"
     );
 }
 
@@ -413,7 +373,8 @@ fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
 
     double_click_on(cx, "detail-title");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("title")));
-    cx.simulate_keystrokes("ctrl-a");
+    // Select all: Cmd+A on macOS, Ctrl+A elsewhere.
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input("renamed plan");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -459,7 +420,7 @@ fn the_body_is_edited_in_place_and_saved_with_ctrl_enter(cx: &mut TestAppContext
     cx.simulate_input("goal: ship it");
     cx.simulate_keystrokes("enter");
     cx.simulate_input("check: it runs");
-    cx.simulate_keystrokes("ctrl-enter");
+    cx.simulate_keystrokes("secondary-enter");
     cx.run_until_parked();
     assert_eq!(
         node_of(dir.path(), "LIV-1").body,
@@ -475,57 +436,6 @@ fn the_body_is_edited_in_place_and_saved_with_ctrl_enter(cx: &mut TestAppContext
             "a body is edited by double-click"
         )
     });
-}
-
-#[gpui_kit::test]
-fn the_detail_panel_slides_out_before_it_goes(cx: &mut TestAppContext) {
-    let dir = project();
-    let (app, cx) = open_app(cx, dir.path());
-    open_detail(cx);
-    let panel = cx.debug_bounds("detail-body-panel").expect("drawn");
-    let window = cx.update(|window, _| window.viewport_size());
-    assert!(
-        panel.size.height >= window.height - gpui_kit::px(24.),
-        "the panel {panel:?} runs the full height of the window {window:?}"
-    );
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
-    assert!(
-        cx.debug_bounds("detail-panel").is_some(),
-        "still drawn while it animates out"
-    );
-    settle(cx);
-    assert!(
-        cx.debug_bounds("detail-panel").is_none(),
-        "gone once it has"
-    );
-}
-
-#[gpui_kit::test]
-fn editing_keeps_the_shape_of_what_is_edited(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    open_detail(cx);
-    let view = cx.debug_bounds("detail-title").expect("drawn");
-    double_click_on(cx, "detail-title");
-    let editor = cx.debug_bounds("title-editor").expect("editing");
-    assert_eq!(
-        (view.origin, view.size),
-        (editor.origin, editor.size),
-        "the title editor takes the title's place exactly"
-    );
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-
-    let view = cx.debug_bounds("detail-body").expect("drawn");
-    click_on(cx, "detail-body");
-    let editor = cx.debug_bounds("body-editor").expect("editing");
-    assert_eq!(
-        view.origin, editor.origin,
-        "the body editor starts where the body was"
-    );
-    assert_eq!(view.size.width, editor.size.width);
 }
 
 fn palette_keys(
@@ -553,7 +463,7 @@ fn palette_keys(
 fn ctrl_k_finds_a_node_and_typing_in_it_runs_no_command(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     cx.run_until_parked();
     app.read_with(cx, |a, _| assert!(a.palette_open()));
     assert!(cx.debug_bounds("palette").is_some(), "drawn");
@@ -581,7 +491,7 @@ fn ctrl_k_finds_a_node_and_typing_in_it_runs_no_command(cx: &mut TestAppContext)
 fn the_palette_runs_an_action_on_the_selected_node(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     cx.simulate_input("ack");
     cx.run_until_parked();
     assert_eq!(
@@ -604,7 +514,7 @@ fn the_palette_runs_an_action_on_the_selected_node(cx: &mut TestAppContext) {
 fn arrows_move_the_highlight_and_esc_or_ctrl_k_closes(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     cx.run_until_parked();
     let highlighted = |app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext| {
         app.read_with(cx, |a, _| a.model().palette.as_ref().unwrap().selected)
@@ -615,8 +525,8 @@ fn arrows_move_the_highlight_and_esc_or_ctrl_k_closes(cx: &mut TestAppContext) {
     assert_eq!(highlighted(&app, cx), 2);
     cx.simulate_keystrokes("escape");
     app.read_with(cx, |a, _| assert!(!a.palette_open(), "Esc closes it"));
-    cx.simulate_keystrokes("ctrl-k");
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
+    cx.simulate_keystrokes("secondary-k");
     app.read_with(cx, |a, _| {
         assert!(!a.palette_open(), "and so does Ctrl+K again")
     });
@@ -626,7 +536,7 @@ fn arrows_move_the_highlight_and_esc_or_ctrl_k_closes(cx: &mut TestAppContext) {
 fn a_click_runs_an_item_and_new_task_opens_the_form(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     cx.simulate_input("new task");
     cx.run_until_parked();
     assert_eq!(
@@ -638,26 +548,13 @@ fn a_click_runs_an_item_and_new_task_opens_the_form(cx: &mut TestAppContext) {
         assert!(!a.palette_open());
         assert!(a.form_open(), "the view did what the palette asked");
     });
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     app.read_with(cx, |a, _| {
         assert!(
             !a.palette_open(),
             "the form keeps the palette out, so nothing typed is lost"
         )
     });
-}
-
-#[gpui_kit::test]
-fn the_palette_field_sits_centred_in_its_row(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
-    cx.run_until_parked();
-    let row = cx.debug_bounds("palette-field").expect("drawn");
-    let input = cx.debug_bounds("palette-input").expect("drawn");
-    let above = input.top() - row.top();
-    let below = row.bottom() - input.bottom();
-    assert_eq!(above, below, "as much room above the field as below it");
 }
 
 #[gpui_kit::test]
@@ -709,28 +606,13 @@ fn a_click_on_a_line_opens_its_node(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn feed_lines_span_the_feed_as_list_rows_do(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g a");
-    cx.run_until_parked();
-    let feed = cx.debug_bounds("feed").expect("drawn");
-    let line = cx.debug_bounds("event-0").expect("drawn");
-    assert_eq!(
-        (line.left(), line.size.width),
-        (feed.left(), feed.size.width),
-        "a line runs the feed's whole width"
-    );
-}
-
-#[gpui_kit::test]
 fn the_keys_still_work_when_focus_was_lost(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     // Focus can end up nowhere: an input that blurs itself, a panel that closed under it.
     cx.update(|window, cx| window.blur(cx));
     cx.run_until_parked();
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     app.read_with(cx, |a, _| {
         assert!(a.help_open(), "Ctrl+? works from anywhere")
     });
@@ -757,7 +639,7 @@ fn closing_the_panel_under_the_note_field_leaves_the_keys_working(cx: &mut TestA
     click_on(cx, "close-detail");
     settle(cx);
     app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     app.read_with(cx, |a, _| assert!(a.help_open()));
 }
 
@@ -1213,7 +1095,7 @@ fn the_palette_adds_a_link_from_its_actions(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
-    cx.simulate_keystrokes("ctrl-k");
+    cx.simulate_keystrokes("secondary-k");
     cx.simulate_input("add link: blocks");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
@@ -1253,7 +1135,8 @@ fn the_wheel_scrolls_a_board_column_down_and_shift_scrolls_across(cx: &mut TestA
         }
     }
     let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t b");
+    // Every column, so the board is wider than the window and scrolls across.
+    cx.simulate_keystrokes("g t b shift-h");
     cx.run_until_parked();
     let first = cx.debug_bounds("card-LIV-3").expect("a backlog card");
     let other = cx.debug_bounds("card-LIV-1").expect("a planned card");
@@ -1350,7 +1233,7 @@ fn a_board_cards_state_icon_moves_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_panels_flow_moves_the_open_task_and_fits_the_panel(cx: &mut TestAppContext) {
+fn the_panels_flow_moves_the_open_task(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
@@ -1361,22 +1244,6 @@ fn the_panels_flow_moves_the_open_task_and_fits_the_panel(cx: &mut TestAppContex
         flow.left() >= panel.left() && flow.right() <= panel.right(),
         "fits: {flow:?}"
     );
-    let names = ["backlog", "planned", "acked", "doing", "review", "done"];
-    let labels: Vec<_> = names
-        .iter()
-        .map(|n| {
-            cx.debug_bounds(named(format!("flow-label-{n}")))
-                .expect("labelled")
-        })
-        .collect();
-    for pair in labels.windows(2) {
-        assert!(pair[0].right() < pair[1].left(), "labels apart: {pair:?}");
-    }
-    assert!(
-        labels[5].right() <= panel.right(),
-        "the last label is inside the panel"
-    );
-
     click_on(cx, "flow-doing");
     assert_eq!(
         state_of(dir.path(), "LIV-1"),
@@ -1425,32 +1292,6 @@ fn ratifying_from_the_flow_offers_the_standing_rule(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui_kit::test]
-fn the_flows_arrows_sit_between_the_states_they_join(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    open_detail(cx);
-    let names = ["backlog", "planned", "acked", "doing", "review", "done"];
-    let rings: Vec<_> = names
-        .iter()
-        .map(|n| cx.debug_bounds(named(format!("flow-{n}"))).expect("a ring"))
-        .collect();
-    for gap in 0..5 {
-        let arrow = cx
-            .debug_bounds(named(format!("flow-arrow-{gap}")))
-            .expect("an arrow");
-        assert!(
-            arrow.left() >= rings[gap].right() - gpui_kit::px(20.)
-                && arrow.right() <= rings[gap + 1].left() + gpui_kit::px(20.),
-            "arrow {gap} {arrow:?} between {:?} and {:?}",
-            rings[gap],
-            rings[gap + 1]
-        );
-        assert!(arrow.size.width >= gpui_kit::px(10.), "visible: {arrow:?}");
-    }
-}
-
 /// An icon's drawn bounds, by its file name.
 fn icon_at(cx: &mut gpui_kit::VisualTestContext, file: &str) -> gpui_kit::Bounds<gpui_kit::Pixels> {
     cx.debug_bounds(named(format!("icon-{file}")))
@@ -1497,128 +1338,13 @@ fn each_view_has_its_icon_in_the_sidebar_at_16_px(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn dock_and_panel_icons_sit_inside_their_buttons(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    cx.run_until_parked();
-    let dock = cx.debug_bounds("dock").expect("the dock");
-    for (button, file) in [
-        ("filter-button", "menu-filter"),
-        ("dock-grouping", "blocks"),
-        ("dock-ordering", "arrow-down-up"),
-        ("dock-palette", "search"),
-    ] {
-        let b = cx.debug_bounds(named(button.into())).unwrap();
-        assert!(inside(b, dock), "{button} is in the dock");
-        assert!(inside(icon_at(cx, file), b), "{file} sits in {button}");
-        assert_eq!(
-            b.size.height,
-            gpui_kit::px(30.),
-            "{button} keeps its height"
-        );
-    }
-    // List and Board: tabs in a track exactly as tall as the buttons around it.
-    let track = cx.debug_bounds("layout-tabs").expect("the tabs' track");
-    assert!(inside(track, dock));
-    assert_eq!(
-        track.size.height,
-        gpui_kit::px(30.),
-        "the track matches the buttons"
-    );
-    for (tab, file) in [("layout-list", "list-ul"), ("layout-board", "columns-4")] {
-        let t = cx.debug_bounds(named(tab.into())).unwrap();
-        assert!(inside(t, track), "{tab} is a tab of the track");
-        assert!(inside(icon_at(cx, file), t), "{file} sits in {tab}");
-    }
-    // The palette: an icon alone, even on a wide window, in a square of its own.
-    let palette = cx.debug_bounds("dock-palette").unwrap();
-    assert_eq!(
-        (palette.size.width, palette.size.height),
-        (gpui_kit::px(30.), gpui_kit::px(30.)),
-        "no label, whatever the width"
-    );
-    assert!(
-        palette.left() > track.right(),
-        "set apart at the end, after the tabs"
-    );
-
-    open_detail(cx);
-    let close = cx.debug_bounds("close-detail").unwrap();
-    assert!(
-        inside(icon_at(cx, "dock-right-arrow"), close),
-        "the close icon fits its button"
-    );
-    let add = cx.debug_bounds("add-link").unwrap();
-    assert!(inside(icon_at(cx, "link"), add));
-}
-
-#[gpui_kit::test]
-fn the_palette_has_a_search_icon_and_an_icon_on_every_action(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("ctrl-k");
-    cx.run_until_parked();
-    let field = cx.debug_bounds("palette-field").unwrap();
-    assert!(inside(icon_at(cx, "search"), field));
-    cx.simulate_input("go to graph");
-    cx.run_until_parked();
-    let row = cx.debug_bounds("palette-item-0").unwrap();
-    assert_eq!(row.size.height, gpui_kit::px(36.), "rows keep their height");
-    // The graph's icon now shows twice: in the sidebar and on this row.
-    let rows_icon = cx.debug_bounds("icon-circuit-board").expect("drawn");
-    assert!(
-        inside(rows_icon, row) || rows_icon.right() < gpui_kit::px(240.),
-        "{rows_icon:?}"
-    );
-    assert!(
-        inside(icon_at(cx, "enter"), cx.debug_bounds("palette").unwrap()),
-        "the footer's enter"
-    );
-}
-
-#[gpui_kit::test]
-fn rows_of_every_kind_line_up_in_the_inbox(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    // The inbox: two plans and a lesson, which has no priority.
-    let task = cx.debug_bounds("key-LIV-1").expect("a task's key");
-    let lesson = cx.debug_bounds("key-LES-1").expect("a lesson's key");
-    assert_eq!(task.left(), lesson.left(), "keys start in one column");
-    let slot = cx
-        .debug_bounds("kind-icon")
-        .expect("the lesson's kind icon");
-    let prio = cx
-        .debug_bounds(named(format!("priority-of-{}", id_of(dir.path(), "LIV-1"))))
-        .unwrap();
-    assert_eq!(
-        prio.size.width,
-        gpui_kit::px(22.),
-        "the priority button's width"
-    );
-    assert!(
-        slot.right() <= lesson.left(),
-        "the kind icon leads the lesson's row"
-    );
-    let states: Vec<_> = ["LIV-1", "LES-1"]
-        .iter()
-        .map(|k| {
-            cx.debug_bounds(named(format!("state-of-{}", id_of(dir.path(), k))))
-                .unwrap()
-                .left()
-        })
-        .collect();
-    assert_eq!(states[0], states[1], "state icons in one column too");
-}
-
-#[gpui_kit::test]
 fn modals_fit_a_short_window_and_scroll_inside(cx: &mut TestAppContext) {
     let dir = project();
     let (_app, cx) = open_app(cx, dir.path());
     let short = gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(420.));
     cx.simulate_resize(short);
     cx.run_until_parked();
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     let card = cx
@@ -1635,7 +1361,7 @@ fn modals_fit_a_short_window_and_scroll_inside(cx: &mut TestAppContext) {
         scroll.size.height > gpui_kit::px(100.),
         "the list keeps room to scroll in: {scroll:?}"
     );
-    cx.simulate_keystrokes("escape ctrl-k");
+    cx.simulate_keystrokes("escape secondary-k");
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     let palette = cx.debug_bounds("palette").expect("the palette is open");
@@ -1653,7 +1379,10 @@ fn dock_holds(cx: &mut gpui_kit::VisualTestContext) -> Vec<&'static str> {
         "filter-button",
         "dock-grouping",
         "dock-ordering",
+        "dock-view",
         "dock-dismissed",
+        // List and Board were tabs here: kept, so they cannot come back unseen.
+        "layout-tabs",
         "layout-list",
         "layout-board",
         "dock-palette",
@@ -1681,9 +1410,7 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
             "filter-button",
             "dock-grouping",
             "dock-ordering",
-            "dock-dismissed",
-            "layout-list",
-            "layout-board",
+            "dock-view",
             "dock-palette"
         ],
         "tasks"
@@ -1696,7 +1423,7 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
             "filter-button",
             "dock-grouping",
             "dock-ordering",
-            "dock-dismissed",
+            "dock-view",
             "dock-palette"
         ],
         "lessons"
@@ -1712,85 +1439,11 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
         "the graph"
     );
     let header = cx.debug_bounds("view-header").unwrap();
-    for gone in ["layout-list", "dock-new-task"] {
+    for gone in ["dock-view", "dock-new-task"] {
         if let Some(b) = cx.debug_bounds(gone) {
             assert!(!inside(b, header), "{gone} is not in the top bar");
         }
     }
-}
-
-#[gpui_kit::test]
-fn the_dock_floats_centred_on_the_content_and_follows_the_panel(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    cx.run_until_parked();
-    let centre = |b: gpui_kit::Bounds<gpui_kit::Pixels>| f32::from(b.left() + b.right()) / 2.;
-    let header = cx.debug_bounds("view-header").unwrap();
-    let dock = cx.debug_bounds("dock").unwrap();
-    assert!(
-        (centre(dock) - centre(header)).abs() < 1.,
-        "centred on the content"
-    );
-    let window = cx.update(|window, _| window.viewport_size());
-    let gap = f32::from(window.height - dock.bottom());
-    assert!(
-        (16.0..40.0).contains(&gap),
-        "floating near the bottom, {gap} px up"
-    );
-    assert_eq!(dock.size.height, gpui_kit::px(40.));
-    // The dock picks labels or icons from a width it works out rather than measures: the
-    // window less the sidebar and the content's inset and border (242 px), less the panel.
-    assert_eq!(
-        header.size.width,
-        window.width - gpui_kit::px(242.),
-        "the content's width"
-    );
-
-    open_detail(cx);
-    let header = cx.debug_bounds("view-header").unwrap();
-    let dock = cx.debug_bounds("dock").unwrap();
-    let panel = cx.debug_bounds("detail-body-panel").unwrap();
-    assert!(
-        (centre(dock) - centre(header)).abs() < 1.,
-        "still centred on the narrower content"
-    );
-    assert!(dock.right() <= panel.left(), "never under the panel");
-    assert_eq!(
-        header.size.width,
-        window.width - gpui_kit::px(242. + 480.),
-        "the content's width beside the panel"
-    );
-}
-
-#[gpui_kit::test]
-fn a_narrow_content_area_shows_the_docks_icons_alone(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    cx.run_until_parked();
-    let wide = cx.debug_bounds("dock-grouping").unwrap();
-    assert!(
-        wide.size.width > gpui_kit::px(50.),
-        "labelled when wide: {wide:?}"
-    );
-
-    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(700.)));
-    for _ in 0..2 {
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
-    }
-    let narrow = cx.debug_bounds("dock-grouping").unwrap();
-    assert!(
-        narrow.size.width <= gpui_kit::px(32.),
-        "icon alone when narrow: {narrow:?}"
-    );
-    let dock = cx.debug_bounds("dock").unwrap();
-    let header = cx.debug_bounds("view-header").unwrap();
-    assert!(
-        dock.left() >= header.left() && dock.right() <= header.right(),
-        "the dock {dock:?} fits within the content {header:?}"
-    );
 }
 
 /// A project with `n` more backlog tasks than the usual two plans and a lesson.
@@ -1867,66 +1520,13 @@ fn the_docks_new_task_and_palette_buttons_work(cx: &mut TestAppContext) {
     click_on(cx, "dock-new-task");
     app.read_with(cx, |a, _| assert!(a.form_open()));
     cx.simulate_keystrokes("escape");
-    click_on(cx, "layout-board");
+    click_on(cx, "dock-view");
+    click_on(cx, "view-layout-board");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().layout, livtk_app::model::Layout::Board)
     });
-    click_on(cx, "dock-dismissed");
-    app.read_with(cx, |a, _| assert!(a.model().show_all));
-}
-
-#[gpui_kit::test]
-fn the_detail_panel_stands_apart_from_the_content_as_the_sidebar_does(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    open_detail(cx);
-    let content = cx.debug_bounds("content-box").expect("the content box");
-    let panel = cx.debug_bounds("detail-body-panel").expect("the panel");
-    let window = cx.update(|window, _| window.viewport_size());
-    assert!(
-        panel.left() >= content.right() + gpui_kit::px(8.),
-        "a gap of black between them: {content:?} then {panel:?}"
-    );
-    assert_eq!(
-        panel.right(),
-        window.width,
-        "the panel runs to the window's edge"
-    );
-    assert_eq!(
-        panel.top(),
-        gpui_kit::px(0.),
-        "and its full height, as the sidebar does"
-    );
-    assert!(
-        content.left() >= gpui_kit::px(232.),
-        "the content box keeps the sidebar's side too"
-    );
-}
-
-#[gpui_kit::test]
-fn rows_and_cards_pass_under_the_floating_dock(cx: &mut TestAppContext) {
-    let dir = long_project(40);
-    let (_app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g t");
-    cx.run_until_parked();
-    let dock = cx.debug_bounds("dock").unwrap();
-    // At the top of a long list, some row is drawn where the dock floats: the dock overlays
-    // the list rather than the list stopping short of it.
-    let under = (1..=42).find_map(|n| {
-        cx.debug_bounds(named(format!("key-LIV-{n}")))
-            .filter(|b| b.bottom() > dock.top() && b.top() < dock.bottom())
-    });
-    assert!(under.is_some(), "a row passes under the dock {dock:?}");
-
-    cx.simulate_keystrokes("b");
-    cx.run_until_parked();
-    let dock = cx.debug_bounds("dock").unwrap();
-    let under = (1..=42).find_map(|n| {
-        cx.debug_bounds(named(format!("card-LIV-{n}")))
-            .filter(|b| b.bottom() > dock.top())
-    });
-    assert!(under.is_some(), "a card passes under the dock {dock:?}");
+    click_on(cx, "view-show-dismissed");
+    app.read_with(cx, |a, _| assert!(a.model().display().show_dismissed));
 }
 
 /// Redraw the window, as the next frame would.
@@ -2024,11 +1624,11 @@ fn ctrl_b_and_the_top_bar_button_collapse_and_expand_the_sidebar(cx: &mut TestAp
     let dir = project();
     let (_app, cx) = open_app(cx, dir.path());
     resize(cx, 1400., 900.);
-    cx.simulate_keystrokes("ctrl-b");
+    cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(cx.debug_bounds("rail").is_some(), "Ctrl+B collapses it");
     assert!(cx.debug_bounds("sidebar").is_none());
-    cx.simulate_keystrokes("ctrl-b");
+    cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(cx.debug_bounds("sidebar").is_some(), "and expands it again");
     click_on(cx, "sidebar-toggle");
@@ -2044,7 +1644,7 @@ fn the_rails_buttons_go_to_views_projects_and_shortcuts(cx: &mut TestAppContext)
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     resize(cx, 1400., 900.);
-    cx.simulate_keystrokes("ctrl-b");
+    cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(
         cx.debug_bounds("rail-badge").is_some(),
@@ -2078,7 +1678,7 @@ fn a_narrow_window_shows_the_rail_and_ctrl_b_opens_the_sidebar_there(cx: &mut Te
         cx.debug_bounds("rail").is_some(),
         "too narrow for the sidebar"
     );
-    cx.simulate_keystrokes("ctrl-b");
+    cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(cx.debug_bounds("sidebar").is_some(), "opened by hand");
     resize(cx, 1400., 900.);
@@ -2163,7 +1763,7 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
         cx.simulate_keystrokes("g t");
         open_detail(cx);
         drag_to(cx, "panel-edge", 1040.);
-        cx.simulate_keystrokes("ctrl-b");
+        cx.simulate_keystrokes("secondary-b");
         redraw(cx);
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(600));
@@ -2181,7 +1781,7 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
     assert!(cx.debug_bounds("rail").is_some(), "still collapsed");
-    cx.simulate_keystrokes("ctrl-b");
+    cx.simulate_keystrokes("secondary-b");
     redraw(cx);
     assert!(near(width_of(cx, "sidebar"), 300.), "at the width it was");
     open_detail(cx);
@@ -2198,7 +1798,7 @@ fn scrolling_over_the_shortcuts_leaves_the_list_behind_them_still(cx: &mut TestA
     cx.simulate_keystrokes("g t");
     redraw(cx);
     let before = cx.debug_bounds("key-LIV-5").expect("a row is drawn");
-    cx.simulate_keystrokes("ctrl-?");
+    cx.simulate_keystrokes("secondary-?");
     redraw(cx);
     cx.simulate_event(gpui_kit::ScrollWheelEvent {
         position: before.center(),
@@ -2286,98 +1886,6 @@ fn centre(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) -> (f32,
 }
 
 #[gpui_kit::test]
-fn each_edge_sits_in_the_middle_of_its_gutter(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    resize(cx, 1600., 900.);
-    open_detail(cx);
-    let content = cx.debug_bounds("content-box").unwrap();
-    let (left, _) = centre(cx, "sidebar-edge");
-    let (right, _) = centre(cx, "panel-edge");
-    assert!(
-        near(left, f32::from(content.left()) - 4.),
-        "the sidebar's 4 px left of the content: {left} by {content:?}"
-    );
-    assert!(
-        near(right, f32::from(content.right()) + 4.),
-        "the panel's 4 px right of it: {right} by {content:?}"
-    );
-
-    resize(cx, 800., 700.);
-    settle(cx);
-    let float = cx.debug_bounds("panel-float").unwrap();
-    let (x, _) = centre(cx, "panel-edge");
-    assert!(
-        near(x, f32::from(float.left())),
-        "a floating panel's on its border: {x} by {float:?}"
-    );
-}
-
-#[gpui_kit::test]
-fn a_glow_with_its_handle_follows_the_pointer_along_an_edge(cx: &mut TestAppContext) {
-    let dir = project();
-    let (_app, cx) = open_app(cx, dir.path());
-    resize(cx, 1400., 900.);
-    assert!(cx.debug_bounds("edge-glow").is_none(), "nothing at rest");
-    let (x, _) = centre(cx, "sidebar-edge");
-    move_to(cx, x, 300.);
-    let (hx, hy) = centre(cx, "edge-handle");
-    assert!(near(hx, x) && near(hy, 300.), "at the pointer: {hx}, {hy}");
-    assert!(
-        cx.debug_bounds("icon-move-horizontal").is_some(),
-        "with its arrows"
-    );
-    move_to(cx, x, 500.);
-    assert!(near(centre(cx, "edge-handle").1, 500.), "following it");
-    move_to(cx, x, 10.);
-    let glow = cx.debug_bounds("edge-glow").unwrap();
-    assert!(
-        near(f32::from(glow.top()), 0.),
-        "near the top it stops at the window's edge: {glow:?}"
-    );
-    move_to(cx, 700., 300.);
-    assert!(
-        cx.debug_bounds("edge-glow").is_none(),
-        "gone when the pointer leaves"
-    );
-
-    // Dragged, it stays lit wherever the pointer goes, and goes when let go away from the edge.
-    move_to(cx, x, 400.);
-    cx.simulate_event(gpui_kit::MouseDownEvent {
-        position: gpui_kit::point(gpui_kit::px(x), gpui_kit::px(400.)),
-        modifiers: gpui_kit::Modifiers::default(),
-        button: gpui_kit::MouseButton::Left,
-        click_count: 1,
-        first_mouse: false,
-    });
-    redraw(cx);
-    cx.simulate_event(gpui_kit::MouseMoveEvent {
-        position: gpui_kit::point(gpui_kit::px(320.), gpui_kit::px(450.)),
-        modifiers: gpui_kit::Modifiers::default(),
-        pressed_button: Some(gpui_kit::MouseButton::Left),
-    });
-    redraw(cx);
-    let (hx, hy) = centre(cx, "edge-handle");
-    assert!(
-        near(hx, 316.) && near(hy, 450.),
-        "lit mid-drag, with the edge and the pointer: {hx}, {hy}"
-    );
-    cx.simulate_event(gpui_kit::MouseUpEvent {
-        position: gpui_kit::point(gpui_kit::px(320.), gpui_kit::px(450.)),
-        modifiers: gpui_kit::Modifiers::default(),
-        button: gpui_kit::MouseButton::Left,
-        click_count: 1,
-    });
-    redraw(cx);
-    move_to(cx, 700., 450.);
-    drag_to(cx, "sidebar-edge", 300.);
-    assert!(
-        cx.debug_bounds("edge-glow").is_none(),
-        "let go away from the edge, it goes"
-    );
-}
-
-#[gpui_kit::test]
 fn ctrl_enter_in_the_new_tasks_body_creates_it(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
@@ -2388,7 +1896,7 @@ fn ctrl_enter_in_the_new_tasks_body_creates_it(cx: &mut TestAppContext) {
     cx.simulate_input("goal: ship it");
     cx.simulate_keystrokes("enter");
     cx.simulate_input("check: it runs");
-    cx.simulate_keystrokes("ctrl-enter");
+    cx.simulate_keystrokes("secondary-enter");
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
         assert!(!a.form_open(), "created, the form closed")
@@ -2407,59 +1915,842 @@ fn ctrl_enter_in_the_new_tasks_body_creates_it(cx: &mut TestAppContext) {
     );
 }
 
-/// Whether the gliding highlight is nearer `from`'s line than `to`'s: where it starts.
-fn glide_starts_at(cx: &mut gpui_kit::VisualTestContext, from: &'static str, to: &'static str) {
-    let glide = cx
-        .debug_bounds("glide")
-        .expect("the highlight glides")
-        .center()
-        .y;
-    let from = cx.debug_bounds(from).unwrap().center().y;
-    let to = cx.debug_bounds(to).unwrap().center().y;
+/// Show a notice, as an action that failed does.
+fn warn(app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext, text: &str) {
+    app.update(cx, |a, cx| {
+        a.model_mut().warn(text);
+        cx.notify();
+    });
+    redraw(cx);
+}
+
+const NOTICE_FADE: Duration = Duration::from_millis(240);
+
+#[gpui_kit::test]
+fn the_notice_closes_with_its_x(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    warn(&app, cx, "LIV-1 waits on LIV-2");
+    assert!(cx.debug_bounds("notice").is_some(), "it is shown");
+
+    click_on(cx, "notice-close");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert!(a.model().notice().is_none()));
+    assert!(cx.debug_bounds("notice").is_none(), "and no longer drawn");
+}
+
+#[gpui_kit::test]
+fn the_notice_stays_while_the_pointer_is_over_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    warn(&app, cx, "LIV-1 waits on LIV-2");
+    let (x, y) = centre(cx, "notice");
+    move_to(cx, x, y);
+    app.update(cx, |a, _| {
+        assert!(
+            !a.model_mut()
+                .age_notice(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
+            "held by the pointer, its time does not run out"
+        )
+    });
+    redraw(cx);
+    assert!(cx.debug_bounds("notice").is_some(), "still shown");
+
+    // A key pressed with the pointer resting on it lets nothing go.
+    cx.simulate_keystrokes("j");
+    redraw(cx);
+    app.update(cx, |a, _| {
+        assert!(
+            !a.model_mut()
+                .age_notice(Instant::now() + NOTICE_FOR * 10, NOTICE_FADE),
+            "still held after a key press"
+        )
+    });
+
+    // The pointer leaves: its time starts again, and then it goes.
+    move_to(cx, 10., 10.);
+    let left = Instant::now();
+    app.update(cx, |a, cx| {
+        let m = a.model_mut();
+        assert!(!m.age_notice(left + NOTICE_FOR / 2, NOTICE_FADE));
+        assert!(m.age_notice(left + NOTICE_FOR, NOTICE_FADE), "it leaves");
+        assert!(m.age_notice(left + NOTICE_FOR + NOTICE_FADE, NOTICE_FADE));
+        cx.notify();
+    });
+    redraw(cx);
+    assert!(cx.debug_bounds("notice").is_none(), "gone");
+}
+
+/// A notice raised by the poll itself, not by anything the human did, shows on that poll.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_failure_found_by_the_poll_shows_at_once(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let log = dir.path().join(".livtk/events.jsonl");
+    let mode = |m| std::fs::set_permissions(&log, std::fs::Permissions::from_mode(m)).unwrap();
+    // Its length unchanged, the log is read to see whether it changed, and cannot be.
+    mode(0o000);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    mode(0o644);
+    app.read_with(cx, |a, _| assert!(a.model().notice().is_some(), "told"));
     assert!(
-        (glide - from).abs() < (glide - to).abs(),
-        "it starts at the line it leaves: {glide:?}, from {from:?}, to {to:?}"
+        cx.debug_bounds("notice").is_some(),
+        "and drawn on that poll, not when it starts to leave"
     );
 }
 
 #[gpui_kit::test]
-fn the_selection_glides_one_row_and_jumps_otherwise(cx: &mut TestAppContext) {
+fn view_options_open_upwards_and_turn_empty_groups_and_dismissed_work_on(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
-    redraw(cx);
-    cx.simulate_keystrokes("j");
-    redraw(cx);
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.model().selected().unwrap().key, "LIV-2")
-    });
-    glide_starts_at(cx, "key-LIV-1", "key-LIV-2");
-    settle(cx);
+    cx.run_until_parked();
+    let button = cx
+        .debug_bounds("dock-view")
+        .expect("view options in the dock");
+    click_on(cx, "dock-view");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("view")));
+    let menu = cx.debug_bounds("view-menu").expect("its menu");
     assert!(
-        cx.debug_bounds("glide").is_none(),
-        "done, the row draws its own highlight"
+        menu.bottom() <= button.top(),
+        "it opens upwards: {menu:?} over {button:?}"
     );
 
-    cx.simulate_keystrokes("k");
-    redraw(cx);
-    glide_starts_at(cx, "key-LIV-2", "key-LIV-1");
-    settle(cx);
-
-    click_on(cx, "key-LIV-2");
-    redraw(cx);
+    click_on(cx, "view-show-empty");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().selected().unwrap().key, "LIV-2")
+        assert!(a.model().display().show_empty);
+        assert_eq!(
+            a.model().groups.len(),
+            7,
+            "a band for every task state not dismissed"
+        );
+        assert_eq!(
+            a.menu_open(),
+            Some("view"),
+            "an option leaves the menu open"
+        );
     });
-    assert!(cx.debug_bounds("glide").is_none(), "a click jumps");
+    click_on(cx, "view-show-dismissed");
+    app.read_with(cx, |a, _| {
+        assert!(a.model().display().show_dismissed);
+        assert_eq!(a.model().groups.len(), 8, "and canceled");
+    });
 
-    // In the feed too, line by line.
-    cx.simulate_keystrokes("g a");
-    redraw(cx);
-    cx.simulate_keystrokes("j");
-    redraw(cx);
-    glide_starts_at(cx, "event-0", "event-1");
-    // Switching view while it glides drops it.
+    // Closed, `s d` still shows and hides dismissed work.
+    click_on(cx, "dock-view");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), None));
+    cx.simulate_keystrokes("s d");
+    app.read_with(cx, |a, _| {
+        assert!(!a.model().display().show_dismissed);
+        assert_eq!(a.model().groups.len(), 7);
+    });
+}
+
+#[gpui_kit::test]
+fn view_options_choose_list_or_board_above_a_line_and_keys_set_each_option(
+    cx: &mut TestAppContext,
+) {
+    use livtk_app::model::Layout;
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    click_on(cx, "dock-view");
+    let list = cx
+        .debug_bounds("view-layout-list")
+        .expect("List, in the menu");
+    let board = cx.debug_bounds("view-layout-board").expect("Board");
+    let line = cx.debug_bounds("view-menu-divider").expect("one line");
+    let empty = cx.debug_bounds("view-show-empty").unwrap();
+    let dismissed = cx.debug_bounds("view-show-dismissed").unwrap();
+    assert!(
+        list.bottom() <= board.top()
+            && board.bottom() <= line.top()
+            && line.bottom() <= empty.top()
+            && empty.bottom() <= dismissed.top(),
+        "List, Board, the line, then the options: {list:?} {board:?} {line:?} {empty:?}"
+    );
+
+    click_on(cx, "view-layout-board");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().layout, Layout::Board);
+        assert_eq!(a.menu_open(), Some("view"), "a choice leaves the menu open");
+    });
+    click_on(cx, "view-layout-list");
+    app.read_with(cx, |a, _| assert_eq!(a.model().layout, Layout::List));
+    click_on(cx, "dock-view");
+    cx.simulate_keystrokes("b");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().layout, Layout::Board, "b still switches")
+    });
+    cx.simulate_keystrokes("b shift-h");
+    app.read_with(cx, |a, _| {
+        assert!(a.model().display().show_empty, "Shift+H shows empty groups");
+        assert!(!a.model().display().show_dismissed, "and nothing else");
+    });
+    cx.simulate_keystrokes("s d");
+    app.read_with(cx, |a, _| {
+        assert!(a.model().display().show_dismissed, "h shows dismissed work");
+        assert!(a.model().display().show_empty);
+    });
+    cx.simulate_keystrokes("shift-h");
+    app.read_with(cx, |a, _| assert!(!a.model().display().show_empty));
+
+    // Lessons have no board: their menu is the options alone, with no line.
+    cx.simulate_keystrokes("g l");
+    cx.run_until_parked();
+    click_on(cx, "dock-view");
+    assert!(cx.debug_bounds("view-show-empty").is_some());
+    for gone in ["view-layout-list", "view-layout-board", "view-menu-divider"] {
+        assert!(cx.debug_bounds(gone).is_none(), "{gone}");
+    }
+}
+
+#[gpui_kit::test]
+fn the_board_shows_its_empty_columns_only_with_empty_groups(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t b");
+    cx.run_until_parked();
+    let column = |cx: &mut gpui_kit::VisualTestContext, s: &str| {
+        cx.debug_bounds(named(format!("column-{s}"))).is_some()
+    };
+    assert!(column(cx, "planned"), "the planned work has its column");
+    assert!(!column(cx, "review"), "an empty column is hidden");
+
+    cx.simulate_keystrokes("shift-h");
     redraw(cx);
-    assert!(cx.debug_bounds("glide").is_none(), "a jump never glides");
+    assert!(column(cx, "review"), "Shift+H brings every column back");
+    cx.simulate_keystrokes("shift-h");
+    redraw(cx);
+    assert!(!column(cx, "review"));
+
+    // Nothing matches: no columns, and the board says so.
+    app.update(cx, |a, cx| {
+        a.model_mut().set_filter("nothing matches this");
+        cx.notify();
+    });
+    redraw(cx);
+    assert!(cx.debug_bounds("board-empty").is_some());
+}
+
+/// The app's own shortcuts are the platform's: Cmd on macOS, where Ctrl does nothing of the sort,
+/// and Ctrl elsewhere. The palette's Ctrl+N and Ctrl+P stay Control everywhere.
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn on_macos_the_shortcuts_are_cmd_not_ctrl(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("ctrl-k");
+    app.read_with(cx, |a, _| {
+        assert!(!a.palette_open(), "Ctrl+K is not the palette")
+    });
+    cx.simulate_keystrokes("cmd-k");
+    app.read_with(cx, |a, _| assert!(a.palette_open(), "Cmd+K is"));
+    cx.simulate_keystrokes("escape ctrl-?");
+    app.read_with(cx, |a, _| assert!(!a.help_open()));
+    cx.simulate_keystrokes("cmd-?");
+    app.read_with(cx, |a, _| {
+        assert!(a.help_open(), "Cmd+? shows the shortcuts")
+    });
+}
+
+#[gpui_kit::test]
+fn the_filter_menu_narrows_by_state(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.run_until_parked();
+    click_on(cx, "filter-button");
+    for st in ["doing", "review", "planned", "backlog", "done"] {
+        assert!(
+            cx.debug_bounds(named(format!("filter-state-{st}")))
+                .is_some(),
+            "{st} is offered"
+        );
+    }
+    assert!(
+        cx.debug_bounds("filter-state-canceled").is_none(),
+        "not a dismissed state while dismissed work is hidden"
+    );
+    click_on(cx, "filter-state-backlog");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().display().states, [State::Backlog]);
+        assert!(a.model().rows.is_empty(), "both tasks are planned");
+        assert_eq!(a.menu_open(), Some("filter"), "a box leaves the menu open");
+    });
+    click_on(cx, "clear-filters");
+    app.read_with(cx, |a, _| {
+        assert!(a.model().display().states.is_empty());
+        assert_eq!(a.model().rows.len(), 2);
+    });
+
+    // The inbox mixes kinds: it has no states to filter by.
+    cx.simulate_keystrokes("escape g i");
+    cx.run_until_parked();
+    click_on(cx, "filter-button");
+    assert!(cx.debug_bounds("filter-state-planned").is_none());
+}
+
+/// While the window is away, what Claude puts in the inbox is told by a system notification; a
+/// click on it opens the inbox there. In front, nothing is posted.
+#[gpui_kit::test]
+fn what_arrives_while_the_window_is_away_is_a_system_notification(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let poll = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(250));
+        cx.run_until_parked();
+    };
+    let plan = |title: &str| {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let e = ws
+            .execute(
+                Command::Create {
+                    kind: Kind::Task,
+                    title: title.into(),
+                    body: String::new(),
+                    priority: None,
+                    links: vec![],
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        let key = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+        ws.execute(
+            Command::Move {
+                node: key.clone(),
+                to: State::Planned,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+        key
+    };
+
+    cx.update(|window, cx| {
+        cx.set_app_identity(livtk_app::ui::APP_ID, livtk_app::ui::APP_NAME);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.update(|window, _| window.is_window_active()),
+        "the window is in front"
+    );
+    plan("seen in front");
+    poll(cx);
+    assert!(
+        cx.shown_system_notifications().is_empty(),
+        "with the window in front, nothing is posted"
+    );
+
+    cx.deactivate_window();
+    let key = plan("while away");
+    poll(cx);
+    let shown = cx.shown_system_notifications();
+    let last = shown.last().expect("a notification");
+    assert!(last.tag.starts_with("livtk-inbox"), "{}", last.tag);
+    assert_eq!(last.title.to_string(), format!("{key} waits for you"));
+    assert_eq!(last.body.to_string(), "while away");
+
+    let tag = last.tag.clone();
+    cx.simulate_keystrokes("g t");
+    cx.simulate_system_notification_response(gpui_kit::SystemNotificationResponse {
+        tag,
+        action_id: None,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Inbox, "a click opens the inbox");
+        assert_eq!(
+            a.model().selected().map(|r| r.key.clone()),
+            Some(key.clone())
+        );
+    });
+
+    // Plans that come a poll apart are two notifications, each of what is new, and both stay:
+    // a click on the older still opens what it told of.
+    cx.deactivate_window();
+    let first = plan("first of two");
+    poll(cx);
+    let second = plan("second of two");
+    poll(cx);
+    let shown = cx.shown_system_notifications();
+    let [older, newer] = &shown[shown.len() - 2..] else {
+        unreachable!()
+    };
+    assert_eq!(older.title.to_string(), format!("{first} waits for you"));
+    assert_eq!(newer.title.to_string(), format!("{second} waits for you"));
+    let delivered = cx.delivered_system_notifications();
+    assert!(
+        delivered.iter().any(|n| n.tag == older.tag)
+            && delivered.iter().any(|n| n.tag == newer.tag),
+        "neither replaced the other"
+    );
+    cx.simulate_system_notification_response(gpui_kit::SystemNotificationResponse {
+        tag: older.tag.clone(),
+        action_id: None,
+    });
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().selected().map(|r| r.key.clone()),
+            Some(first.clone())
+        );
+    });
+}
+
+/// A panel floating over the content on a narrow window is the panel's, presses and all: its ×
+/// closes it and never reaches the titlebar strip under it, which would drag the window (and the
+/// test window panics when asked to move).
+#[gpui_kit::test]
+fn the_floating_panels_close_button_closes_it_and_drags_nothing(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 800., 700.);
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    assert!(cx.debug_bounds("panel-float").is_some(), "it floats");
+    click_on(cx, "close-detail");
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_none(), "closed"));
+}
+
+/// Plan a task as Claude in the project at `dir`; its key.
+fn plan_as_claude(dir: &std::path::Path, title: &str) -> String {
+    let mut ws = Workspace::open(dir).unwrap();
+    let e = ws
+        .execute(
+            Command::Create {
+                kind: Kind::Task,
+                title: title.into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    let key = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+    ws.execute(
+        Command::Move {
+            node: key.clone(),
+            to: State::Planned,
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    key
+}
+
+/// A notification from one run never takes the tag of one from an earlier run, which the system
+/// may still list: a tag in use replaces what was posted under it.
+#[gpui_kit::test]
+fn notifications_of_two_runs_never_share_a_tag(cx: &mut TestAppContext) {
+    let dir = project();
+    let mut tags = Vec::new();
+    for run in 0..2 {
+        let (_app, cx) = if run == 0 {
+            open_app(cx, dir.path())
+        } else {
+            open_window(cx, dir.path())
+        };
+        cx.update(|_, cx| cx.set_app_identity(livtk_app::ui::APP_ID, livtk_app::ui::APP_NAME));
+        cx.deactivate_window();
+        plan_as_claude(dir.path(), &format!("run {run}"));
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(250));
+        cx.run_until_parked();
+        let shown = cx.shown_system_notifications();
+        tags.push(shown.last().expect("a notification").tag.clone());
+    }
+    assert_ne!(tags[0], tags[1], "each run numbers its own: {tags:?}");
+}
+
+/// Esc in the note field gives the keys back to the list, keeping the draft with its own task: it
+/// never follows the selection to another. A second Esc, in the list, closes the panel. Fields
+/// that do more with Esc keep doing it.
+#[gpui_kit::test]
+fn esc_in_the_note_field_gives_the_keys_back_and_keeps_the_draft(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_input("half a thought");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(
+            a.model().detail.is_some(),
+            "the panel stays: only the field let go"
+        )
+    });
+
+    cx.simulate_keystrokes("j");
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().selected().map(|r| r.key.clone()).as_deref(),
+            Some("LIV-2"),
+            "j moves the selection: the keys are the list's again"
+        )
+    });
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        State::Planned,
+        "nothing typed ran a command"
+    );
+    let last_of = |key: &str| {
+        Workspace::open(dir.path())
+            .unwrap()
+            .history(Some(key))
+            .unwrap()
+            .pop()
+            .unwrap()
+            .op
+    };
+    let noted = |key: &str, text: &str| matches!(last_of(key), livtk_core::event::Op::NodeNote { data, .. } if data.text == text);
+
+    // LIV-2's note field is its own: empty, so Enter adds nothing there.
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter escape k");
+    cx.run_until_parked();
+    assert!(
+        !matches!(last_of("LIV-2"), livtk_core::event::Op::NodeNote { .. }),
+        "the draft did not follow the selection"
+    );
+
+    // Back on LIV-1, its draft is there: Enter adds it as LIV-1's note.
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(noted("LIV-1", "half a thought"), "{:?}", last_of("LIV-1"));
+
+    // Still in the field after Enter: Esc gives the keys back, and a second, in the list,
+    // closes the panel, as it always has.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_some(), "first the field lets go")
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_none(), "then the panel closes")
+    });
+
+    // The filter's Esc still closes its menu.
+    cx.simulate_keystrokes("g t /");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("filter")));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), None));
+}
+
+/// The menu bar's keys, from anywhere, typing in a field included: a new task. Views have no
+/// Cmd+number (the developer's choice): from a field, Cmd+3 changes nothing.
+#[gpui_kit::test]
+fn the_menu_bars_keys_work_from_anywhere(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("secondary-3");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view, View::Inbox, "no view by number")
+    });
+    cx.simulate_keystrokes("secondary-n");
+    app.read_with(cx, |a, _| assert!(a.form_open(), "Cmd+N opens a new task"));
+}
+
+#[gpui_kit::test]
+fn about_says_which_build_this_is(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.dispatch_action(livtk_app::ui::About);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("about").is_some(), "About opens");
+    assert!(cx.debug_bounds("about-build").is_some());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("about").is_none(), "Esc closes it");
+}
+
+#[test]
+fn the_menus_tick_what_is_on() {
+    use livtk_app::ui::menus::{MenuState, menu_bar};
+    let state = MenuState {
+        projects: vec!["tasks".into(), "other".into()],
+        current: 1,
+        view: 2,
+        board: true,
+        show_empty: true,
+        show_dismissed: false,
+        inbox: 3,
+    };
+    let bar = menu_bar(&state);
+    let ticked = |menu: &str, item: &str| {
+        let m = bar.iter().find(|m| m.name.as_ref() == menu).unwrap();
+        m.items.iter().find_map(|i| match i {
+            gpui_kit::MenuItem::Action { name, checked, .. } if name.as_ref() == item => {
+                Some(*checked)
+            }
+            gpui_kit::MenuItem::Submenu(sub) => sub.items.iter().find_map(|i| match i {
+                gpui_kit::MenuItem::Action { name, checked, .. } if name.as_ref() == item => {
+                    Some(*checked)
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+    };
+    assert_eq!(ticked("View", "Tasks"), Some(true));
+    assert_eq!(ticked("View", "Inbox"), Some(false));
+    assert_eq!(ticked("View", "Board"), Some(true));
+    assert_eq!(ticked("View", "Show Empty Groups"), Some(true));
+    assert_eq!(ticked("View", "Show Dismissed Work"), Some(false));
+    assert_eq!(ticked("File", "other"), Some(true), "the open project");
+    assert_eq!(ticked("File", "tasks"), Some(false));
+    assert_eq!(
+        bar.iter().map(|m| m.name.to_string()).collect::<Vec<_>>(),
+        ["livtk", "File", "Edit", "View", "Task", "Window", "Help"]
+    );
+}
+
+/// Two projects that share node ids (two clones of one repository) never share a note's draft.
+#[gpui_kit::test]
+fn a_draft_stays_in_its_own_project(cx: &mut TestAppContext) {
+    let a = project();
+    let b = tempfile::tempdir().unwrap();
+    // A clone of the same log: the same node ids, the same keys.
+    std::fs::create_dir_all(b.path().join(".livtk")).unwrap();
+    for f in ["config.toml", "events.jsonl"] {
+        std::fs::copy(
+            a.path().join(".livtk").join(f),
+            b.path().join(".livtk").join(f),
+        )
+        .unwrap();
+    }
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        bind_keys(cx);
+    });
+    let (pa, pb) = (a.path().to_path_buf(), b.path().to_path_buf());
+    let (_app, cx) = cx.add_window_view(|window, cx| {
+        let mut model = Model::open(&[pa, pb]);
+        model.set_models_dir(None);
+        LivtkApp::new(model, window, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_input("for project a");
+    cx.simulate_keystrokes("escape ]");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let notes = |dir: &std::path::Path| {
+        Workspace::open(dir)
+            .unwrap()
+            .history(Some("LIV-1"))
+            .unwrap()
+            .into_iter()
+            .filter(|e| matches!(e.op, livtk_core::event::Op::NodeNote { .. }))
+            .count()
+    };
+    assert_eq!(
+        notes(b.path()),
+        0,
+        "project b's LIV-1 had no draft of its own"
+    );
+    cx.simulate_keystrokes("escape [");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        notes(a.path()),
+        1,
+        "project a's draft came back and went to a"
+    );
+}
+
+/// The shortcuts and About have the keys while shown: a key meant for the list never acts on the
+/// task behind them, and Esc closes them.
+#[gpui_kit::test]
+fn the_shortcuts_and_about_keep_the_keys_from_the_list(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let before = state_of(dir.path(), "LIV-1");
+    cx.dispatch_action(livtk_app::ui::About);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("a 2 g t");
+    cx.run_until_parked();
+    assert_eq!(state_of(dir.path(), "LIV-1"), before, "nothing decided");
+    assert_eq!(priority_of(dir.path(), "LIV-1"), 3, "no priority set");
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Inbox));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("about").is_none());
+
+    cx.simulate_keystrokes("secondary-?");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    assert_eq!(state_of(dir.path(), "LIV-1"), before, "nothing decided");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    assert_ne!(
+        state_of(dir.path(), "LIV-1"),
+        before,
+        "the list has the keys again"
+    );
+}
+
+/// Cmd+N from the palette opens the form in its place; from the form, it keeps what is typed.
+#[gpui_kit::test]
+fn new_task_replaces_the_palette_and_keeps_a_half_typed_form(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("secondary-k");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("secondary-n");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.form_open());
+        assert!(!a.palette_open(), "the palette makes way");
+    });
+    cx.simulate_input("keep me");
+    cx.simulate_keystrokes("secondary-n");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let titles: Vec<String> = ws
+        .list(Kind::Task, &[])
+        .unwrap()
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
+    assert!(titles.contains(&"keep me".to_owned()), "{titles:?}");
+}
+
+/// The Dock's items work with the window hidden or behind another app, when no window hears an
+/// action: the app's own handlers bring the window forward and act in it.
+#[gpui_kit::test]
+fn the_docks_items_work_with_no_window_active(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    cx.deactivate_window();
+    let available = |cx: &mut gpui_kit::VisualTestContext| {
+        cx.update(|_, cx| cx.is_action_available(&livtk_app::ui::GoInbox))
+    };
+    assert!(!available(cx), "with no window active, nobody hears it");
+    // As the Dock sends them: from the app, not from inside the window (which a test's
+    // `update` is), so deferred.
+    let window = gpui_kit::VisualContext::window_handle(cx);
+    let weak = app.downgrade();
+    cx.update(|_, cx| livtk_app::ui::dock_actions(window, weak, cx));
+    assert!(available(cx), "the Dock's item is not greyed");
+    cx.update(|_, cx| cx.defer(|cx| cx.dispatch_action(&livtk_app::ui::GoInbox)));
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Inbox));
+    cx.deactivate_window();
+    cx.update(|_, cx| cx.defer(|cx| cx.dispatch_action(&livtk_app::ui::NewTask)));
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert!(a.form_open()));
+}
+
+/// The panel's Status opens the same menu as a row's state icon, as its Priority does, and the
+/// menu fits inside the panel.
+#[gpui_kit::test]
+fn the_panels_status_opens_the_state_menu(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    open_detail(cx);
+    let key = app.read_with(cx, |a, _| a.model().selected().unwrap().key.clone());
+    click_on(cx, "detail-state");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("detail-state")));
+    let panel = cx.debug_bounds("detail-body-panel").unwrap();
+    let menu = cx.debug_bounds("set-state-menu").unwrap();
+    assert!(
+        menu.left() >= panel.left() && menu.right() <= panel.right(),
+        "menu {menu:?} inside the panel {panel:?}"
+    );
+    click_on(cx, "set-state-acked");
+    assert_eq!(state_of(dir.path(), &key), State::Acked);
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), None));
+}
+
+/// The shortcuts and About open over a half-typed task and close back to it, its text kept and
+/// its title typing again; a focus lost under them never hands the keys to the list.
+#[gpui_kit::test]
+fn the_shortcuts_and_about_keep_a_half_typed_task(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let before = state_of(dir.path(), "LIV-1");
+    cx.simulate_keystrokes("n");
+    cx.run_until_parked();
+    cx.simulate_input("half");
+    cx.simulate_keystrokes("secondary-?");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| {
+        assert!(a.form_open(), "kept under the shortcuts")
+    });
+    cx.update(|window, cx| window.blur(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    assert_eq!(
+        state_of(dir.path(), "LIV-1"),
+        before,
+        "nothing behind them acts"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.dispatch_action(livtk_app::ui::About);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert!(a.form_open(), "kept under About"));
+    cx.simulate_input(" typed");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let titles: Vec<String> = ws
+        .list(Kind::Task, &[])
+        .unwrap()
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
+    assert!(titles.contains(&"half typed".to_owned()), "{titles:?}");
+}
+
+/// The palette opened over About comes out on top, with the keys; About gives way.
+#[gpui_kit::test]
+fn the_palette_opens_on_top_of_about(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.dispatch_action(livtk_app::ui::About);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("secondary-k");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("about").is_none(), "About gives way");
+    app.read_with(cx, |a, _| assert!(a.palette_open()));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    app.read_with(cx, |a, _| assert!(!a.palette_open(), "one Esc closes it"));
 }

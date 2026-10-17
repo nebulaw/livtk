@@ -174,9 +174,11 @@ fn sub_tasks_are_linked_from_either_end_and_removed() {
     );
     m.link(id(d, "LIV-1"), part_of, id(d, "LIV-2"));
     assert!(
-        m.notice.as_deref().is_some_and(|n| n.contains("cycle")),
+        m.notice()
+            .map(|n| n.text.as_str())
+            .is_some_and(|n| n.contains("cycle")),
         "a task cannot be part of its own part: {:?}",
-        m.notice
+        m.notice()
     );
 
     m.unlink(Rel::Parent, false, "LIV-3");
@@ -214,9 +216,12 @@ fn the_other_end_sees_the_link_and_a_cycle_is_refused_with_the_reason() {
 
     m.link(id(d, "LIV-1"), waits, id(d, "LIV-2"));
     assert!(
-        m.notice.as_deref().unwrap_or_default().contains("cycle"),
+        m.notice()
+            .map(|n| n.text.as_str())
+            .unwrap_or_default()
+            .contains("cycle"),
         "{:?}",
-        m.notice
+        m.notice()
     );
     assert_eq!(edges(d).len(), 1);
 }

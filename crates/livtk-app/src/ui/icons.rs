@@ -54,6 +54,8 @@ icons! {
     Check => "check",
     Grouping => "blocks",
     Ordering => "arrow-down-up",
+    /// How a list is shown: the dock's View options.
+    ViewOptions => "slider-alt",
     Show => "eye",
     Hide => "eye-slash",
     /// Closing the detail panel, expanding the sidebar from its rail.
@@ -75,6 +77,13 @@ icons! {
     ZoomIn => "plus",
     Enter => "enter",
     Error => "alert-circle",
+    /// The state flow's arrows, lit along the moves a node can make.
+    ArrowRight => "arrow-right-stroke",
+    ArrowLeft => "arrow-left-stroke",
+    /// A notice that tells rather than warns.
+    Info => "info-circle",
+    /// Closing a notice.
+    Close => "x",
 }
 
 /// Icon `i`, `size` across, in colour `c`.

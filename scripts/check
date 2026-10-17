@@ -2,7 +2,8 @@
 # Everything a change must pass, fastest first, each step timed:
 #   scripts/check            format, lint, supply chain, every test (debug), benchmarks and model
 #                            tests (quick)
-#   scripts/check --install  then install both binaries
+#   scripts/check --install  then install: on macOS ~/Applications/livtk.app and links to it on
+#                            PATH; elsewhere both binaries with cargo install
 #
 # UI tests run in debug only (GPUI records the debug selectors they use only there). The CLI's
 # benchmarks time the binary that gets installed, start-up included, so they run in release; the
@@ -53,6 +54,12 @@ step "benchmarks and model tests: core, app" \
 step "benchmarks and model tests: CLI (release)" \
   "${with_models[@]}" cargo test -q --release -p livtk-cli -- --ignored "${skip[@]}"
 if [ "${1:-}" = "--install" ]; then
-  step "install livtk" cargo install -q --locked --path crates/livtk-cli --target-dir target
-  step "install livtk-app" cargo install -q --locked --path crates/livtk-app --target-dir target
+  if [ "$(uname)" = Darwin ]; then
+    # One bundle holds the app and the CLI; the commands on PATH link into it.
+    step "install livtk.app" scripts/bundle-app --install
+    "$HOME/Applications/livtk.app/Contents/MacOS/livtk-app" --install-cli
+  else
+    step "install livtk" cargo install -q --locked --path crates/livtk-cli --target-dir target
+    step "install livtk-app" cargo install -q --locked --path crates/livtk-app --target-dir target
+  fi
 fi

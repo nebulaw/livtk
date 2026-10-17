@@ -170,8 +170,8 @@ pub fn state_short(state: State) -> &'static str {
 
 impl Model {
     /// Take `choice` on node `id`, wherever it shows (a row, a card, the panel), leaving the
-    /// selection where it is.
-    pub fn choose_on(&mut self, id: Uuid, choice: &Choice) {
+    /// selection where it is; whether it moved.
+    pub fn choose_on(&mut self, id: Uuid, choice: &Choice) -> bool {
         let cmd = if choice.to == State::Ratified {
             livtk_core::Command::Ratify {
                 node: id.to_string(),
@@ -184,6 +184,6 @@ impl Model {
             }
         };
         let row = self.rows.iter().find(|r| r.id == id).cloned();
-        self.run(cmd, row);
+        self.run(cmd, row)
     }
 }

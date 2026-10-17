@@ -600,3 +600,39 @@ fn events_read_on_from_a_cursor_and_follow_writes_from_elsewhere() {
     assert_eq!(signal["signal"], "decision.needed");
     assert_eq!(signal["key"], "LIV-1");
 }
+
+/// A command that writes starts the project's hooks apart and returns at once; the hook hears
+/// the signal.
+#[cfg(unix)]
+#[test]
+fn a_write_from_the_cli_runs_the_projects_hooks_apart() {
+    let dir = project();
+    // The hook comes after the first write: the write that first wakes it is heard too.
+    ok(dir.path(), As::Claude, &["new", "first"]);
+    let config = dir.path().join(".livtk/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "\n[[on]]\nsignal = \"decision.needed\"\nrun = [\"sh\", \"-c\", \"cat >> heard\"]\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    ok(dir.path(), As::Claude, &["move", "LIV-1", "planned"]);
+    let heard = dir.path().join("heard");
+    let until = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(&heard).is_ok_and(|t| t.contains("decision.needed")) {
+        assert!(
+            Instant::now() < until,
+            "the hook ran: {:?}",
+            std::fs::read_to_string(&heard)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let line: Value = serde_json::from_str(
+        std::fs::read_to_string(&heard)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(line["key"], "LIV-1");
+}

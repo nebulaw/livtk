@@ -211,6 +211,15 @@ enum Cmd {
     /// Answer a Claude Code hook: reads its JSON on stdin. Used by the livtk plugin.
     #[command(hide = true)]
     Hook { event: String },
+    /// Run the project's `[[on]]` hooks for the signals they have not heard. Started on its
+    /// own after a command that wrote; run by hand to retry.
+    #[command(hide = true)]
+    Dispatch {
+        /// A hook seen for the first time starts after this event (the newest before the
+        /// write that started the dispatch), so it hears that write.
+        #[arg(long)]
+        new_from: Option<uuid::Uuid>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -332,11 +341,41 @@ fn run(cli: Cli) -> Result<()> {
     }
     let by = actor(cli.agent)?;
     let mut ws = Workspace::open(&cwd)?;
+    let before = ws.newest_event().ok().flatten();
+    let hooks_run_here = matches!(cli.command, Cmd::Dispatch { .. });
     let result = dispatch(&mut ws, cli.command, &by, cli.json);
     for w in ws.take_warnings() {
         eprintln!("livtk: warning: {w}");
     }
+    // Something written, and hooks to hear it: they run apart, so this command never waits on
+    // them and none of them can undo what it did.
+    if result.is_ok()
+        && !hooks_run_here
+        && !ws.config().on.is_empty()
+        && ws.newest_event().ok().flatten() != before
+    {
+        start_dispatch(&cwd, before);
+    }
     result
+}
+
+/// `livtk dispatch` in `dir`, on its own: not waited for, its output nowhere.
+fn start_dispatch(dir: &std::path::Path, before: Option<uuid::Uuid>) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let started = std::process::Command::new(exe)
+        .arg("dispatch")
+        .arg("--new-from")
+        .arg(before.unwrap_or(uuid::Uuid::nil()).to_string())
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Err(e) = started {
+        eprintln!("livtk: warning: could not start the hooks: {e}");
+    }
 }
 
 fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> {
@@ -487,6 +526,19 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         }
         Cmd::Next => output::next(ws.next()?.as_ref(), json),
         Cmd::Log { key } => output::log(ws, key.as_deref(), json),
+        Cmd::Dispatch { new_from } => {
+            let done = ws.dispatch_from(new_from)?;
+            for f in &done.failed {
+                eprintln!("livtk: a hook failed, to be tried again: {f}");
+            }
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "ran": done.ran, "failed": done.failed, "busy": done.busy })
+                );
+            }
+            Ok(())
+        }
         Cmd::Events {
             since,
             follow,

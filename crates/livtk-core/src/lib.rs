@@ -8,6 +8,7 @@ mod error;
 pub mod event;
 mod log;
 pub mod model;
+pub mod on;
 pub mod registry;
 #[cfg(feature = "embed")]
 pub mod rows;

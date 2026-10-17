@@ -45,6 +45,9 @@ pub struct Config {
     pub memory: Memory,
     #[serde(default, skip_serializing_if = "Gates::is_default")]
     pub gates: Gates,
+    /// Commands run on signals (`[[on]]`): see `on`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on: Vec<crate::on::On>,
 }
 
 /// Moves this project keeps for the human, beyond the built-in ones (acknowledging, and
@@ -335,13 +338,17 @@ impl Workspace {
             hooks: Hooks::default(),
             memory: Memory::default(),
             gates: Gates::default(),
+            on: Vec::new(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
             msg: e.to_string(),
         })?;
         fs::write(dir.join("config.toml"), text)?;
-        fs::write(dir.join(".gitignore"), "livtk.db*\nlock\n")?;
+        fs::write(
+            dir.join(".gitignore"),
+            "livtk.db*\nlock\non.lock\non-state.json*\n",
+        )?;
         fs::write(dir.join(".gitattributes"), "events.jsonl merge=union\n")?;
         OpenOptions::new()
             .create(true)
@@ -525,6 +532,11 @@ impl Workspace {
             Some(r) => self.store.history(self.resolve(r)?),
             None => self.store.all_events(),
         }
+    }
+
+    /// The newest event's id: one cheap look, to tell whether anything was written since.
+    pub fn newest_event(&self) -> Result<Option<Uuid>> {
+        Ok(self.store.events_page(None, 1)?.first().map(|e| e.id))
     }
 
     /// The events after `after` (or the whole log), oldest first: what a reader of signals

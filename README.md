@@ -99,6 +99,20 @@ livtk events --follow --signal decision.made --node 12
 Signals are versioned (`"v": 1`): fields are only ever added, and a reader ignores the ones it
 does not know.
 
+A project can also run a command on a signal, in `.livtk/config.toml`:
+
+```toml
+[[on]]
+signal = "decision.made"            # and optionally: kind = "task"
+run = ["./scripts/wake-agent"]      # the signal's JSON on stdin, run from the project's folder
+```
+
+Hooks run after the change is in the log, apart from whatever made it (the CLI starts them on
+their own and returns; the app runs them off its window), so a hook never holds up or undoes a
+write. Each hook keeps its place (`.livtk/on-state.json`, local to the machine): a failing one is
+tried again on the next write, in order, missing nothing; a new one hears what comes, not the
+project's history. `livtk dispatch` runs them by hand.
+
 ## Memory
 
 Claude proposes what it learns; you decide what binds it.

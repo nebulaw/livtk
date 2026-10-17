@@ -357,6 +357,9 @@ pub struct Model {
     pub leaving: Vec<(Summary, usize, Instant)>,
     /// What the app tells the human in the window.
     toasts: Toasts,
+    /// Projects with `[[on]]` hooks the human wrote to since the view last took them: their
+    /// hooks are to be run, apart from the window.
+    wrote: Vec<PathBuf>,
     /// Whether the human was told that this app posts no system notifications where it runs.
     pub told_no_notifications: bool,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
@@ -436,6 +439,7 @@ impl Model {
             flashed: HashMap::new(),
             leaving: Vec::new(),
             toasts: Toasts::default(),
+            wrote: Vec::new(),
             told_no_notifications: false,
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
@@ -889,6 +893,9 @@ impl Model {
         };
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(events) => {
+                if !project.ws.config().on.is_empty() {
+                    self.wrote.push(project.dir.clone());
+                }
                 self.toasts.clear_errors();
                 let created = events.first().map(|e| e.op.subjects().0);
                 if self.view != View::Tasks {
@@ -921,6 +928,9 @@ impl Model {
         };
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(_) => {
+                if !project.ws.config().on.is_empty() {
+                    self.wrote.push(project.dir.clone());
+                }
                 self.toasts.clear_errors();
                 self.reload();
                 // A row that left the view (acknowledged out of the inbox, say) fades out, and
@@ -1096,6 +1106,13 @@ impl Model {
         if self.selected().is_some_and(|r| r.id == arrival.id) {
             self.open_detail();
         }
+    }
+
+    /// The projects written to that have hooks to run, each once.
+    pub fn take_written(&mut self) -> Vec<PathBuf> {
+        let mut dirs = std::mem::take(&mut self.wrote);
+        dirs.dedup();
+        dirs
     }
 
     /// The catching up `tick` found and left to be run elsewhere, each once.

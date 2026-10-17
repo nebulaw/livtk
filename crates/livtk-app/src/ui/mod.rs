@@ -698,6 +698,7 @@ impl LivtkApp {
                         }
                     }
                     app.run_catch_ups(cx);
+                    app.run_hooks(cx);
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
                     let now = Instant::now();
                     app.model.settle(now, FLASH.max(FADE) + POLL);
@@ -5170,6 +5171,25 @@ impl LivtkApp {
                 |el, t| el.opacity(t),
             )
             .into_any_element()
+    }
+
+    /// The `[[on]]` hooks of each project the human just wrote to, off the window's thread: a
+    /// hook never holds up the window, and a failing one is tried again on the next write.
+    fn run_hooks(&mut self, cx: &mut Context<Self>) {
+        for dir in self.model.take_written() {
+            let ran = cx.background_spawn(async move {
+                livtk_core::Workspace::open(&dir).and_then(|mut ws| ws.dispatch())
+            });
+            cx.spawn(async move |_, _| match ran.await {
+                Ok(done) => {
+                    for f in done.failed {
+                        log::warn!("hook failed, to be tried again: {f}");
+                    }
+                }
+                Err(e) => log::warn!("hooks: {e}"),
+            })
+            .detach();
+        }
     }
 
     /// A notification's button pressed.

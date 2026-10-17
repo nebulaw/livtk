@@ -537,6 +537,8 @@ fn arrows_move_the_highlight_and_esc_or_ctrl_k_closes(cx: &mut TestAppContext) {
 fn a_click_runs_an_item_and_new_task_opens_the_form(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
+    // What a click does, not the list's opening, which takes its time.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     cx.simulate_keystrokes("secondary-k");
     cx.simulate_input("new task");
     cx.run_until_parked();

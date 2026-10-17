@@ -4577,18 +4577,16 @@ impl LivtkApp {
     }
 
     /// The command palette: a field, what it finds in sections, and the keys that drive it.
-    /// The palette as it opens (or, from what it last showed, as it closes): fading in, and
-    /// opening from its centre to its sides, as if it unfolded; closing, the same in reverse,
-    /// letting the window through as it goes.
+    /// The palette as it opens (the field, then its list growing open) or, from what it last
+    /// showed, as it closes: fading away quickly, letting the window through as it goes.
     fn palette_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let epoch = self.palette_epoch;
         if let Some(p) = self.model.palette.clone() {
-            let card = self.palette_card(&p, cx);
-            let card = unfolding(card, epoch, false);
+            let card = self.palette_card(&p, Some(epoch), cx);
             return Some(self.modal("palette-modal", false, card, cx));
         }
         let p = self.palette_leaving.clone()?;
-        let card = self.palette_card(&p, cx);
+        let card = self.palette_card(&p, None, cx);
         Some(
             div()
                 .absolute()
@@ -4599,8 +4597,7 @@ impl LivtkApp {
                 .pb(px(16.))
                 .child(div().h(px(110.)).min_h(px(16.)).flex_shrink(20.))
                 .child(
-                    unfolding(card, epoch, true)
-                        .overflow_hidden()
+                    card.overflow_hidden()
                         .rounded_xl()
                         .bg(color(SURFACE))
                         .border_1()
@@ -4616,8 +4613,9 @@ impl LivtkApp {
         )
     }
 
-    /// The palette's card for `p`.
-    fn palette_card(&mut self, p: &Palette, cx: &mut Context<Self>) -> Div {
+    /// The palette's card for `p`. Opening (`opening`, numbered), as Spotlight does: the field
+    /// first, on its own, then the list growing open below it.
+    fn palette_card(&mut self, p: &Palette, opening: Option<usize>, cx: &mut Context<Self>) -> Div {
         let mut results = div()
             .id("palette-results")
             .track_scroll(&self.palette_scroll)
@@ -4711,8 +4709,12 @@ impl LivtkApp {
                         )
                     }),
             )
-            .child(div().h(px(1.)).bg(color(BORDER)))
-            .child(results)
+            .child(listing(
+                opening,
+                div()
+                    .child(div().h(px(1.)).bg(color(BORDER)))
+                    .child(results),
+            ))
             .child(
                 div()
                     .h(px(36.))
@@ -4736,8 +4738,8 @@ impl LivtkApp {
             )
     }
 
-    /// Notice the palette opening or closing since the last frame: opening, its unfolding
-    /// plays; closing, what it last showed stays to fold away, then goes.
+    /// Notice the palette opening or closing since the last frame: opening, its field shows and
+    /// its list opens; closing, what it last showed stays to fade away, then goes.
     fn track_palette(&mut self, cx: &mut Context<Self>) {
         match (&self.model.palette, self.palette_last.is_some()) {
             (Some(p), was_open) => {
@@ -6514,34 +6516,41 @@ fn parent_chip(key: &str) -> Div {
         .child(key.to_owned())
 }
 
-/// The palette's width, and how long it takes to fold away.
+/// The palette's width, and how long it takes to fade away.
 const PALETTE_W: f32 = 640.;
-const PALETTE_IN: Duration = Duration::from_millis(220);
-const PALETTE_OUT: Duration = Duration::from_millis(160);
+const PALETTE_OUT: Duration = Duration::from_millis(120);
+/// The palette's list opening: how long, the share of it the field shows alone, and the list's
+/// height at most (its results and divider) while it grows.
+const LIST_IN: Duration = Duration::from_millis(340);
+const LIST_WAIT: f32 = 0.3;
+const LIST_FULL: f32 = 410.;
 
-/// `card` unfolding from its centre to its sides (or, `closing`, folding back to its centre):
-/// its middle shows first, its sides come as it widens, nothing in it moves.
-fn unfolding(card: Div, epoch: usize, closing: bool) -> Div {
-    // Columns that may shrink, so on a short window the card still gives way and scrolls.
-    div().flex().flex_col().min_h_0().child(
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .min_h_0()
-            .overflow_hidden()
-            .child(card.flex_none().min_h_0().flex_shrink(1.))
-            .with_animation(
-                SharedString::from(format!("palette-unfold-{epoch}-{closing}")),
-                Animation::new(if closing { PALETTE_OUT } else { PALETTE_IN })
-                    .with_easing(ease_out_quint()),
-                move |el, t| {
-                    let open = if closing { 1. - t } else { t };
-                    el.w(px(PALETTE_W * (0.55 + 0.45 * open)))
-                        .opacity(0.2 + 0.8 * open)
-                },
-            ),
+/// The palette's list under its field: opening, it grows open once the field has shown, from
+/// nothing to all of it; otherwise as it is. It gives way on a short window.
+fn listing(opening: Option<usize>, list: Div) -> AnyElement {
+    let list = list
+        .flex()
+        .flex_col()
+        .min_h_0()
+        .flex_shrink(1.)
+        .overflow_hidden();
+    let Some(epoch) = opening else {
+        return list.into_any_element();
+    };
+    list.with_animation(
+        SharedString::from(format!("palette-list-{epoch}")),
+        Animation::new(LIST_IN),
+        |el, t| {
+            // The field alone for the first part, then the list opens, easing out.
+            let open = ease_out_cubic(((t - LIST_WAIT) / (1. - LIST_WAIT)).clamp(0., 1.));
+            if open >= 1. {
+                el
+            } else {
+                el.max_h(px(LIST_FULL * open)).opacity(open)
+            }
+        },
     )
+    .into_any_element()
 }
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.

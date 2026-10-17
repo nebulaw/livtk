@@ -23,6 +23,11 @@ fn keys_send_what_an_xterm_sends() {
     assert_eq!(sent("ctrl-c"), Some(vec![0x03]));
     assert_eq!(sent("ctrl-d"), Some(vec![0x04]));
     assert_eq!(sent("ctrl-["), Some(vec![0x1b]));
+    assert_eq!(
+        sent("ctrl-alt-h"),
+        Some(vec![0x1b, 0x08]),
+        "Meta with Control"
+    );
     assert_eq!(sent("up"), Some(b"\x1b[A".to_vec()));
     let app = keys::to_bytes(&Keystroke::parse("up").unwrap(), true);
     assert_eq!(
@@ -119,6 +124,10 @@ fn colours_follow_the_palette_and_the_256() {
     assert_eq!(colors::rgb(Color::Indexed(232), &c), 0x080808, "the greys");
     assert_eq!(colors::rgb(Color::Indexed(255), &c), 0xeeeeee);
     assert_eq!(colors::dim(0x9999cc), 0x666688);
+    // As a program asks for them: the table's 256, then the text, background and cursor.
+    assert_eq!(colors::at(1, &c), ANSI[1]);
+    assert_eq!(colors::at(257, &c), colors::BACKGROUND);
+    assert_eq!(colors::at(258, &c), colors::CURSOR);
 }
 
 const SIZE: Size = Size {

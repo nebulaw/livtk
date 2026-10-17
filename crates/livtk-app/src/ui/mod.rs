@@ -1040,7 +1040,7 @@ impl LivtkApp {
             }
             InputEvent::PressEnter { .. } => {
                 self.menu = None;
-                self.nav.focus(window, cx);
+                self.focus_main(window, cx);
                 cx.notify();
             }
             _ => {}
@@ -1078,7 +1078,7 @@ impl LivtkApp {
                 .focus_handle(cx)
                 .focus(window, cx);
         } else {
-            self.nav.focus(window, cx);
+            self.focus_main(window, cx);
         }
     }
 
@@ -1159,7 +1159,7 @@ impl LivtkApp {
             cx.notify();
             return;
         }
-        self.nav.focus(window, cx);
+        self.focus_main(window, cx);
         // Going to a node may have cleared the filter that hid it.
         self.sync_filter(window, cx);
         match ask {
@@ -1190,6 +1190,24 @@ impl LivtkApp {
             self.filter
                 .update(cx, |s, cx| s.set_value(want.clone(), window, cx));
         }
+    }
+
+    /// The keys back to the main area: the terminal in its view, else the list. Where every
+    /// overlay, menu and field gives them back.
+    fn focus_main(&self, window: &mut Window, cx: &mut App) {
+        match self
+            .current_terminal()
+            .filter(|_| self.model.view == View::Terminal)
+        {
+            Some(pane) => pane.read(cx).focus_handle().clone().focus(window, cx),
+            None => self.nav.focus(window, cx),
+        }
+    }
+
+    /// Whether the terminal has the keys.
+    pub fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
+        self.current_terminal()
+            .is_some_and(|pane| pane.read(cx).focus_handle().is_focused(window))
     }
 
     /// The open project's terminal, once it has one.
@@ -1223,7 +1241,7 @@ impl LivtkApp {
             let focus = pane.read(cx).focus_handle().clone();
             focus.focus(window, cx);
         } else if was_terminal {
-            self.nav.focus(window, cx);
+            self.focus_main(window, cx);
         }
     }
 
@@ -1422,7 +1440,7 @@ impl LivtkApp {
         if self.model.create_task(&title, &body, Some(form.priority)) {
             self.form = None;
             self.sync_filter(window, cx);
-            self.nav.focus(window, cx);
+            self.focus_main(window, cx);
             self.after_move(cx);
         } else {
             cx.notify();
@@ -1505,14 +1523,14 @@ impl LivtkApp {
             }
         }
         if refocus {
-            self.nav.focus(window, cx);
+            self.focus_main(window, cx);
         }
         cx.notify();
     }
 
     fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing.take().is_some() {
-            self.nav.focus(window, cx);
+            self.focus_main(window, cx);
             cx.notify();
         }
     }
@@ -1782,7 +1800,7 @@ impl LivtkApp {
         self.form = None;
         self.help = false;
         self.about = false;
-        self.nav.focus(window, cx);
+        self.focus_main(window, cx);
         cx.notify();
     }
 
@@ -2505,7 +2523,7 @@ impl LivtkApp {
         self.menu = None;
         match &self.form {
             Some(form) => form.title.read(cx).focus_handle(cx).focus(window, cx),
-            None => self.nav.focus(window, cx),
+            None => self.focus_main(window, cx),
         }
         cx.notify();
     }
@@ -5859,6 +5877,14 @@ impl Render for LivtkApp {
             .text_color(color(TEXT_2))
             .text_sm()
             .when(dragging_edge, |d| d.cursor(CursorStyle::ResizeLeftRight))
+            // Esc closes an open menu before anything focused hears it: the terminal, which
+            // takes every key, included.
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "escape" && this.menu.is_some() {
+                    this.close_menu(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
             )
@@ -5946,7 +5972,7 @@ impl Render for LivtkApp {
             // closes its menu, an editor cancels, a modal closes) take it first, as GPUI stops an
             // action at the first handler, so it reaches here only from the rest (a note).
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
-                this.nav.focus(window, cx);
+                this.focus_main(window, cx);
                 cx.notify();
             }))
             .child(top_bar)

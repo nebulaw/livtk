@@ -184,6 +184,16 @@ impl Shell {
                 let text = answer(self.size.window());
                 self.write(text.into_bytes());
             }
+            // A program asking what a colour is (the background, to pick a light or dark theme).
+            Event::ColorRequest(index, answer) => {
+                let c = self.with_term(|t| colors::at(*index, t.colors()));
+                let rgb = alacritty_terminal::vte::ansi::Rgb {
+                    r: (c >> 16) as u8,
+                    g: (c >> 8) as u8,
+                    b: c as u8,
+                };
+                self.write(answer(rgb).into_bytes());
+            }
             _ => {}
         }
         true

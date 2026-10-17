@@ -88,6 +88,8 @@ pub fn to_bytes(k: &Keystroke, app_cursor: bool) -> Option<Vec<u8>> {
         "f10" => tilde(21),
         "f11" => tilde(23),
         "f12" => tilde(24),
+        // Control with Option: Escape before the control character, as Meta sends it.
+        _ if m.control && m.alt => return control(key).map(|c| [vec![0x1b], c].concat()),
         _ if m.control => return control(key),
         "space" => vec![b' '],
         _ => match &k.key_char {

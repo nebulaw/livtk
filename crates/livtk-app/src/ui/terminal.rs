@@ -52,6 +52,9 @@ pub struct TerminalPane {
     cell: Rc<Shared<(f32, f32)>>,
     /// The wheel's movement not yet a whole line.
     wheel: f32,
+    /// The mouse button pressed in the terminal and not yet let go: followed anywhere in the
+    /// window, so a drag out of it, and its release, still reach the selection or the program.
+    held: Option<MouseButton>,
 }
 
 /// What a frame paints: each row's text with its runs, the backgrounds unlike the screen's,
@@ -75,6 +78,7 @@ impl TerminalPane {
             origin: Rc::default(),
             cell: Rc::new(Shared::new((8., 17.))),
             wheel: 0.,
+            held: None,
         }
     }
 
@@ -474,6 +478,8 @@ impl Render for TerminalPane {
         let this = cx.entity().downgrade();
         let frame = self.frame(focused, &font).map(Rc::new);
         let (origin, cell) = (self.origin.clone(), self.cell.clone());
+        let held = self.held;
+        let follow = this.clone();
         let paint_font = font.clone();
         let grid = canvas(
             {
@@ -516,6 +522,26 @@ impl Render for TerminalPane {
                 }
             },
             move |bounds, _, window, cx| {
+                // A button held: its moves and its release, wherever in the window they are.
+                if let Some(button) = held {
+                    let moved = follow.clone();
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Capture && e.pressed_button.is_some() {
+                            let _ = moved.update(cx, |pane, cx| {
+                                pane.mouse(e.position, Some(button), Motion::Drag, e.modifiers, cx);
+                            });
+                        }
+                    });
+                    let released = follow.clone();
+                    window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Capture && e.button == button {
+                            let _ = released.update(cx, |pane, cx| {
+                                pane.held = None;
+                                pane.mouse(e.position, Some(button), Motion::Up, e.modifiers, cx);
+                            });
+                        }
+                    });
+                }
                 let Some(frame) = &frame else { return };
                 let wide_font = paint_font.clone();
                 let o = bounds.origin + point(px(PAD), px(PAD));
@@ -589,29 +615,19 @@ impl Render for TerminalPane {
             .bg(color(BACKGROUND))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| this.key_down(e, cx)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, window, cx| {
-                    this.focus.focus(window, cx);
-                    this.mouse(
-                        e.position,
-                        Some(e.button),
-                        Motion::Down(e.click_count),
-                        e.modifiers,
-                        cx,
-                    );
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseUpEvent, _, cx| {
-                    this.mouse(e.position, Some(e.button), Motion::Up, e.modifiers, cx);
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                if e.pressed_button.is_some() {
-                    this.mouse(e.position, e.pressed_button, Motion::Drag, e.modifiers, cx);
-                }
+            // Any button: a program that asked for the mouse hears the right and the middle too.
+            .on_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                this.focus.focus(window, cx);
+                this.held = Some(e.button);
+                // Drawn again, so the window follows the button from now on.
+                cx.notify();
+                this.mouse(
+                    e.position,
+                    Some(e.button),
+                    Motion::Down(e.click_count),
+                    e.modifiers,
+                    cx,
+                );
             }))
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| this.scroll(e, cx)))
             .child(grid)

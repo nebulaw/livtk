@@ -69,6 +69,20 @@ fn named(n: NamedColor, colors: &Colors) -> u32 {
     }
 }
 
+/// The colour at `index` of the terminal's table, as a program asks for it (OSC 4, 10, 11, 12):
+/// the 256, then the text, the background and the cursor.
+pub fn at(index: usize, colors: &Colors) -> u32 {
+    match u8::try_from(index) {
+        Ok(i) => indexed(i, colors),
+        Err(_) => match index {
+            256 => named(NamedColor::Foreground, colors),
+            257 => named(NamedColor::Background, colors),
+            258 => named(NamedColor::Cursor, colors),
+            _ => FOREGROUND,
+        },
+    }
+}
+
 /// A colour two thirds as bright, for faint text.
 pub fn dim(c: u32) -> u32 {
     let part = |shift: u32| (((c >> shift) & 0xff) * 2 / 3) << shift;

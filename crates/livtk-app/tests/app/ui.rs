@@ -1735,11 +1735,36 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().view, View::Terminal, "typed into the shell");
     });
+    cx.update(|window, cx| {
+        assert!(app.read(cx).terminal_focused(window, cx), "it has the keys");
+    });
     cx.simulate_keystrokes("secondary-k");
     app.read_with(cx, |a, _| {
         assert!(a.palette_open(), "the palette's key is the app's")
     });
     cx.simulate_keystrokes("escape");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert!(!a.palette_open(), "Esc closed it"));
+    // A menu opened and shut from the bottom bar's grid gives the keys back here too.
+    cx.simulate_keystrokes("secondary-j");
+    settle(cx);
+    click_on(cx, "grid-what");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("grid-what")));
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), None, "Esc closed it"));
+    cx.update(|window, cx| {
+        assert!(
+            app.read(cx).terminal_focused(window, cx),
+            "the menu shut, the keys are the terminal's again"
+        );
+    });
+    cx.update(|window, cx| {
+        assert!(
+            app.read(cx).terminal_focused(window, cx),
+            "the palette closed, the keys are the terminal's again"
+        );
+    });
     click_on(cx, "view-Tasks");
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
     cx.simulate_keystrokes("g x");

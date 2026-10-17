@@ -1809,12 +1809,15 @@ impl LivtkApp {
             .px_2()
             .pb_3()
             .pt_1()
-            .gap(px(2.))
-            .child(section_label("Views"));
+            .gap(px(2.));
 
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
+        // The inbox and the feed first, under no heading; then the views of the project's work.
         for view in View::ALL {
+            if view == View::Tasks {
+                side = side.child(div().h(px(14.))).child(section_label("Views"));
+            }
             let count = match view {
                 View::Inbox => inbox,
                 View::Activity => unseen,
@@ -2128,6 +2131,10 @@ impl LivtkApp {
             .pt_1()
             .gap(px(2.));
         for view in View::ALL {
+            // The inbox and the feed, then the views of the work, as the sidebar groups them.
+            if view == View::Tasks {
+                rail = rail.child(div().h(px(14.)));
+            }
             let new = match view {
                 View::Inbox => inbox > 0,
                 View::Activity => unseen > 0,

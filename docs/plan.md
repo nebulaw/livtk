@@ -860,7 +860,10 @@ Asked for while trying the app, and built in one batch:
   project, and the next tick reloads. Measured (quick profile, 100,000 events, last two
   swapped as a merge leaves them): the tick that finds it 84 µs, the replay in the job 0.93 s,
   the reload afterwards 18 ms (what any change costs at that size). Starting a job repaints
-  without reloading: reloading for the label alone cost the tick 16 ms. Two limits remain: an
+  without reloading: reloading for the label alone cost the tick 16 ms. On macOS (APFS) the
+  tick that finds it takes 1.1 to 1.4 ms, nearly all of it the file system's first touch of the
+  log just rewritten (later ticks 40 µs), so the benchmark's budget is 5 ms, what "never
+  stalls" means, rather than the 1 ms Linux allowed. Two limits remain: an
   action taken while a job runs waits for its lock, and opening a project whose store is stale
   still catches up before the first frame.
 - Every link from the command line: `livtk link KEY REL OTHER` and `livtk unlink`, with `REL`
@@ -943,6 +946,18 @@ Asked for while trying the app, and built in one batch:
     glow goes. No scaling anywhere, by the developer's rule.
 - Sample data for trying the app lives in livspeil's log, every body starting "Sample data";
   `.livtk/events.jsonl.before-sample` restores the log as it was.
+
+- **One bundle, and builds that know themselves** (developer's decision, 2026-10-17, ahead of
+  an updater): every binary carries its identity, made by `livtk-build`'s build script from git:
+  the version, a build number (the commits on HEAD, so a later build of main has a larger one),
+  the commit, and whether the sources had changes; `--version` prints it and the bundle's
+  `CFBundleVersion` is the build number. On macOS `~/Applications/livtk.app` holds the app and
+  `livtk`, and `~/.local/bin` links to both (`livtk-app --install-cli`), so one update covers
+  the app, the CLI and the hooks. A `livtk-app` started through the link opens the bundle; one
+  started inside it runs; anything else runs as itself. This replaced a handoff that guessed a
+  build's age from file times and a development build from a folder's name, both wrong at times.
+  The identity is a crate of its own because it changes with every commit: in livtk-core it
+  would rebuild everything after each one.
 
 ## 18. Milestone 6 in outline: the team
 

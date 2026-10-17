@@ -13,10 +13,13 @@ The design is in [docs/plan.md](docs/plan.md).
 
 ## Install
 
-The binary, then the Claude Code plugin (hooks, skills, agents) from this repository:
+livtk, then the Claude Code plugin (hooks, skills, agents) from this repository. On macOS one app
+bundle holds the app and the `livtk` command, so one update covers both:
 
 ```
-cargo install --locked --path crates/livtk-cli
+scripts/check --install      # macOS: ~/Applications/livtk.app, and livtk, livtk-app linked into
+                             # ~/.local/bin (it says if that is not on PATH, or an older copy
+                             # comes first); elsewhere: cargo install of both binaries
 claude plugin marketplace add /path/to/this/repo     # or: /plugin marketplace add nebulaw/tasks
 claude plugin install livtk@livtk                    # or: /plugin install livtk --marketplace nebulaw/tasks
 ```
@@ -97,10 +100,21 @@ acts as the human. Refusals by a rule exit with code 3.
 ## The app
 
 ```
-cargo install --locked --path crates/livtk-app
 livtk-app                    # every project `livtk init` registered
 livtk-app ~/code/project     # open one (and remember it)
+livtk-app --version          # which build: "0.4.0 (build 87, abc1234)"
+livtk-app --install-cli      # macOS: link livtk and livtk-app into ~/.local/bin again
 ```
+
+The app tells you with a system notification when something new waits in your inbox while its
+window is away: a plan to acknowledge, a lesson to ratify, a decision to accept. A click on it
+opens the inbox there. macOS posts notifications only for an app bundle: `livtk-app` on PATH is a
+link into `livtk.app`, so from a shell it opens the app with the same projects and livtk's own
+variables (`LIVTK_*`, `XDG_*`), and returns (if it runs already, it comes to the front, and
+projects given show in it after a restart). Any other `livtk-app`, a development build say, runs
+as itself, and says once that it posts no notifications from there. Every build knows which it
+is (`--version`, and `CFBundleVersion` in the bundle). What the app does is logged in
+`~/Library/Logs/livtk/livtk-app.log` (elsewhere `app.log` in livtk's config directory).
 
 The human's control surface: an Inbox of everything waiting for you, an Activity feed of every
 change newest first (its badge counts what Claude did since you last looked), a Graph of every
@@ -109,19 +123,29 @@ lessons, decisions and findings, and a detail panel with the plan, its links and
 Changes from Claude show up while it is open, and flash once. It wears Linear's darkest palette
 and Boxicons' filled icons; nothing changes the cursor or grows on hover.
 A dock floats at the bottom of the content with what the view can do: New task, Filter (`/`,
-by title, key or priority), Grouping (state, priority), Ordering (priority, last update,
-creation), dismissed work, List or Board, the graph's zoom, and the command palette. Its menus
-open upwards; on a narrow window it shows icons alone. The top bar holds only the view's name and
-count. Groups are solid bands that collapse on a click.
+by title, key, priority or state), Grouping (state, priority), Ordering (priority, last update,
+creation), View options (for tasks List or Board, then show empty groups, so every state or
+priority has its band in a list and its column on the board, and show dismissed work), the
+graph's zoom and its dismissed work, and the command palette.
+Its menus open upwards; on a narrow window it shows icons alone. The top bar holds only the view's
+name and count. Groups are solid bands that collapse on a click.
+On macOS it is a Mac app: a menu bar of the app's own commands (livtk, File, Edit, View, Task,
+Window, Help; what is on is ticked; Task's items act on the selected node, as its keys do, and are
+greyed while a field has the keys), About with the
+build, Install Command Line Tool, and a Dock menu (New Task, the inbox with its count, the
+projects). Cmd+W, or the window's red button, hides the window while the app keeps watching your
+projects and telling of what arrives; the Dock brings it back; Cmd+Q quits. Cmd+N and Cmd+O start
+a task or open a project from anywhere, typing included.
 `Ctrl+B`, or the top bar's button, collapses the sidebar to a rail of icons; a narrow window
 shows the rail on its own. Drag the sidebar's or the detail panel's edge to resize it, and
 double-click the edge to reset it; on a narrow window the panel floats over the content. The app
-remembers where you were, how each view was filtered, grouped and ordered, and these widths, in
-`app.toml` beside `projects.toml`.
+remembers where you were, how each view was filtered, grouped and ordered, its view options, and
+these widths, in `app.toml` beside `projects.toml`.
 Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter for the body)
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
-Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `h`.
+Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `s d`, and
+empty groups with `Shift+H`, in the view you are in.
 A task's priority icon, in a row, on a card or in the detail panel, opens a menu to change it;
 a state icon in a row or on a card opens its kind's states, the moves it can make enabled and
 your own decisions (acknowledge, ratify, accept, reject) in the accent. The detail panel draws
@@ -135,32 +159,38 @@ their ×. On the board the wheel scrolls a column and Shift+wheel scrolls across
 `Ctrl+K` opens the command palette: type a few letters to run any action that is legal from
 where you stand (acknowledge, move, set priority, go to a view, group, order, new task), or to
 find any task, lesson, decision or finding by key (`LIV-12`, `12`), by words as you type them,
-and by meaning when the model is installed; `Enter` takes you there. `Ctrl+?` lists every
-shortcut; the ones used most:
+and by meaning when the model is installed; `Enter` takes you there.
+On macOS Cmd stands for Ctrl in the app's own shortcuts (⌘K, ⌘B, ⌘?, ⌘↵), and every label in
+the app says so; Ctrl+N and Ctrl+P in the palette stay Control, as in any Mac text field. There
+the window's titlebar is the app's own: the traffic lights sit on the black at the top left,
+above the sidebar, and that strip drags the window. `Ctrl+?` lists every shortcut; the ones used
+most:
 
 | Keys | |
 |---|---|
 | `Ctrl+K` | command palette and search |
 | `Ctrl+B` | collapse or expand the sidebar |
-| `j` `k` | move |
+| `j` `k` | move through rows and, in a list, group bands (Enter on a band folds it) |
 | `Enter` `Esc` | open, close the detail panel |
 | `a` | decide: acknowledge, ratify, accept |
-| `s` | ratify as a standing rule |
+| `Shift+A` | ratify as a standing rule |
 | `x` | reject |
 | `n` | new task |
 | `c` | add a note |
 | `1`-`4` | priority |
 | `/` | filter menu |
 | `g i` `g a` `g t` `g l` `g d` `g f` `g r` | Inbox, Activity, Tasks, Lessons, Decisions, Findings, Graph |
-| `+` `-` `0` | zoom the graph in, out, to fit (drag or scroll to pan, Ctrl+scroll to zoom) |
+| `+` `-` `0` | zoom the graph in, out, to fit (drag or scroll to pan, Ctrl+scroll or a pinch to zoom) |
 | `b` | list or board |
-| `h` | show dismissed work |
+| `s d` | show dismissed work |
+| `h` `l` | board: the column left or right |
+| `Shift+H` | show empty groups |
 
 ## Develop
 
 ```
 scripts/check              # format, lint, supply chain, every test, benchmarks and model tests
-scripts/check --install    # then install livtk and livtk-app
+scripts/check --install    # then install livtk and livtk-app, and on macOS ~/Applications/livtk.app
 ```
 
 The supply chain step runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)

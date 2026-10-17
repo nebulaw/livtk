@@ -124,6 +124,8 @@ pub struct Display {
     /// Include what was dismissed: canceled, rejected, retired, superseded. Done work is always
     /// shown.
     pub show_dismissed: bool,
+    /// Sub-tasks shown under their parent, indented, where both fall in the same group.
+    pub nest: bool,
 }
 
 impl Display {
@@ -140,6 +142,7 @@ impl Display {
             ordering: Ordering::Priority,
             show_empty: false,
             show_dismissed: false,
+            nest: true,
         }
     }
 }
@@ -400,6 +403,12 @@ pub struct Model {
     all: Vec<Summary>,
     displays: HashMap<View, Display>,
     collapsed: HashSet<(View, GroupKey)>,
+    /// Parents whose sub-tasks are folded away, per view.
+    folded: HashSet<(View, Uuid)>,
+    /// How deep each nested sub-task sits under its parent (absent: not nested).
+    pub depth: HashMap<Uuid, usize>,
+    /// Each parent's sub-tasks: how many are done, of how many.
+    pub progress: HashMap<Uuid, (usize, usize)>,
 }
 
 impl Model {
@@ -465,6 +474,9 @@ impl Model {
             all: Vec::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),
+            folded: HashSet::new(),
+            depth: HashMap::new(),
+            progress: HashMap::new(),
         };
         if let Some(text) = failed {
             model.warn(text);
@@ -736,6 +748,11 @@ impl Model {
             updated: n.updated.clone(),
             blocked: n.blocked,
             standing: n.props.get("scope").and_then(|v| v.as_str()) == Some("always"),
+            parent: self
+                .all
+                .iter()
+                .find(|r| r.id == n.id)
+                .and_then(|r| r.parent),
         })
     }
 
@@ -1382,6 +1399,19 @@ impl Model {
                     Ordering::Created => b.id.cmp(&a.id),
                 })
         });
+        self.progress = progress(&self.all);
+        let folded: HashSet<Uuid> = self
+            .folded
+            .iter()
+            .filter(|(v, _)| *v == self.view)
+            .map(|(_, id)| *id)
+            .collect();
+        let (rows, depth, hidden) = if d.nest {
+            nest(rows, |a, b| group_of(a) == group_of(b), &folded)
+        } else {
+            (rows, HashMap::new(), HashSet::new())
+        };
+        self.depth = depth;
         // The groups the rows fall in, in order; with `show_empty`, every group there can be.
         let mut keys: Vec<GroupKey> = Vec::new();
         for r in &rows {
@@ -1404,7 +1434,7 @@ impl Model {
             let mut count = 0;
             while let Some(r) = next.next_if(|r| group_of(r) == key) {
                 count += 1;
-                if !collapsed {
+                if !collapsed && !hidden.contains(&r.id) {
                     shown.push(r.clone());
                 }
             }
@@ -1420,6 +1450,42 @@ impl Model {
         self.filtered = rows;
         self.rows = shown;
         self.groups = groups;
+    }
+
+    /// Fold a parent's sub-tasks away in this view, or bring them back.
+    pub fn toggle_folded(&mut self, id: Uuid) {
+        if !self.folded.remove(&(self.view, id)) {
+            self.folded.insert((self.view, id));
+        }
+        self.arrange();
+        self.reselect();
+    }
+
+    pub fn is_folded(&self, id: Uuid) -> bool {
+        self.folded.contains(&(self.view, id))
+    }
+
+    /// The key of `r`'s parent, when `r` is a sub-task shown on its own (not under it): its
+    /// parent is in another group, filtered out, or nesting is off.
+    pub fn parent_key(&self, r: &Summary) -> Option<&str> {
+        if self.depth.contains_key(&r.id) {
+            return None;
+        }
+        self.parent_of(r)
+    }
+
+    /// The key of `r`'s parent, if `r` is a sub-task (as a board card names it).
+    pub fn parent_of(&self, r: &Summary) -> Option<&str> {
+        let parent = r.parent?;
+        self.all
+            .iter()
+            .find(|p| p.id == parent)
+            .map(|p| p.key.as_str())
+    }
+
+    /// Nest sub-tasks under their parents, or not.
+    pub fn toggle_nest(&mut self) {
+        self.edit_display(|d| d.nest = !d.nest);
     }
 
     /// Every group the view's grouping has, in no order: each state of the view's kind, the
@@ -1664,4 +1730,79 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         link_groups,
         node,
     })
+}
+
+/// Each parent's sub-tasks among `all`: how many are done, of how many.
+fn progress(all: &[Summary]) -> HashMap<Uuid, (usize, usize)> {
+    let mut out: HashMap<Uuid, (usize, usize)> = HashMap::new();
+    for r in all {
+        if let Some(p) = r.parent {
+            let e = out.entry(p).or_default();
+            e.1 += 1;
+            if r.state == State::Done {
+                e.0 += 1;
+            }
+        }
+    }
+    out
+}
+
+/// How deep a sub-task nests at most: deeper ones sit at this depth under their parent.
+const NEST_MAX: usize = 3;
+
+/// `rows` (sorted) with each sub-task moved right after its parent, when both are shown and
+/// `same_group`, keeping the order among siblings: the rows, each nested one's depth, and the
+/// rows hidden because a parent above them is `folded`.
+fn nest(
+    rows: Vec<Summary>,
+    same_group: impl Fn(&Summary, &Summary) -> bool,
+    folded: &HashSet<Uuid>,
+) -> (Vec<Summary>, HashMap<Uuid, usize>, HashSet<Uuid>) {
+    let at: HashMap<Uuid, usize> = rows.iter().enumerate().map(|(i, r)| (r.id, i)).collect();
+    let mut kids: HashMap<Uuid, Vec<usize>> = HashMap::new();
+    let mut nested = vec![false; rows.len()];
+    for (i, r) in rows.iter().enumerate() {
+        if let Some(p) = r.parent
+            && let Some(&pi) = at.get(&p)
+            && same_group(&rows[pi], r)
+        {
+            kids.entry(p).or_default().push(i);
+            nested[i] = true;
+        }
+    }
+    let mut order: Vec<usize> = Vec::with_capacity(rows.len());
+    let mut depth = HashMap::new();
+    let mut hidden = HashSet::new();
+    let mut seen = vec![false; rows.len()];
+    // Each top row in order, its sub-tasks depth first under it: (row, depth, under a folded
+    // parent). Then any row a loop of parents left unreached (the core refuses such a loop; a log
+    // edited by hand may not), at its own place rather than lost.
+    let mut stack: Vec<(usize, usize, bool)> = Vec::new();
+    let starts = (0..rows.len()).filter(|i| !nested[*i]).chain(0..rows.len());
+    for start in starts.collect::<Vec<_>>() {
+        if seen[start] {
+            continue;
+        }
+        stack.push((start, 0, false));
+        while let Some((i, d, under_fold)) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            let id = rows[i].id;
+            order.push(i);
+            if d > 0 {
+                depth.insert(id, d);
+            }
+            if under_fold {
+                hidden.insert(id);
+            }
+            let fold = under_fold || folded.contains(&id);
+            for &k in kids.get(&id).into_iter().flatten().rev() {
+                stack.push((k, (d + 1).min(NEST_MAX), fold));
+            }
+        }
+    }
+    let mut slots: Vec<Option<Summary>> = rows.into_iter().map(Some).collect();
+    let rows = order.into_iter().filter_map(|i| slots[i].take()).collect();
+    (rows, depth, hidden)
 }

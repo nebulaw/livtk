@@ -132,6 +132,8 @@ pub struct Summary {
     pub blocked: bool,
     /// A ratified lesson marked as a standing rule.
     pub standing: bool,
+    /// The task this one is a sub-task of.
+    pub parent: Option<Uuid>,
 }
 
 /// A short reference to a node, for lists of links.
@@ -303,7 +305,8 @@ impl Store {
         let wanted: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
         let sql = format!(
             "SELECT n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, {BLOCKED}, \
-             coalesce(json_extract(n.props, '$.scope'), '') = 'always' \
+             coalesce(json_extract(n.props, '$.scope'), '') = 'always', \
+             (SELECT e.dst FROM edges e WHERE e.src = n.id AND e.rel = 'parent' LIMIT 1) \
              FROM nodes n WHERE n.kind = ?1 \
              AND (?2 = '[]' OR n.state IN (SELECT value FROM json_each(?2)))"
         );
@@ -324,6 +327,12 @@ impl Store {
                 updated: row.get(6)?,
                 blocked: row.get(7)?,
                 standing: row.get(8)?,
+                parent: row
+                    .get_ref(9)?
+                    .as_str_or_null()
+                    .map_err(rusqlite::Error::from)?
+                    .map(parse_uuid)
+                    .transpose()?,
             });
         }
         // Sorting here rather than in SQL keeps SQLite from copying rows through its sorter.

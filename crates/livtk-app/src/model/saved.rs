@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use livtk_core::State;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{Display, GroupKey, Grouping, Layout, Model, Ordering, View};
 
@@ -46,6 +47,10 @@ pub struct SavedView {
     pub show_dismissed: bool,
     /// Collapsed groups: "state:doing", "priority:2", "all".
     pub collapsed: Vec<String>,
+    /// Sub-tasks shown flat rather than under their parents (nested unless set).
+    pub flat: bool,
+    /// Parents whose sub-tasks are folded away, by id.
+    pub folded: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -128,7 +133,7 @@ impl Model {
                 .filter(|(v, _)| *v == view)
                 .map(|(_, k)| group_name(*k))
                 .collect();
-            if d.is_none() && collapsed.is_empty() {
+            if d.is_none() && collapsed.is_empty() && !self.folded.iter().any(|(v, _)| *v == view) {
                 continue;
             }
             let d = d.unwrap_or_else(|| Display::for_view(view));
@@ -153,6 +158,13 @@ impl Model {
                     show_empty: d.show_empty,
                     show_dismissed: d.show_dismissed,
                     collapsed,
+                    flat: !d.nest,
+                    folded: self
+                        .folded
+                        .iter()
+                        .filter(|(v, _)| *v == view)
+                        .map(|(_, id)| id.to_string())
+                        .collect(),
                 },
             );
         }
@@ -207,6 +219,11 @@ impl Model {
             }
             d.show_empty = s.show_empty && view.kind().is_some();
             d.show_dismissed = s.show_dismissed && view.shows_dismissed();
+            d.nest = !s.flat;
+            self.folded.retain(|(v, _)| *v != view);
+            for id in s.folded.iter().filter_map(|id| id.parse::<Uuid>().ok()) {
+                self.folded.insert((view, id));
+            }
             if !d.show_dismissed {
                 d.states.retain(|st| !st.is_dismissed());
             }

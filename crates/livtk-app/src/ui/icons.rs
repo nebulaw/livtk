@@ -84,6 +84,8 @@ icons! {
     Info => "info-circle",
     /// Closing a notice.
     Close => "x",
+    /// A sub-task, under its parent.
+    SubTask => "turn-right",
 }
 
 /// Icon `i`, `size` across, in colour `c`.

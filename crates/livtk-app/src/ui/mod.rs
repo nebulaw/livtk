@@ -2767,6 +2767,16 @@ impl LivtkApp {
                 Model::toggle_dismissed,
                 cx,
             ))
+            .when(self.model.view == View::Tasks, |menu| {
+                menu.child(view_option(
+                    "view-nest",
+                    "Nest sub-tasks",
+                    None,
+                    d.nest,
+                    Model::toggle_nest,
+                    cx,
+                ))
+            })
     }
 
     fn ordering_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -3795,6 +3805,54 @@ impl LivtkApp {
             .into_any_element()
     }
 
+    /// A parent's sub-tasks: how many are done, of how many; in a list, with a caret that folds
+    /// them away and back (a press here is the caret's, not the row's).
+    fn sub_task_count(&self, id: Uuid, foldable: bool, cx: &mut Context<Self>) -> Option<Div> {
+        let &(done, total) = self.model.progress.get(&id)?;
+        let folded = self.model.is_folded(id);
+        let count = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(color(TEXT_4))
+            .child(icon(Icon::SubTask, 12., TEXT_4))
+            .child(format!("{done}/{total}"));
+        if !foldable || !self.model.display().nest {
+            return Some(count);
+        }
+        Some(
+            div().flex_none().child(
+                div()
+                    .id(SharedString::from(format!("fold-{id}")))
+                    .debug_selector(move || format!("fold-{id}"))
+                    .h(px(20.))
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded_md()
+                    .hover(|s| s.bg(color(HOVER)))
+                    .child(count)
+                    .child(icon(
+                        if folded {
+                            Icon::CaretRight
+                        } else {
+                            Icon::CaretDown
+                        },
+                        10.,
+                        TEXT_4,
+                    ))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.toggle_folded(id);
+                        cx.notify();
+                    })),
+            ),
+        )
+    }
+
     fn row(
         &self,
         r: &Summary,
@@ -3841,6 +3899,14 @@ impl LivtkApp {
                     .child(r.key.clone()),
             )
             .child(self.state_button(Menu::RowState(id), id, r.kind, r.state, false, cx))
+            .children(self.model.depth.get(&id).map(|&d| {
+                // Under its parent: indented by its depth, led by the turn.
+                div().flex_none().pl(px((d - 1) as f32 * 16.)).child(icon(
+                    Icon::SubTask,
+                    14.,
+                    TEXT_4,
+                ))
+            }))
             .child(
                 div()
                     .flex_1()
@@ -3848,7 +3914,9 @@ impl LivtkApp {
                     .truncate()
                     .text_color(color(if blocked { TEXT_3 } else { TEXT }))
                     .child(r.title.clone()),
-            );
+            )
+            .children(self.model.parent_key(r).map(parent_chip))
+            .children(self.sub_task_count(id, true, cx));
         if blocked {
             row = row.child(icon_tag(Icon::Blocked, "Blocked", TEXT_3));
         }
@@ -4011,7 +4079,9 @@ impl LivtkApp {
                             .text_xs()
                             .text_color(color(TEXT_4))
                             .child(r.key.clone())
+                            .children(self.model.parent_of(r).map(parent_chip))
                             .child(div().flex_1())
+                            .children(self.sub_task_count(id, false, cx))
                             .when(blocked, |d| {
                                 d.child(icon(Icon::Blocked, 12., TEXT_4)).child("Blocked")
                             }),
@@ -6087,6 +6157,19 @@ fn reindent_field(field: &Entity<TextareaState>, out: bool, window: &mut Window,
         s.replace(new, window, cx);
         s.set_selected_range(after, cx);
     });
+}
+
+/// A sub-task shown away from its parent: the parent's key, quietly.
+fn parent_chip(key: &str) -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .text_color(color(TEXT_4))
+        .child(icon(Icon::SubTask, 12., TEXT_4))
+        .child(key.to_owned())
 }
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.

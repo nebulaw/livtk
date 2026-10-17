@@ -1691,3 +1691,85 @@ fn on_the_board_j_and_k_cross_columns_and_h_and_l_move_between_them() {
     assert_eq!(at(&m), cols[0][0]);
     assert_eq!(m.acted_on().map(|r| r.key), Some(cols[0][0].clone()));
 }
+
+/// A planned parent with a planned sub-task and a backlog one, and a planned task after them.
+fn family() -> (tempfile::TempDir, Model) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = project(dir.path());
+    let parent = planned(&mut ws, "parent");
+    let other = planned(&mut ws, "other");
+    let child = planned(&mut ws, "child planned");
+    let elsewhere = create(&mut ws, Kind::Task, "child in backlog");
+    for c in [&child, &elsewhere] {
+        ws.execute(
+            Command::Link {
+                src: c.clone(),
+                rel: Rel::Parent,
+                dst: parent.clone(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    let _ = other;
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Tasks);
+    (dir, m)
+}
+
+/// A sub-task sits right under its parent when both are in the same group; one in another
+/// group stays in its own, named by its parent; folding a parent hides its sub-tasks; nesting
+/// can be turned off.
+#[test]
+fn sub_tasks_nest_under_their_parent_within_a_group() {
+    let (_dir, mut m) = family();
+    let parent = m.rows.iter().find(|r| r.title == "parent").unwrap().clone();
+    let child = m
+        .rows
+        .iter()
+        .find(|r| r.title == "child planned")
+        .unwrap()
+        .clone();
+    let elsewhere = m
+        .rows
+        .iter()
+        .find(|r| r.title == "child in backlog")
+        .unwrap()
+        .clone();
+    let at = |m: &Model, id| m.rows.iter().position(|r| r.id == id).unwrap();
+    assert_eq!(
+        at(&m, child.id),
+        at(&m, parent.id) + 1,
+        "right under its parent"
+    );
+    assert_eq!(m.depth.get(&child.id), Some(&1));
+    assert_eq!(m.parent_key(&child), None, "nested: no chip");
+    assert_eq!(
+        m.depth.get(&elsewhere.id),
+        None,
+        "another group: not nested"
+    );
+    assert_eq!(
+        m.parent_key(&elsewhere),
+        Some(parent.key.as_str()),
+        "but named"
+    );
+    assert_eq!(m.progress.get(&parent.id), Some(&(0, 2)));
+
+    m.toggle_folded(parent.id);
+    assert!(!m.rows.iter().any(|r| r.id == child.id), "folded away");
+    assert!(m.is_folded(parent.id));
+    m.toggle_folded(parent.id);
+    assert!(m.rows.iter().any(|r| r.id == child.id));
+
+    // A filter that shows the sub-task but not its parent shows it on its own, named.
+    m.set_filter("child planned");
+    assert_eq!(keys(&m), std::slice::from_ref(&child.key));
+    assert_eq!(m.parent_key(&child), Some(parent.key.as_str()));
+    m.set_filter("");
+
+    m.toggle_nest();
+    assert_eq!(m.depth.get(&child.id), None, "flat");
+    assert_eq!(m.parent_key(&child), Some(parent.key.as_str()));
+}

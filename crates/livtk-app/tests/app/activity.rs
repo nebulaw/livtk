@@ -480,6 +480,38 @@ mod grid {
     }
 }
 
+/// The grid counts in any view, as the bottom bar shows it in any; a day picked outside the
+/// Activity view filters the feed once it is opened.
+#[test]
+fn the_grid_counts_in_any_view_and_a_pick_waits_for_the_feed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::init(dir.path(), Some("LIV")).unwrap();
+    ws.execute(
+        Command::Create {
+            kind: Kind::Task,
+            title: "today's".into(),
+            body: String::new(),
+            priority: None,
+            links: vec![],
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Tasks);
+    let today = livtk_app::model::grid::today();
+    let drawn = m.grid.drawn(today);
+    let cell = drawn.weeks.iter().flatten().find(|c| c.day == today);
+    assert!(
+        cell.unwrap().count >= 1,
+        "counted outside the Activity view"
+    );
+    m.grid_pick(today.yesterday().unwrap());
+    m.set_view(View::Activity);
+    assert!(m.activity.is_empty(), "the feed opens on the day picked");
+}
+
 /// A day picked in the grid shows that day's events only; unpicked, all of them again.
 #[test]
 fn a_day_picked_in_the_grid_filters_the_feed() {

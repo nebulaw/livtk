@@ -57,6 +57,7 @@ fn how_each_view_was_shown_comes_back_after_a_restart() {
         sidebar_width: Some(280.),
         sidebar_collapsed: true,
         panel_width: Some(540.),
+        ..SavedWindow::default()
     };
     saved.save(&path).unwrap();
 

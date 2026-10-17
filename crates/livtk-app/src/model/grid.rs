@@ -73,7 +73,6 @@ impl What {
 pub struct Grid {
     pub who: Who,
     pub what: What,
-    pub folded: bool,
     /// The days the feed is filtered to.
     pub pick: Pick,
     /// Per day: the human's, then Claude's.
@@ -85,7 +84,6 @@ impl Default for Grid {
         Grid {
             who: Who::All,
             what: What::All,
-            folded: false,
             pick: Pick::default(),
             days: BTreeMap::new(),
         }

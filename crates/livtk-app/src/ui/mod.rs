@@ -143,6 +143,14 @@ const GLIDE: Duration = Duration::from_millis(120);
 /// The detail panel's width: dragged by its left edge between these, never more than a share of
 /// the window. Where the content would be left narrower than `CONTENT_MIN`, it floats over it.
 const PANEL_WIDTH: f32 = 480.;
+/// The bottom bar's height, dragged by its top edge between these; the content above it keeps
+/// at least `CONTENT_MIN_H`.
+const BOTTOM_HEIGHT: f32 = 236.;
+const BOTTOM_MIN: f32 = 96.;
+const BOTTOM_MAX: f32 = 640.;
+const CONTENT_MIN_H: f32 = 240.;
+/// Below the bottom bar, the window's inset (as below the content box).
+const BOTTOM_INSET: f32 = 8.;
 const PANEL_MIN: f32 = 360.;
 const PANEL_MAX: f32 = 720.;
 const PANEL_SHARE: f32 = 0.55;
@@ -590,8 +598,12 @@ pub struct LivtkApp {
     rail_epoch: usize,
     /// The sidebar's width the last change slid from.
     rail_from: Option<f32>,
-    /// Whether the bottom bar is shown.
+    /// Whether the bottom bar is shown, and its height; whether it is sliding away, and how many
+    /// times it opened or shut (each slides once).
     bottom_open: bool,
+    bottom_height: f32,
+    bottom_leaving: bool,
+    bottom_epoch: usize,
     /// Whether the pointer is over the top bar's field, and how many times that changed: a
     /// change fades its hover in or out.
     top_field_hover: bool,
@@ -792,6 +804,9 @@ impl LivtkApp {
             rail_epoch: 0,
             rail_from: None,
             bottom_open: false,
+            bottom_height: BOTTOM_HEIGHT,
+            bottom_leaving: false,
+            bottom_epoch: 0,
             top_field_hover: false,
             top_field_epoch: 0,
             sidebar_peek: false,
@@ -1905,23 +1920,26 @@ impl LivtkApp {
         let id = match edge {
             Edge::Sidebar => "sidebar-edge",
             Edge::Panel => "panel-edge",
+            Edge::Bottom => "bottom-edge",
         };
         let dragging = self.resizing == Some(edge);
-        // The edges run the height under the top bar.
-        let window_h = f32::from(window.viewport_size().height) - TOP_BAR;
+        // The side edges run the height under the top bar; the bottom one the content's width.
+        let len = match edge {
+            Edge::Bottom => self.content_width(window),
+            _ => f32::from(window.viewport_size().height) - TOP_BAR,
+        };
         let glow = match (self.edge_hover, self.edge_leaving) {
-            (Some(h), _) if h.edge == edge => Some(edge_glow(h, dragging, window_h, false)),
-            (_, Some(h)) if h.edge == edge => Some(edge_glow(h, false, window_h, true)),
+            (Some(h), _) if h.edge == edge => Some(edge_glow(h, dragging, len, false)),
+            (_, Some(h)) if h.edge == edge => Some(edge_glow(h, false, len, true)),
             _ => None,
         };
-        div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .w(px(EDGE_W))
-            .children(glow)
+        let el = div().id(id).debug_selector(move || id.into()).absolute();
+        let el = if edge == Edge::Bottom {
+            el.left_0().right_0().h(px(EDGE_W))
+        } else {
+            el.top_0().bottom_0().w(px(EDGE_W))
+        };
+        el.children(glow)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.edge_inside = Some(edge);
@@ -1935,8 +1953,9 @@ impl LivtkApp {
                     this.let_go_edge(cx);
                 }
             }))
-            .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
-                this.hover_edge(edge, f32::from(e.position.y));
+            .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, window, cx| {
+                let at = this.along(edge, e.position, window);
+                this.hover_edge(edge, at);
                 cx.notify();
             }))
             .on_mouse_down(
@@ -1947,6 +1966,7 @@ impl LivtkApp {
                         match edge {
                             Edge::Sidebar => this.sidebar_width = SIDEBAR_WIDTH,
                             Edge::Panel => this.panel_width = PANEL_WIDTH,
+                            Edge::Bottom => this.bottom_height = BOTTOM_HEIGHT,
                         }
                         this.resizing = None;
                     } else {
@@ -1976,11 +1996,17 @@ impl LivtkApp {
         cx.notify();
     }
 
-    /// The pointer over `edge` at height `y` in the window: the glow follows it, fading in when it
-    /// arrives.
-    fn hover_edge(&mut self, edge: Edge, y: f32) {
-        // From the window's top to the edge's, which starts under the top bar.
-        let y = y - TOP_BAR;
+    /// How far along `edge` the window's point `p` is: down a side edge, from under the top
+    /// bar; across the bottom one, from the content's left.
+    fn along(&self, edge: Edge, p: Point<Pixels>, window: &Window) -> f32 {
+        match edge {
+            Edge::Bottom => f32::from(p.x) - self.sidebar_px(window),
+            _ => f32::from(p.y) - TOP_BAR,
+        }
+    }
+
+    /// The pointer over `edge`, `at` along it: the glow follows it, fading in when it arrives.
+    fn hover_edge(&mut self, edge: Edge, at: f32) {
         self.edge_leaving = None;
         let epoch = match self.edge_hover {
             Some(h) if h.edge == edge => h.epoch,
@@ -1989,13 +2015,15 @@ impl LivtkApp {
                 self.edge_epoch
             }
         };
-        self.edge_hover = Some(EdgeHover { edge, y, epoch });
+        self.edge_hover = Some(EdgeHover { edge, at, epoch });
     }
 
-    /// The pointer at `x` while dragging `edge` in a window `window_w` wide. The sidebar's width
-    /// is where the pointer is; dragged under the snap, it becomes the rail. The panel's width is
-    /// what lies right of the pointer.
-    fn drag_edge(&mut self, edge: Edge, x: f32, window_w: f32) {
+    /// The pointer at `p` while dragging `edge` in a window `size`. The sidebar's width is where
+    /// the pointer is; dragged under the snap, it becomes the rail. The panel's width is what lies
+    /// right of the pointer, the bottom bar's height what lies below it.
+    fn drag_edge(&mut self, edge: Edge, p: Point<Pixels>, size: Size<Pixels>) {
+        let (x, y) = (f32::from(p.x), f32::from(p.y));
+        let (window_w, window_h) = (f32::from(size.width), f32::from(size.height));
         match edge {
             Edge::Sidebar if x < SIDEBAR_SNAP => {
                 if window_w < RAIL_BELOW {
@@ -2007,6 +2035,10 @@ impl LivtkApp {
             }
             Edge::Sidebar => self.sidebar_width = x.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
             Edge::Panel => self.panel_width = (window_w - x).clamp(PANEL_MIN, PANEL_MAX),
+            // Under the bar, the window's bottom inset.
+            Edge::Bottom => {
+                self.bottom_height = (window_h - y - BOTTOM_INSET).clamp(BOTTOM_MIN, BOTTOM_MAX)
+            }
         }
     }
 
@@ -2021,9 +2053,78 @@ impl LivtkApp {
         cx.notify();
     }
 
+    /// The bottom bar, under the content box between the sidebar and the panel: black, edged as
+    /// the content box is, its top edge dragged for its height. It holds the activity grid. However tall
+    /// it is kept, the content above it keeps its room. It slides in and away as the detail
+    /// panel does, its height animating so the content above gives way smoothly.
+    fn bottom_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let room = f32::from(window.viewport_size().height)
+            - TOP_BAR
+            - CONTENT_MIN_H
+            - EDGE_W
+            - BOTTOM_INSET;
+        let h = self
+            .bottom_height
+            .min(room)
+            .max(BOTTOM_MIN.min(room))
+            .max(0.);
+        let closing = !self.bottom_open;
+        let epoch = self.bottom_epoch;
+        let (id, duration) = match (closing, epoch) {
+            (true, _) => (format!("bottom-out-{epoch}"), SLIDE_OUT),
+            // Open from the start (brought back from the last run): no slide.
+            (false, 0) => ("bottom-in-0".to_owned(), Duration::ZERO),
+            (false, _) => (format!("bottom-in-{epoch}"), SLIDE),
+        };
+        let easing: fn(f32) -> f32 = if closing { ease_in_out } else { ease_out_cubic };
+        let full = h + EDGE_W;
+        div()
+            .flex_none()
+            .relative()
+            .overflow_hidden()
+            .pt(px(EDGE_W))
+            .child(self.edge(Edge::Bottom, window, cx).top_0())
+            .child(
+                div()
+                    .debug_selector(|| "bottom-bar".into())
+                    .h(px(h))
+                    .rounded_xl()
+                    .bg(color(0x000000))
+                    .border_1()
+                    .border_color(color(BORDER))
+                    .overflow_hidden()
+                    .child(self.activity_grid(cx)),
+            )
+            .with_animation(
+                SharedString::from(id),
+                Animation::new(duration).with_easing(easing),
+                move |el, t| {
+                    let open = if closing { 1. - t } else { t };
+                    el.h(px(full * open)).opacity(0.3 + 0.7 * open)
+                },
+            )
+            .into_any_element()
+    }
+
     /// ⌘J and the top bar's button: the bottom bar shown or hidden.
+    /// It slides as the detail panel does: in, or away and then gone.
     fn toggle_bottom(&mut self, cx: &mut Context<Self>) {
         self.bottom_open = !self.bottom_open;
+        self.bottom_epoch += 1;
+        self.bottom_leaving = !self.bottom_open;
+        if self.bottom_leaving {
+            let epoch = self.bottom_epoch;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SLIDE_OUT).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.bottom_epoch == epoch {
+                        this.bottom_leaving = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -2613,6 +2714,11 @@ impl LivtkApp {
             .panel_width
             .unwrap_or(PANEL_WIDTH)
             .clamp(PANEL_MIN, PANEL_MAX);
+        self.bottom_open = w.bottom_open;
+        self.bottom_height = w
+            .bottom_height
+            .unwrap_or(BOTTOM_HEIGHT)
+            .clamp(BOTTOM_MIN, BOTTOM_MAX);
         self.sync_filter(window, cx);
         self.last_saved = self.to_save();
         self.saved_path = Some(path);
@@ -2625,6 +2731,8 @@ impl LivtkApp {
             sidebar_width: Some(self.sidebar_width),
             sidebar_collapsed: self.sidebar_collapsed,
             panel_width: Some(self.panel_width),
+            bottom_open: self.bottom_open,
+            bottom_height: Some(self.bottom_height),
         };
         saved
     }
@@ -3713,14 +3821,12 @@ impl LivtkApp {
     /// lists are; "Show older" ends it while more pages wait.
     /// The Activity view: the grid above, the days picked in it, then the feed.
     fn activity_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let grid = self.activity_grid(cx);
         let chip = self.grid_pick_chip(cx);
         let feed = self.feed(cx);
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(grid)
             .children(chip)
             .child(div().flex_1().min_h_0().child(feed))
             .into_any_element()
@@ -5458,6 +5564,7 @@ impl Render for LivtkApp {
                 },
             );
         let top_bar = self.top_bar(window, cx);
+        let bottom = (self.bottom_open || self.bottom_leaving).then(|| self.bottom_bar(window, cx));
         let header = self.header().into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
@@ -5511,12 +5618,13 @@ impl Render for LivtkApp {
                         if phase != DispatchPhase::Capture {
                             return;
                         }
-                        let w = Self::window_width(window);
+                        let size = window.viewport_size();
                         let held = e.pressed_button == Some(MouseButton::Left);
                         let _ = moved.update(cx, |app, cx| {
                             if held {
-                                app.drag_edge(edge, f32::from(e.position.x), w);
-                                app.hover_edge(edge, f32::from(e.position.y));
+                                app.drag_edge(edge, e.position, size);
+                                let at = app.along(edge, e.position, window);
+                                app.hover_edge(edge, at);
                             } else {
                                 app.resizing = None;
                             }
@@ -5799,7 +5907,8 @@ impl Render for LivtkApp {
                                                     .child(dock),
                                             ),
                                     ),
-                            ),
+                            )
+                            .children(bottom),
                     )
                     // Beside the content box, on the window's own black, as the sidebar is: the content
                     // stands alone in the middle.
@@ -5920,13 +6029,15 @@ fn glide_highlight(from: f32, to: f32, epoch: usize) -> AnyElement {
 enum Edge {
     Sidebar,
     Panel,
+    /// The bottom bar's top.
+    Bottom,
 }
 
-/// The pointer on an edge: which, how far down the window, and which arrival (each fades in).
+/// The pointer on an edge: which, how far along it, and which arrival (each fades in).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct EdgeHover {
     edge: Edge,
-    y: f32,
+    at: f32,
     epoch: usize,
 }
 
@@ -5944,49 +6055,75 @@ const GLOW_OUT: Duration = Duration::from_millis(180);
 /// light make the lens, each shorter and wider than the last; where they overlap the light is
 /// strongest. Drawn last (deferred), so it lies over the panes on either side; it takes no
 /// pointer events. While dragging it is brighter.
-fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32, leaving: bool) -> AnyElement {
+fn edge_glow(h: EdgeHover, dragging: bool, len: f32, leaving: bool) -> AnyElement {
     let half = GLOW_LEN / 2.;
-    let y = h.y.clamp(half, (window_h - half).max(half));
+    let at = h.at.clamp(half, (len - half).max(half));
     let strength = if dragging { 1. } else { 0.75 };
+    // Down a side edge, or across the bottom one: the same glow turned.
+    let across = h.edge == Edge::Bottom;
     let pill = |w: f32, len: f32, alpha: f32| {
         let lit = with_alpha(ACCENT, alpha * strength);
         let clear = with_alpha(ACCENT, 0.);
-        div()
-            .absolute()
-            .top(px((GLOW_LEN - len) / 2.))
-            .left(px((HANDLE - w) / 2.))
-            .w(px(w))
-            .h(px(len))
-            .flex()
-            .flex_col()
-            .child(div().flex_1().rounded_t_full().bg(linear_gradient(
-                180.,
+        let (into, out_of) = (
+            linear_gradient(
+                if across { 90. } else { 180. },
                 linear_color_stop(clear, 0.),
                 linear_color_stop(lit, 1.),
-            )))
-            .child(div().flex_1().rounded_b_full().bg(linear_gradient(
-                180.,
+            ),
+            linear_gradient(
+                if across { 90. } else { 180. },
                 linear_color_stop(lit, 0.),
                 linear_color_stop(clear, 1.),
-            )))
+            ),
+        );
+        let d = div().absolute().flex();
+        if across {
+            d.left(px((GLOW_LEN - len) / 2.))
+                .top(px((HANDLE - w) / 2.))
+                .w(px(len))
+                .h(px(w))
+                .child(div().flex_1().rounded_l_full().bg(into))
+                .child(div().flex_1().rounded_r_full().bg(out_of))
+        } else {
+            d.top(px((GLOW_LEN - len) / 2.))
+                .left(px((HANDLE - w) / 2.))
+                .w(px(w))
+                .h(px(len))
+                .flex_col()
+                .child(div().flex_1().rounded_t_full().bg(into))
+                .child(div().flex_1().rounded_b_full().bg(out_of))
+        }
     };
-    deferred(
-        div()
-            .debug_selector(|| "edge-glow".into())
-            .absolute()
-            .top(px(y - half))
+    let glow = div().debug_selector(|| "edge-glow".into()).absolute();
+    let glow = if across {
+        glow.left(px(at - half))
+            .top(px((EDGE_W - HANDLE) / 2.))
+            .w(px(GLOW_LEN))
+            .h(px(HANDLE))
+    } else {
+        glow.top(px(at - half))
             .left(px((EDGE_W - HANDLE) / 2.))
             .w(px(HANDLE))
             .h(px(GLOW_LEN))
-            .child(pill(1., GLOW_LEN, 0.9))
+    };
+    let resize = icon(Icon::Resize, 12., TEXT);
+    let resize = if across {
+        resize.with_transformation(Transformation::rotate(radians(std::f32::consts::FRAC_PI_2)))
+    } else {
+        resize
+    };
+    let handle = div().debug_selector(|| "edge-handle".into()).absolute();
+    let handle = if across {
+        handle.left(px((GLOW_LEN - HANDLE) / 2.)).top_0()
+    } else {
+        handle.top(px((GLOW_LEN - HANDLE) / 2.)).left_0()
+    };
+    deferred(
+        glow.child(pill(1., GLOW_LEN, 0.9))
             .child(pill(2., GLOW_LEN * 0.66, 0.7))
             .child(pill(4., GLOW_LEN * 0.4, 0.6))
             .child(
-                div()
-                    .debug_selector(|| "edge-handle".into())
-                    .absolute()
-                    .top(px((GLOW_LEN - HANDLE) / 2.))
-                    .left_0()
+                handle
                     .size(px(HANDLE))
                     .rounded_full()
                     // A ring of the window's own black sets it off the content box's border.
@@ -5996,7 +6133,7 @@ fn edge_glow(h: EdgeHover, dragging: bool, window_h: f32, leaving: bool) -> AnyE
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon(Icon::Resize, 12., TEXT)),
+                    .child(resize),
             )
             .with_animation(
                 SharedString::from(format!(

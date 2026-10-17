@@ -32,9 +32,8 @@ impl Model {
         }
     }
 
-    /// Load the newest events, as many as are shown already (of the days picked in the grid, if
-    /// any), and mark them seen: the human is looking at them. The grid's counts with them.
-    pub(super) fn load_activity(&mut self) {
+    /// The grid's counts per day, for the bottom bar, whichever view is open.
+    pub(super) fn load_grid(&mut self) {
         let Some(p) = self.projects.get(self.current) else {
             return;
         };
@@ -42,6 +41,11 @@ impl Model {
             Ok(days) => self.grid.set_days(&days),
             Err(e) => self.warn(e.to_string()),
         }
+    }
+
+    /// Load the newest events, as many as are shown already (of the days picked in the grid, if
+    /// any), and mark them seen: the human is looking at them.
+    pub(super) fn load_activity(&mut self) {
         let Some(p) = self.projects.get(self.current) else {
             return;
         };
@@ -112,13 +116,17 @@ impl Model {
 
     /// The grid's who or what changed: it counts again.
     pub fn grid_changed(&mut self) {
-        self.load_activity();
+        self.load_grid();
     }
 
+    /// The feed again from its newest, for the days picked now: loaded at once in the Activity
+    /// view (where the human sees it, and so has seen it), else when it is next opened.
     fn reload_feed(&mut self) {
         self.activity.clear();
         self.activity_index = 0;
-        self.load_activity();
+        if self.view == View::Activity {
+            self.load_activity();
+        }
     }
 
     pub(super) fn activity_select_by(&mut self, delta: isize) {

@@ -1,5 +1,5 @@
-//! The activity grid above the feed: a year of what happened in the project, drawn by
-//! `contour_grid`, with who and what to count; the days picked in it filter the feed below.
+//! The activity grid in the bottom bar: a year of what happened in the project, drawn by
+//! `contour_grid`, with who and what to count; the days picked in it filter the Activity feed.
 //! What it counts is `model::grid`'s.
 
 use gpui_kit::prelude::FluentBuilder;
@@ -13,9 +13,9 @@ use crate::model::contour::Cell;
 use crate::model::grid::{self, What, Who};
 
 impl LivtkApp {
-    /// The grid's panel: a header (the fold, who and what), then, unfolded, the grid's card.
+    /// The grid in the bottom bar: a header (what it shows, who and what to count), then the
+    /// grid itself, bare on the bar's black.
     pub(super) fn activity_grid(&mut self, cx: &mut Context<Self>) -> Div {
-        let folded = self.model.grid.folded;
         let header = div()
             .flex()
             .items_center()
@@ -23,66 +23,39 @@ impl LivtkApp {
             .h(px(28.))
             .text_sm()
             .text_color(color(TEXT_3))
-            .child(
-                div()
-                    .id("grid-fold")
-                    .debug_selector(|| "grid-fold".into())
-                    .size(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .hover(|h| h.bg(color(HOVER)))
-                    .child(icon(
-                        if folded {
-                            Icon::CaretRight
-                        } else {
-                            Icon::CaretDown
-                        },
-                        10.,
-                        TEXT_4,
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.grid.folded = !this.model.grid.folded;
-                        cx.notify();
-                    })),
-            )
-            .child(div().flex_1().child("Last 12 months"))
+            .child(div().flex_1().child("Activity · last 12 months"))
             .child(self.grid_who(cx))
             .child(self.grid_what_button(cx));
-        let mut panel = div()
+        let today = grid::today();
+        let g = &self.model.grid;
+        let what = g.what;
+        div()
             .debug_selector(|| "activity-grid".into())
-            .flex_none()
+            .size_full()
             .px_4()
             .pt_2()
-            .pb_3()
-            .border_b_1()
-            .border_color(color(BORDER))
             .flex()
             .flex_col()
-            .gap_2()
-            .child(header);
-        if !folded {
-            let today = grid::today();
-            let g = &self.model.grid;
-            let what = g.what;
-            panel = panel.child(ContourGrid::new(
-                "grid",
-                self.grid_state.clone(),
-                g.drawn(today),
-                g.pick,
-                today,
-                move |c| count_label(c, what),
-                cx.listener(|this, picked: &Picked, _, cx| {
-                    match *picked {
-                        Picked::Day(day) => this.model.grid_pick(day),
-                        Picked::Month(first, last) => this.model.grid_pick_span(first, last),
-                    }
-                    cx.notify();
-                }),
-            ));
-        }
-        panel
+            .gap_1()
+            .child(header)
+            .child(
+                ContourGrid::new(
+                    "grid",
+                    self.grid_state.clone(),
+                    g.drawn(today),
+                    g.pick,
+                    today,
+                    move |c| count_label(c, what),
+                    cx.listener(|this, picked: &Picked, _, cx| {
+                        match *picked {
+                            Picked::Day(day) => this.model.grid_pick(day),
+                            Picked::Month(first, last) => this.model.grid_pick_span(first, last),
+                        }
+                        cx.notify();
+                    }),
+                )
+                .bare(),
+            )
     }
 
     /// Whose activity counts: All, You, Claude.
@@ -150,7 +123,7 @@ impl LivtkApp {
                         })),
                 );
             }
-            d.child(self.popover(Menu::GridWhat, true, 26., panel, cx))
+            d.child(self.popover_up(Menu::GridWhat, true, panel, cx))
         })
     }
 

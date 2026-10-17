@@ -1517,7 +1517,23 @@ fn drag_to(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, x: f32)
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("{selector} is drawn"))
         .center();
-    let to = gpui_kit::point(gpui_kit::px(x), from.y);
+    drag(cx, from, gpui_kit::point(gpui_kit::px(x), from.y));
+}
+
+/// Drag what `selector` is (its middle) up or down to height `y`.
+fn drag_down_to(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, y: f32) {
+    let from = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"))
+        .center();
+    drag(cx, from, gpui_kit::point(from.x, gpui_kit::px(y)));
+}
+
+fn drag(
+    cx: &mut gpui_kit::VisualTestContext,
+    from: gpui_kit::Point<gpui_kit::Pixels>,
+    to: gpui_kit::Point<gpui_kit::Pixels>,
+) {
     cx.simulate_event(gpui_kit::MouseDownEvent {
         position: from,
         modifiers: gpui_kit::Modifiers::default(),
@@ -1787,6 +1803,10 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
         cx.simulate_keystrokes("g t");
         open_detail(cx);
         drag_to(cx, "panel-edge", 1040.);
+        cx.simulate_keystrokes("secondary-j");
+        settle(cx);
+        // 900 tall, 8 below the bar: its top at 600 makes it 292.
+        drag_down_to(cx, "bottom-edge", 600.);
         cx.simulate_keystrokes("secondary-b");
         redraw(cx);
         cx.executor()
@@ -1798,6 +1818,8 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
     assert_eq!(saved.window.sidebar_width, Some(300.));
     assert!(saved.window.sidebar_collapsed);
     assert_eq!(saved.window.panel_width, Some(560.));
+    assert!(saved.window.bottom_open);
+    assert_eq!(saved.window.bottom_height, Some(292.));
 
     let (app, cx) = open_window(cx, dir.path());
     resize(cx, 1600., 900.);
@@ -1812,6 +1834,40 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
     assert!(
         near(width_of(cx, "detail-panel"), 560.),
         "and the panel too"
+    );
+    let bar = cx.debug_bounds("bottom-bar").expect("the bottom bar, open");
+    assert!(
+        near(f32::from(bar.size.height), 292.),
+        "at its height: {bar:?}"
+    );
+}
+
+/// The bottom bar, by ⌘J or the top bar's button: under the content box, which keeps the dock
+/// above it; gone again the same way.
+#[gpui_kit::test]
+fn the_bottom_bar_sits_under_the_content_and_the_dock_stays_above_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    assert!(cx.debug_bounds("bottom-bar").is_none(), "shut at first");
+    cx.simulate_keystrokes("secondary-j");
+    settle(cx);
+    let bar = cx.debug_bounds("bottom-bar").expect("open");
+    let content = cx.debug_bounds("content-box").unwrap();
+    let dock = cx.debug_bounds("dock").unwrap();
+    assert!(content.bottom() <= bar.top(), "under the content box");
+    assert!(dock.bottom() <= content.bottom(), "the dock stays in it");
+    assert!(
+        bar.left() >= content.left() && bar.right() <= content.right() + gpui_kit::px(1.),
+        "between the sidebar and the panel: {bar:?}"
+    );
+    click_on(cx, "toggle-bottom");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("bottom-bar").is_none(),
+        "shut again, once it slid away"
     );
 }
 
@@ -2824,13 +2880,15 @@ fn the_palette_opens_on_top_of_about(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| assert!(!a.palette_open(), "one Esc closes it"));
 }
 
-/// A day clicked in the activity grid shows that day in the feed; Esc shows every day again.
+/// A day clicked in the activity grid (in the bottom bar) shows that day in the feed; Esc shows
+/// every day again.
 #[gpui_kit::test]
 fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
-    cx.simulate_keystrokes("g a");
-    redraw(cx);
+    // The grid is in the bottom bar.
+    cx.simulate_keystrokes("g a secondary-j");
+    settle(cx);
     let today = livtk_app::model::grid::today();
     // Today's square, by the grid's geometry: 8px of room, then 18px a week or a weekday, the
     // months' row 28px above; 6px into the 13px square.

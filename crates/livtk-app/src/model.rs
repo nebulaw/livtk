@@ -1561,6 +1561,7 @@ impl Model {
     }
 
     fn reload(&mut self) {
+        self.load_grid();
         if self.view == View::Activity {
             self.load_activity();
         }

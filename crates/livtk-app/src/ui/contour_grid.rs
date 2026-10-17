@@ -116,6 +116,8 @@ pub struct ContourGrid {
     today: Date,
     tip: Tip,
     on_pick: OnPick,
+    /// Without its black card: on a surface that is already one.
+    bare: bool,
 }
 
 impl ContourGrid {
@@ -138,7 +140,14 @@ impl ContourGrid {
             today,
             tip: Rc::new(tip),
             on_pick: Rc::new(on_pick),
+            bare: false,
         }
+    }
+
+    /// Without its black card, for a surface that is already one.
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self
     }
 
     /// The lines over the squares: each month's contour, the hovered month's brighter, the
@@ -383,17 +392,18 @@ impl RenderOnce for ContourGrid {
             let x = SIDE + SIDE_GAP + f32::from(scroll.offset().x) + PAD + w as f32 * P + S / 2.;
             row = row.child(self.tip(&drawn.weeks[w][r], x, TOP + r as f32 * P, &mono));
         }
-        div().flex().justify_center().child(
-            div()
-                .max_w_full()
-                .min_w_0()
+        let holder = div().max_w_full().min_w_0();
+        let holder = if self.bare {
+            holder
+        } else {
+            holder
                 .p(px(20.))
                 .rounded(px(14.))
                 .bg(color(0x000000))
                 .border_1()
                 .border_color(color(BORDER))
-                .child(row),
-        )
+        };
+        div().flex().justify_center().child(holder.child(row))
     }
 }
 

@@ -359,7 +359,7 @@ pub struct Model {
     toasts: Toasts,
     /// Projects with `[[on]]` hooks the human wrote to since the view last took them: their
     /// hooks are to be run, apart from the window.
-    wrote: Vec<PathBuf>,
+    wrote: Vec<(PathBuf, Option<Uuid>)>,
     /// Whether the human was told that this app posts no system notifications where it runs.
     pub told_no_notifications: bool,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
@@ -891,10 +891,11 @@ impl Model {
         let Some(project) = self.projects.get_mut(self.current) else {
             return false;
         };
+        let before = project.ws.newest_event().ok().flatten();
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(events) => {
                 if !project.ws.config().on.is_empty() {
-                    self.wrote.push(project.dir.clone());
+                    self.wrote.push((project.dir.clone(), before));
                 }
                 self.toasts.clear_errors();
                 let created = events.first().map(|e| e.op.subjects().0);
@@ -926,10 +927,11 @@ impl Model {
         let Some(project) = self.projects.get_mut(self.current) else {
             return false;
         };
+        let before = project.ws.newest_event().ok().flatten();
         match project.ws.execute(cmd, &Actor::Human) {
             Ok(_) => {
                 if !project.ws.config().on.is_empty() {
-                    self.wrote.push(project.dir.clone());
+                    self.wrote.push((project.dir.clone(), before));
                 }
                 self.toasts.clear_errors();
                 self.reload();
@@ -1108,11 +1110,16 @@ impl Model {
         }
     }
 
-    /// The projects written to that have hooks to run, each once.
-    pub fn take_written(&mut self) -> Vec<PathBuf> {
-        let mut dirs = std::mem::take(&mut self.wrote);
-        dirs.dedup();
-        dirs
+    /// The projects written to that have hooks to run, each once, with the newest event before
+    /// the first of those writes (so a hook new to them hears them all).
+    pub fn take_written(&mut self) -> Vec<(PathBuf, Option<Uuid>)> {
+        let mut out: Vec<(PathBuf, Option<Uuid>)> = Vec::new();
+        for (dir, before) in std::mem::take(&mut self.wrote) {
+            if !out.iter().any(|(d, _)| *d == dir) {
+                out.push((dir, before));
+            }
+        }
+        out
     }
 
     /// The catching up `tick` found and left to be run elsewhere, each once.

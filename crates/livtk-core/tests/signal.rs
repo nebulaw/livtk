@@ -147,3 +147,37 @@ fn a_reader_reads_on_from_the_last_event_it_saw() {
         "only what came after"
     );
 }
+
+#[test]
+fn removing_a_dependency_unblocks_only_what_was_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = Workspace::init(dir.path(), Some("LIV")).unwrap();
+    let a = create(&mut ws, "waits");
+    let b = create(&mut ws, "dependency");
+    let link = |rel_add: bool| {
+        if rel_add {
+            Command::Link {
+                src: a.clone(),
+                rel: Rel::DependsOn,
+                dst: b.clone(),
+            }
+        } else {
+            Command::Unlink {
+                src: a.clone(),
+                rel: Rel::DependsOn,
+                dst: b.clone(),
+            }
+        }
+    };
+    ws.execute(link(true), &CLAUDE).unwrap();
+    mv(&mut ws, &b, State::Canceled, &Actor::Human);
+    ws.execute(link(false), &CLAUDE).unwrap();
+    let unblocked = all(&ws)
+        .iter()
+        .filter(|s| s.signal == "work.unblocked")
+        .count();
+    assert_eq!(
+        unblocked, 1,
+        "once, when it closed; not again when the link went"
+    );
+}

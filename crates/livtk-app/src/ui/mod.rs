@@ -5176,9 +5176,9 @@ impl LivtkApp {
     /// The `[[on]]` hooks of each project the human just wrote to, off the window's thread: a
     /// hook never holds up the window, and a failing one is tried again on the next write.
     fn run_hooks(&mut self, cx: &mut Context<Self>) {
-        for dir in self.model.take_written() {
+        for (dir, before) in self.model.take_written() {
             let ran = cx.background_spawn(async move {
-                livtk_core::Workspace::open(&dir).and_then(|mut ws| ws.dispatch())
+                livtk_core::Workspace::open(&dir).and_then(|mut ws| ws.dispatch_from(before))
             });
             cx.spawn(async move |_, _| match ran.await {
                 Ok(done) => {

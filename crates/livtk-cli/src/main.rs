@@ -309,6 +309,12 @@ fn main() -> ExitCode {
 /// Claude Code sets CLAUDECODE=1 in every shell it runs; its plugin hook names subagents with
 /// `--agent`.
 fn actor(agent: Option<String>) -> Result<Actor> {
+    // Run by a project's hook: automation, never the human, so it can pass none of their gates.
+    if std::env::var_os(livtk_core::on::HOOK_VAR).is_some() {
+        return Ok(Actor::Claude {
+            agent: Some("hook".into()),
+        });
+    }
     let claude = std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1");
     match (claude, agent) {
         (true, agent) => Ok(Actor::Claude {
@@ -351,6 +357,8 @@ fn run(cli: Cli) -> Result<()> {
     // them and none of them can undo what it did.
     if result.is_ok()
         && !hooks_run_here
+        // Inside a hook, the dispatcher that ran it is still at work.
+        && std::env::var_os(livtk_core::on::HOOK_VAR).is_none()
         && !ws.config().on.is_empty()
         && ws.newest_event().ok().flatten() != before
     {
@@ -553,7 +561,9 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
     }
 }
 
-/// `events`: the signals after `since`, filtered, and with `follow` the ones that come.
+/// `events`: the signals after `since`, filtered, and with `follow` the ones that come: those
+/// of every event not printed yet, an event merged in from elsewhere with an older time
+/// included. Each with its node's key as it stands now.
 fn events(
     ws: &mut Workspace,
     since: Option<uuid::Uuid>,
@@ -568,19 +578,27 @@ fn events(
         anyhow::bail!("no signal `{bad}`; the signals: {}", NAMES.join(", "));
     }
     let node = node.map(|k| ws.node(k).map(|n| n.id)).transpose()?;
-    let mut signals = Signals::new(ws.gates());
-    let mut last = None;
+    let mut printed = std::collections::HashSet::new();
     let mut out = std::io::stdout().lock();
+    let mut first = true;
     loop {
-        for e in ws.events_after(last)? {
-            last = Some(e.id);
-            for s in signals.feed(&e) {
-                if since.is_some_and(|c| s.event <= c)
-                    || (!wanted.is_empty() && !wanted.iter().any(|w| w == s.signal))
+        // The whole log replayed: a signal depends on what came before it, in log order.
+        let mut signals = Signals::new(ws.gates());
+        for e in ws.events_after(None)? {
+            let sigs = signals.feed(&e);
+            let new = printed.insert(e.id);
+            if !new || (first && since.is_some_and(|c| e.id <= c)) {
+                continue;
+            }
+            for mut s in sigs {
+                if (!wanted.is_empty() && !wanted.iter().any(|w| w == s.signal))
                     || kind.is_some_and(|k| k != s.kind)
                     || node.is_some_and(|n| n != s.node)
                 {
                     continue;
+                }
+                if let Some(key) = ws.key_of(s.node)? {
+                    s.key = key;
                 }
                 serde_json::to_writer(&mut out, &s)?;
                 writeln!(out)?;
@@ -590,8 +608,11 @@ fn events(
         if !follow {
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        ws.refresh()?;
+        first = false;
+        // Until something changes: then the log is read again.
+        while !ws.refresh()? {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     }
 }
 

@@ -534,6 +534,11 @@ impl Workspace {
         }
     }
 
+    /// A node's key as it stands now (a merge may have renumbered it since it was made).
+    pub fn key_of(&self, id: Uuid) -> Result<Option<String>> {
+        Ok(self.store.brief(id)?.map(|b| b.key))
+    }
+
     /// The newest event's id: one cheap look, to tell whether anything was written since.
     pub fn newest_event(&self) -> Result<Option<Uuid>> {
         Ok(self.store.events_page(None, 1)?.first().map(|e| e.id))

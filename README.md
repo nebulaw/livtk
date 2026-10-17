@@ -97,7 +97,9 @@ livtk events --follow --signal decision.made --node 12
 ```
 
 Signals are versioned (`"v": 1`): fields are only ever added, and a reader ignores the ones it
-does not know.
+does not know. Act on a signal's `node` (its id never changes); its `key` is the node's key as it
+stands when read, which a merge can still renumber. `--follow` also prints what a git pull merges
+in, older events included.
 
 A project can also run a command on a signal, in `.livtk/config.toml`:
 
@@ -110,8 +112,11 @@ run = ["./scripts/wake-agent"]      # the signal's JSON on stdin, run from the p
 Hooks run after the change is in the log, apart from whatever made it (the CLI starts them on
 their own and returns; the app runs them off its window), so a hook never holds up or undoes a
 write. Each hook keeps its place (`.livtk/on-state.json`, local to the machine): a failing one is
-tried again on the next write, in order, missing nothing; a new one hears what comes, not the
-project's history. `livtk dispatch` runs them by hand.
+tried again on the next write, in order, missing nothing, and an event merged in from elsewhere
+within 30 days is heard too; a new one hears what comes, not the project's history. A hook's
+command runs with `LIVTK_HOOK` set: `livtk` run inside it acts as `claude:hook` (never as you, so
+it passes none of your gates), and no hook hears what a hook did, so hooks never wake each other
+in a loop. `livtk dispatch` runs them by hand.
 
 ## Memory
 

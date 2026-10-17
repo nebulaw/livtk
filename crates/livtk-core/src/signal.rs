@@ -58,6 +58,9 @@ pub enum Detail {
     Link { rel: Rel, other: String },
 }
 
+/// The `by` of whatever a hook does through livtk: a hook never hears it (see `on`).
+pub const BY_HOOK: &str = "claude:hook";
+
 /// Signals from events, read in log order. It keeps what it needs of each node (its key, kind
 /// and state, what it waits for), so the signals of a later event are right whatever came
 /// before; feed it the whole log, or the log up to a cursor and then what follows.
@@ -209,6 +212,10 @@ impl Signals {
             }
             Op::EdgeAdd { data } | Op::EdgeRemove { data } => {
                 let added = matches!(e.op, Op::EdgeAdd { .. });
+                // Whether it waited on something open before this link changed: only then
+                // can taking a dependency away unblock it.
+                let was_blocked = self.unblocked_one(data.src).is_none()
+                    && self.nodes.get(&data.src).is_some_and(|n| !n.2.is_closed());
                 if data.rel == Rel::DependsOn {
                     let waits = self.waits.entry(data.src).or_default();
                     if added {
@@ -231,7 +238,7 @@ impl Signals {
                         },
                     ));
                 }
-                if !added && data.rel == Rel::DependsOn {
+                if !added && data.rel == Rel::DependsOn && was_blocked {
                     // Taking away the last open thing it waited for unblocks it too.
                     out.extend(self.unblocked_one(data.src).map(|(id, k, kind)| {
                         signal("work.unblocked", id, &k, kind, Detail::None {})

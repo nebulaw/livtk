@@ -6043,16 +6043,16 @@ fn panel_toggle(
         .id(id)
         .debug_selector(move || id.into())
         .group(id)
-        .size(px(30.))
+        .size(px(31.))
         .flex()
         .items_center()
         .justify_center()
         .rounded_lg()
         .hover(|h| h.bg(color(HOVER)))
         .child(if open {
-            icon(i, 20., TEXT_2)
+            icon(i, 23., TEXT_2)
         } else {
-            icon_hover(i, 20., TEXT_4, id, TEXT_2)
+            icon_hover(i, 23., TEXT_4, id, TEXT_2)
         })
         .tooltip(move |window, cx| {
             gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)

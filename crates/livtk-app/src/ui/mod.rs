@@ -2168,7 +2168,7 @@ impl LivtkApp {
                 option_row(SharedString::from(format!("menu-project-{i}")))
                     .debug_selector(move || format!("menu-project-{i}"))
                     .child(icon(Icon::Project, 14., TEXT_3))
-                    .child(div().flex_1().truncate().child(p.name.clone()))
+                    .child(div().flex_1().truncate().child(capitalized(&p.name)))
                     .when(p.catching_up, |d| d.child(catching_up(i)))
                     .when(p.inbox > 0, |d| {
                         d.child(
@@ -2278,7 +2278,7 @@ impl LivtkApp {
         let open = self.menu == Some(Menu::Projects);
         let project = self.model.project();
         let catching = project.is_some_and(|p| p.catching_up);
-        let name = project.map_or("No project".to_owned(), |p| p.name.clone());
+        let name = project.map_or("No project".to_owned(), |p| capitalized(&p.name));
         let project_button = div()
             .id("top-project")
             .debug_selector(|| "top-project".into())
@@ -5984,6 +5984,14 @@ fn panel_toggle(
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(on_click)
+}
+
+/// A project's name as the top bar and its menu show it: its first letter a capital.
+fn capitalized(name: &str) -> String {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
 fn prio(app: &mut LivtkApp, p: u8, cx: &mut Context<LivtkApp>) {

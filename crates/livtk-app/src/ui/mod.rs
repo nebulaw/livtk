@@ -5449,7 +5449,10 @@ impl Render for LivtkApp {
                     this.escape(window, cx);
                 } else if this.help || this.about || this.form.is_some() {
                     this.close_top(window, cx);
-                } else if this.model.detail.is_none() && this.model.grid.pick.is_some() {
+                } else if this.model.view == View::Activity
+                    && this.model.detail.is_none()
+                    && this.model.grid.pick.is_some()
+                {
                     // In the feed, the days picked in the grid give way to every day.
                     this.model.grid_unpick();
                     cx.notify();

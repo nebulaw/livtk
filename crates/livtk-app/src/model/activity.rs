@@ -53,7 +53,9 @@ impl Model {
         match page {
             Ok(events) => {
                 self.activity_more = events.len() == want;
-                if let Some(newest) = events.first()
+                // Only the unfiltered feed's newest is the newest the human has seen.
+                if self.grid.pick.is_none()
+                    && let Some(newest) = events.first()
                     && let Err(e) = p.ws.set_activity_seen(newest.event.id)
                 {
                     self.warn(e.to_string());

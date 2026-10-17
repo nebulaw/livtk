@@ -4025,8 +4025,8 @@ impl LivtkApp {
             .restrict_scroll_to_axis()
             .track_scroll(&self.board_scroll)
             .flex()
-            .gap_2()
-            .p_3();
+            .gap(px(6.))
+            .p_2();
         for (key, rows) in self.model.columns() {
             let (mark, label) = group_label(key, Kind::Task);
             let mut col = div()
@@ -4036,13 +4036,13 @@ impl LivtkApp {
                     GroupKey::Priority(p) => format!("column-priority-{p}"),
                     GroupKey::All => "column-all".to_owned(),
                 })
-                .w(px(288.))
+                .w(px(BOARD_COLUMN))
                 .flex_none()
                 .h_full()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .p_2()
+                .gap(px(6.))
+                .p(px(6.))
                 .rounded_xl()
                 .bg(color(SURFACE))
                 .border_1()
@@ -4070,7 +4070,7 @@ impl LivtkApp {
                         .items_center()
                         .gap_2()
                         .px_1()
-                        .h(px(28.))
+                        .h(px(24.))
                         .child(mark)
                         .child(
                             div()
@@ -4095,9 +4095,10 @@ impl LivtkApp {
                         let key = r.key.clone();
                         move || format!("card-{key}")
                     })
-                    // Cards keep their height, so a full column overflows and scrolls.
+                    // Cards keep their height, so a full column overflows and scrolls. Two rows:
+                    // its icons (with their menus) leading its key, then its title.
                     .flex_none()
-                    .p_3()
+                    .p_2()
                     .rounded_lg()
                     .bg(color(if sel { SELECTED } else { CONTENT }))
                     .border_1()
@@ -4105,32 +4106,14 @@ impl LivtkApp {
                     .hover(|s| s.border_color(color(BORDER_STRONG)))
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap_1()
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap_2()
+                            .gap_1()
                             .text_xs()
                             .text_color(color(TEXT_4))
-                            .child(r.key.clone())
-                            .children(self.model.parent_of(r).map(parent_chip))
-                            .child(div().flex_1())
-                            .children(self.sub_task_count(id))
-                            .when(blocked, |d| {
-                                d.child(icon(Icon::Blocked, 12., TEXT_4)).child("Blocked")
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_color(color(if blocked { TEXT_3 } else { TEXT }))
-                            .child(r.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
                             .child(self.priority_button(
                                 Menu::RowPriority(id),
                                 id,
@@ -4145,7 +4128,21 @@ impl LivtkApp {
                                 r.state,
                                 false,
                                 cx,
-                            )),
+                            ))
+                            .child(div().pl_1().child(r.key.clone()))
+                            .children(self.model.parent_of(r).map(parent_chip))
+                            .child(div().flex_1())
+                            .children(self.sub_task_count(id))
+                            .when(blocked, |d| {
+                                d.child(icon(Icon::Blocked, 12., TEXT_4)).child("Blocked")
+                            }),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .line_clamp(2)
+                            .text_color(color(if blocked { TEXT_3 } else { TEXT }))
+                            .child(r.title.clone()),
                     )
                     .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
@@ -6452,6 +6449,8 @@ fn parent_chip(key: &str) -> Div {
         .child(key.to_owned())
 }
 
+/// A board column's width.
+const BOARD_COLUMN: f32 = 256.;
 /// The palette's width.
 const PALETTE_W: f32 = 640.;
 

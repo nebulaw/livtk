@@ -515,6 +515,21 @@ impl Store {
         Ok(n as usize)
     }
 
+    /// The events after `after` (or all of them), oldest first.
+    pub fn events_after(&self, after: Option<Uuid>) -> Result<Vec<Event>> {
+        // uuidv7s in their text form sort as their times do.
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT line FROM events WHERE ?1 IS NULL OR id > ?1 ORDER BY id")?;
+        let lines: Vec<String> = stmt
+            .query_map(params![after.map(|a| a.to_string())], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        lines
+            .iter()
+            .map(|l| serde_json::from_str(l).map_err(Error::from))
+            .collect()
+    }
+
     /// The whole log as applied, oldest first.
     pub fn all_events(&self) -> Result<Vec<Event>> {
         self.events_where("", None)

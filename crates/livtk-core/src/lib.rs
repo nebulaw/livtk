@@ -12,6 +12,7 @@ pub mod registry;
 #[cfg(feature = "embed")]
 pub mod rows;
 pub mod search;
+pub mod signal;
 mod store;
 mod workspace;
 

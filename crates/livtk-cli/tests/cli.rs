@@ -549,3 +549,54 @@ fn version_says_which_build_this_is() {
     );
     assert!(text.contains(livtk_build::COMMIT), "{text}");
 }
+
+/// `events` prints signals as JSON lines; `--since` reads on after a cursor; `--follow` sees a
+/// write from another process as it comes.
+#[test]
+fn events_read_on_from_a_cursor_and_follow_writes_from_elsewhere() {
+    use std::io::{BufRead, BufReader};
+    let dir = project();
+    ok(dir.path(), As::Claude, &["new", "first"]);
+    let lines = ok(dir.path(), As::Claude, &["events"]);
+    let first: Vec<Value> = lines
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(first[0]["signal"], "node.created");
+    let cursor = first.last().unwrap()["event"].as_str().unwrap().to_owned();
+    assert_eq!(
+        ok(dir.path(), As::Claude, &["events", "--since", &cursor]),
+        "",
+        "nothing after the cursor yet"
+    );
+
+    let mut follow = Command::new(env!("CARGO_BIN_EXE_livtk"))
+        .current_dir(dir.path())
+        .args([
+            "events",
+            "--follow",
+            "--since",
+            &cursor,
+            "--signal",
+            "decision.needed",
+        ])
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    ok(dir.path(), As::Claude, &["move", "LIV-1", "planned"]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = follow.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(out).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let line = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_default();
+    let _ = follow.kill();
+    let _ = follow.wait();
+    let signal: Value = serde_json::from_str(&line).expect("a signal while following");
+    assert_eq!(signal["signal"], "decision.needed");
+    assert_eq!(signal["key"], "LIV-1");
+}

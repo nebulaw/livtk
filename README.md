@@ -82,6 +82,23 @@ livtk log                           # every event in the project
 
 Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 
+### Signals
+
+Agents and tools hear what happens as signals, one JSON object per line, derived from the log:
+`node.created`, `node.moved`, `node.edited`, `node.noted`, `link.added`, `link.removed`, and the
+ones worth waking for: `decision.needed` (something waits for you), `decision.made` (you
+acknowledged, ratified, accepted, rejected or retired) and `work.unblocked` (the last thing a task
+waited for is done). Each names its event; keep the last one you saw and read on from it:
+
+```
+livtk events                                        # every signal so far
+livtk events --since <event> --follow               # what comes after, as it comes
+livtk events --follow --signal decision.made --node 12
+```
+
+Signals are versioned (`"v": 1`): fields are only ever added, and a reader ignores the ones it
+does not know.
+
 ## Memory
 
 Claude proposes what it learns; you decide what binds it.

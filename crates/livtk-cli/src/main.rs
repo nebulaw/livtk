@@ -186,6 +186,26 @@ enum Cmd {
     Next,
     /// Event history of a task, or of the whole project.
     Log { key: Option<String> },
+    /// What happens, as signals for agents and tools to act on: one JSON object per line
+    /// (node.created, node.moved, decision.needed, decision.made, work.unblocked, ...). Each names
+    /// its event: pass the last one seen as --since to read on from there.
+    Events {
+        /// Only what came after this event.
+        #[arg(long)]
+        since: Option<uuid::Uuid>,
+        /// Keep watching, and print what comes as it comes.
+        #[arg(long)]
+        follow: bool,
+        /// Only these signals. Repeatable.
+        #[arg(long = "signal")]
+        signals: Vec<String>,
+        /// Only signals about this kind.
+        #[arg(long)]
+        kind: Option<Kind>,
+        /// Only signals about this node.
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Rebuild the database from the event log.
     Rebuild,
     /// Answer a Claude Code hook: reads its JSON on stdin. Used by the livtk plugin.
@@ -467,10 +487,59 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         }
         Cmd::Next => output::next(ws.next()?.as_ref(), json),
         Cmd::Log { key } => output::log(ws, key.as_deref(), json),
+        Cmd::Events {
+            since,
+            follow,
+            signals,
+            kind,
+            node,
+        } => events(ws, since, follow, &signals, kind, node.as_deref()),
         Cmd::Rebuild => {
             ws.rebuild()?;
             output::rebuilt(ws, json)
         }
+    }
+}
+
+/// `events`: the signals after `since`, filtered, and with `follow` the ones that come.
+fn events(
+    ws: &mut Workspace,
+    since: Option<uuid::Uuid>,
+    follow: bool,
+    wanted: &[String],
+    kind: Option<Kind>,
+    node: Option<&str>,
+) -> Result<()> {
+    use livtk_core::signal::{NAMES, Signals};
+    use std::io::Write;
+    if let Some(bad) = wanted.iter().find(|w| !NAMES.contains(&w.as_str())) {
+        anyhow::bail!("no signal `{bad}`; the signals: {}", NAMES.join(", "));
+    }
+    let node = node.map(|k| ws.node(k).map(|n| n.id)).transpose()?;
+    let mut signals = Signals::new(ws.gates());
+    let mut last = None;
+    let mut out = std::io::stdout().lock();
+    loop {
+        for e in ws.events_after(last)? {
+            last = Some(e.id);
+            for s in signals.feed(&e) {
+                if since.is_some_and(|c| s.event <= c)
+                    || (!wanted.is_empty() && !wanted.iter().any(|w| w == s.signal))
+                    || kind.is_some_and(|k| k != s.kind)
+                    || node.is_some_and(|n| n != s.node)
+                {
+                    continue;
+                }
+                serde_json::to_writer(&mut out, &s)?;
+                writeln!(out)?;
+            }
+        }
+        out.flush()?;
+        if !follow {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        ws.refresh()?;
     }
 }
 

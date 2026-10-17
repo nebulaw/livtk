@@ -527,6 +527,12 @@ impl Workspace {
         }
     }
 
+    /// The events after `after` (or the whole log), oldest first: what a reader of signals
+    /// that stopped there has not seen.
+    pub fn events_after(&self, after: Option<Uuid>) -> Result<Vec<Event>> {
+        self.store.events_after(after)
+    }
+
     /// The activity feed: up to `limit` events, newest first, before `before` or from the
     /// newest, each with the node it is about and, for a link, the other end.
     pub fn activity(&self, before: Option<Uuid>, limit: usize) -> Result<Vec<Activity>> {

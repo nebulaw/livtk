@@ -6,6 +6,7 @@
 //! outside it, so typing never triggers a command.
 
 mod activity_grid;
+pub mod contour_grid;
 pub mod icons;
 pub mod menus;
 pub mod state_flow;
@@ -545,15 +546,8 @@ pub struct LivtkApp {
     checking_updates: bool,
     /// Notifications opened with Show more.
     expanded: std::collections::HashSet<u64>,
-    /// The activity grid's sideways scrolling, and whether it was scrolled to its latest weeks.
-    grid_scroll: ScrollHandle,
-    grid_scrolled: bool,
-    /// The day or month's name under the pointer in the activity grid, and the grid as last
-    /// drawn and where.
-    grid_hover: Option<activity_grid::Target>,
-    grid_frame: activity_grid::GridFrame,
-    /// The day last clicked in the grid, which the tooltip tells of.
-    grid_clicked: Option<jiff::civil::Date>,
+    /// What the activity grid remembers between frames.
+    grid_state: Entity<contour_grid::ContourState>,
     /// Each board column's own scrolling, so a card moved to comes into view.
     column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
@@ -627,6 +621,8 @@ impl LivtkApp {
         let flow = cx.new(|_| state_flow::FlowState::default());
         // The flow's hover (its drifting light) draws the window again.
         cx.observe(&flow, |_, _, cx| cx.notify()).detach();
+        let grid_state = cx.new(|_| contour_grid::ContourState::default());
+        cx.observe(&grid_state, |_, _, cx| cx.notify()).detach();
         // Enter adds the note; Shift+Enter breaks the line. It grows with what is written.
         let note = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -753,11 +749,7 @@ impl LivtkApp {
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             column_scrolls: Default::default(),
-            grid_scroll: ScrollHandle::new(),
-            grid_scrolled: false,
-            grid_hover: None,
-            grid_frame: Default::default(),
-            grid_clicked: None,
+            grid_state,
             update: None,
             checking_updates: false,
             expanded: Default::default(),
@@ -3614,12 +3606,12 @@ impl LivtkApp {
                 .size_full()
                 .child(empty(
                     Icon::Activity,
-                    if self.model.grid.pick.is_some() {
+                    if self.model.grid.pick.span.is_some() {
                         "Nothing on these days"
                     } else {
                         "No activity yet"
                     },
-                    if self.model.grid.pick.is_some() {
+                    if self.model.grid.pick.span.is_some() {
                         "Pick another day in the grid, or clear the pick above."
                     } else {
                         "What Claude and you do in this project shows up here, newest first."
@@ -5459,7 +5451,7 @@ impl Render for LivtkApp {
                     this.close_top(window, cx);
                 } else if this.model.view == View::Activity
                     && this.model.detail.is_none()
-                    && this.model.grid.pick.is_some()
+                    && this.model.grid.pick.span.is_some()
                 {
                     // In the feed, the days picked in the grid give way to every day.
                     this.model.grid_unpick();

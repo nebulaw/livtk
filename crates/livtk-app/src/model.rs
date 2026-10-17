@@ -10,6 +10,7 @@ use livtk_core::{Actor, Brief, Command, Gate, Kind, Links, Node, Rel, State, Sum
 use uuid::Uuid;
 
 mod activity;
+pub mod contour;
 mod flow;
 mod graph;
 pub mod grid;
@@ -517,8 +518,7 @@ impl Model {
             self.selected = None;
             self.band = None;
             self.detail = None;
-            self.grid.pick = None;
-            self.grid.anchored = false;
+            self.grid.pick.clear();
             self.leaving.clear();
             self.flashed.clear();
             self.enter_activity();

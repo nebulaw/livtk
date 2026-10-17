@@ -46,7 +46,7 @@ impl Model {
             return;
         };
         let want = self.activity.len().max(PAGE);
-        let page = match self.grid.pick.and_then(super::grid::pick_bounds) {
+        let page = match self.grid.pick.span.and_then(super::grid::pick_bounds) {
             Some((from, to)) => p.ws.activity_in(&from, &to, None, want),
             None => p.ws.activity(None, want),
         };
@@ -54,7 +54,7 @@ impl Model {
             Ok(events) => {
                 self.activity_more = events.len() == want;
                 // Only the unfiltered feed's newest is the newest the human has seen.
-                if self.grid.pick.is_none()
+                if self.grid.pick.span.is_none()
                     && let Some(newest) = events.first()
                     && let Err(e) = p.ws.set_activity_seen(newest.event.id)
                 {
@@ -77,7 +77,7 @@ impl Model {
             return;
         };
         let before = self.activity.last().map(|a| a.event.id);
-        let page = match self.grid.pick.and_then(super::grid::pick_bounds) {
+        let page = match self.grid.pick.span.and_then(super::grid::pick_bounds) {
             Some((from, to)) => p.ws.activity_in(&from, &to, before, PAGE),
             None => p.ws.activity(before, PAGE),
         };
@@ -93,20 +93,19 @@ impl Model {
     /// A day clicked in the grid: it anchors a range, or closes the one anchored. The feed
     /// shows the days picked only.
     pub fn grid_pick(&mut self, day: jiff::civil::Date) {
-        self.grid.pick(day);
+        self.grid.pick.click(day);
         self.reload_feed();
     }
 
     /// A month picked in the grid, to today at most.
     pub fn grid_pick_span(&mut self, first: jiff::civil::Date, last: jiff::civil::Date) {
-        self.grid.pick_span(first, last.min(super::grid::today()));
+        self.grid.pick.take(first, last.min(super::grid::today()));
         self.reload_feed();
     }
 
     /// The feed for every day again.
     pub fn grid_unpick(&mut self) {
-        self.grid.anchored = false;
-        if self.grid.pick.take().is_some() {
+        if self.grid.pick.clear() {
             self.reload_feed();
         }
     }

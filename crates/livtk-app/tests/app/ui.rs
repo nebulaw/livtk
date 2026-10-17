@@ -2791,7 +2791,7 @@ fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestApp
     cx.simulate_click(at, gpui_kit::Modifiers::default());
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().grid.pick, Some((today, today)));
+        assert_eq!(a.model().grid.pick.span, Some((today, today)));
         assert!(!a.model().activity.is_empty(), "today's events");
     });
     assert!(
@@ -2800,5 +2800,5 @@ fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestApp
     );
     cx.simulate_keystrokes("escape");
     redraw(cx);
-    app.read_with(cx, |a, _| assert_eq!(a.model().grid.pick, None));
+    app.read_with(cx, |a, _| assert_eq!(a.model().grid.pick.span, None));
 }

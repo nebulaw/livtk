@@ -363,6 +363,7 @@ fn tab_indents_the_lines_a_selection_touches_and_shift_tab_outdents_them() {
 
 mod grid {
     use jiff::civil::{Date, date};
+    use livtk_app::model::contour::Pick;
     use livtk_app::model::grid::{Grid, What, Who};
     use livtk_core::DayEvents;
 
@@ -455,27 +456,27 @@ mod grid {
 
     #[test]
     fn a_click_anchors_a_second_closes_and_a_third_starts_again() {
-        let mut g = grid();
-        g.pick(date(2026, 10, 16));
-        assert_eq!(
-            (g.pick, g.anchored),
-            (Some((date(2026, 10, 16), date(2026, 10, 16))), true)
-        );
-        g.pick(date(2026, 10, 14));
-        assert_eq!(
-            (g.pick, g.anchored),
-            (Some((date(2026, 10, 14), date(2026, 10, 16))), false)
-        );
-        g.pick(date(2026, 10, 1));
-        assert_eq!(
-            (g.pick, g.anchored),
-            (Some((date(2026, 10, 1), date(2026, 10, 1))), true)
-        );
-        g.pick_span(date(2026, 9, 1), date(2026, 9, 30));
-        assert_eq!(
-            (g.pick, g.anchored),
-            (Some((date(2026, 9, 1), date(2026, 9, 30))), false)
-        );
+        let mut p = Pick::default();
+        let picked = |p: &Pick, a: Date, b: Date, anchored| {
+            assert_eq!(
+                *p,
+                Pick {
+                    span: Some((a, b)),
+                    anchored
+                }
+            )
+        };
+        p.click(date(2026, 10, 16));
+        picked(&p, date(2026, 10, 16), date(2026, 10, 16), true);
+        p.click(date(2026, 10, 14));
+        picked(&p, date(2026, 10, 14), date(2026, 10, 16), false);
+        p.click(date(2026, 10, 1));
+        picked(&p, date(2026, 10, 1), date(2026, 10, 1), true);
+        p.take(date(2026, 9, 1), date(2026, 9, 30));
+        picked(&p, date(2026, 9, 1), date(2026, 9, 30), false);
+        assert!(p.clear());
+        assert_eq!(p, Pick::default());
+        assert!(!p.clear(), "nothing was");
     }
 }
 

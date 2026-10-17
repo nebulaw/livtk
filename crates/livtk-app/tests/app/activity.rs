@@ -326,3 +326,37 @@ fn a_notes_line_breaks_are_kept_and_its_code_left_alone() {
         "lines inside code are code"
     );
 }
+
+#[test]
+fn tab_indents_the_lines_a_selection_touches_and_shift_tab_outdents_them() {
+    use livtk_app::model::reindent;
+    let apply = |text: &str, sel: std::ops::Range<usize>, out: bool| {
+        let (range, new, after) = reindent(text, sel, out);
+        let mut t = text.to_owned();
+        t.replace_range(range, &new);
+        (t, after)
+    };
+    // The cursor's line, wherever the cursor is in it.
+    assert_eq!(apply("- a\n- b", 6..6, false), ("- a\n  - b".into(), 8..8));
+    assert_eq!(apply("- a\n  - b", 8..8, true), ("- a\n- b".into(), 6..6));
+    // Every line selected, and the selection kept over them.
+    let (t, after) = apply("x\ny\nz", 2..5, false);
+    assert_eq!(t, "x\n  y\n  z");
+    assert_eq!(&t[after], "y\n  z");
+    // Outdenting takes up to the indent, never text.
+    assert_eq!(apply(" a", 0..0, true).0, "a");
+    assert_eq!(apply("a", 0..0, true).0, "a");
+    // A list item goes under the text of the item above: a sub-item, whatever its marker.
+    assert_eq!(apply("1. a\n1. b", 7..7, false).0, "1. a\n   1. b");
+    assert_eq!(apply("10. a\n- b", 8..8, false).0, "10. a\n    - b");
+    assert_eq!(
+        apply("- a\n  - b\n  - c", 13..13, false).0,
+        "- a\n  - b\n    - c",
+        "one level deeper each time"
+    );
+    assert_eq!(
+        apply("- a\n  - b\n    - c", 15..15, true).0,
+        "- a\n  - b\n  - c",
+        "and back one level"
+    );
+}

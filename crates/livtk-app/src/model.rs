@@ -15,7 +15,7 @@ mod graph;
 pub mod keys;
 mod palette;
 mod saved;
-pub use activity::{FeedRow, created_as, day_label, describe, note_markdown};
+pub use activity::{FeedRow, INDENT, created_as, day_label, describe, note_markdown, reindent};
 pub use flow::{
     Arrow, Look, Step, arrows, arrows_with, flow_of, has_flow, state_name, state_short, steps,
     steps_with,

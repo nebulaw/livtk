@@ -112,10 +112,11 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| {
         assert!(a.model().detail.is_some(), "c opens the panel for a note")
     });
-    // Shift+Enter breaks the line; Enter adds the note.
+    // Shift+Enter breaks the line, Tab indents it and the field keeps the keys; Enter adds.
     cx.simulate_input("a quick");
     cx.simulate_keystrokes("shift-enter");
     cx.simulate_input("jot");
+    cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 
@@ -130,7 +131,7 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
         .unwrap();
     let last = history.last().unwrap();
     assert!(
-        matches!(&last.op, livtk_core::event::Op::NodeNote { data, .. } if data.text == "a quick\njot"),
+        matches!(&last.op, livtk_core::event::Op::NodeNote { data, .. } if data.text == "a quick\n  jot"),
         "{last:?}"
     );
     assert_eq!(last.by, "human");

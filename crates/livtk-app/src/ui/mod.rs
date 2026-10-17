@@ -1438,7 +1438,10 @@ impl LivtkApp {
                 .on_action(
                     cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
                 )
-                .child(Textarea::new(state).appearance(false).xsmall().text_sm())
+                .child(indented(
+                    div().child(Textarea::new(state).appearance(false).xsmall().text_sm()),
+                    state,
+                ))
                 .into_any_element();
         }
         let empty = n.body.trim().is_empty();
@@ -4310,7 +4313,10 @@ impl LivtkApp {
                             .items_start()
                             .gap_2()
                             .child(div().pt(px(7.)).child(icon(Icon::Notes, 14., TEXT_4)))
-                            .child(div().flex_1().child(Textarea::new(&self.note).xsmall())),
+                            .child(indented(
+                                div().flex_1().child(Textarea::new(&self.note).xsmall()),
+                                &self.note,
+                            )),
                     ),
             )
     }
@@ -4431,7 +4437,7 @@ impl LivtkApp {
             )
             // Flush with the card's edge, as the breadcrumb above them is.
             .child(flush_input(Input::new(&form.title).text_lg(), 32.))
-            .child(
+            .child(indented(
                 div()
                     .debug_selector(|| "new-task-body".into())
                     .mx(-TEXTAREA_PX)
@@ -4441,7 +4447,8 @@ impl LivtkApp {
                             .xsmall()
                             .text_sm(),
                     ),
-            )
+                &form.body,
+            ))
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
                 div()
@@ -6060,6 +6067,26 @@ fn event_line(e: &Event, key: &str) -> Div {
                 )),
         )
     })
+}
+
+/// `el` around a growing text field, taking its Tab and Shift+Tab: gpui's text area indents
+/// only a field of fixed height and passes them on from one that grows, where they would move
+/// the focus. Here they indent and outdent the lines the selection touches, as one edit.
+fn indented(el: Div, field: &Entity<TextareaState>) -> Div {
+    let (a, b) = (field.clone(), field.clone());
+    el.on_action(move |_: &input::IndentInline, window, cx| reindent_field(&a, false, window, cx))
+        .on_action(move |_: &input::OutdentInline, window, cx| reindent_field(&b, true, window, cx))
+}
+
+fn reindent_field(field: &Entity<TextareaState>, out: bool, window: &mut Window, cx: &mut App) {
+    cx.stop_propagation();
+    field.update(cx, |s, cx| {
+        let text = s.value().to_string();
+        let (range, new, after) = crate::model::reindent(&text, s.selected_range(), out);
+        s.set_selected_range(range, cx);
+        s.replace(new, window, cx);
+        s.set_selected_range(after, cx);
+    });
 }
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.

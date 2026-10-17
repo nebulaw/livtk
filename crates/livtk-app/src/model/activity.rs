@@ -239,3 +239,86 @@ pub fn note_markdown(text: &str) -> String {
     }
     out
 }
+
+/// The indent Tab adds to a line that is no list item: two spaces.
+pub const INDENT: &str = "  ";
+
+/// A markdown list item's indent and the width of its marker with the space after it (`- `,
+/// `* `, `+ `, `1. `, `12) `): where its text starts, which is where a sub-item must start.
+fn list_item(line: &str) -> Option<(usize, usize)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = &line[indent..];
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let width = if rest.starts_with("- ") || rest.starts_with("* ") || rest.starts_with("+ ") {
+        2
+    } else if (1..=9).contains(&digits)
+        && (rest[digits..].starts_with(". ") || rest[digits..].starts_with(") "))
+    {
+        digits + 2
+    } else {
+        return None;
+    };
+    Some((indent, width))
+}
+
+/// Tab or Shift+Tab in a body or a note, on every line the selection `sel` touches (the
+/// cursor's line when nothing is selected). A list item is indented to the text of the item
+/// above it, which makes it that item's sub-item in markdown, or outdented to the level of the
+/// item it was under; any other line by [`INDENT`]. The edit, as the range of `text` to
+/// replace and its replacement, and the selection after it.
+pub fn reindent(
+    text: &str,
+    sel: std::ops::Range<usize>,
+    out: bool,
+) -> (std::ops::Range<usize>, String, std::ops::Range<usize>) {
+    let start = text[..sel.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[sel.end..]
+        .find('\n')
+        .map_or(text.len(), |i| sel.end + i);
+    // The list items above the block, as they stand: (indent, marker width).
+    let mut above: Vec<(usize, usize)> = text[..start].lines().filter_map(list_item).collect();
+    let mut new = String::with_capacity(end - start + 16);
+    let (mut first_shift, mut total) = (0isize, 0isize);
+    for (i, line) in text[start..end].split('\n').enumerate() {
+        if i > 0 {
+            new.push('\n');
+        }
+        let have = line.len() - line.trim_start_matches(' ').len();
+        let item = list_item(line);
+        let want = match (item, out) {
+            // Under the text of the nearest item above at most as deep as this one.
+            (Some(_), false) => above
+                .iter()
+                .rev()
+                .find(|(ind, _)| *ind <= have)
+                .map_or(have + INDENT.len(), |(ind, w)| (ind + w).max(have + 1)),
+            // Back to the level of the nearest item above that is shallower.
+            (Some(_), true) => above
+                .iter()
+                .rev()
+                .map(|(ind, _)| *ind)
+                .find(|ind| *ind < have)
+                .unwrap_or(0),
+            (None, false) => have + INDENT.len(),
+            (None, true) => have.saturating_sub(INDENT.len()),
+        };
+        new.push_str(&" ".repeat(want));
+        new.push_str(&line[have..]);
+        if let Some((_, w)) = item {
+            above.push((want, w));
+        }
+        let shift = want as isize - have as isize;
+        if i == 0 {
+            first_shift = shift;
+        }
+        total += shift;
+    }
+    let moved = |at: usize, by: isize| at.saturating_add_signed(by).max(start);
+    let after = if sel.is_empty() {
+        let at = moved(sel.start, first_shift);
+        at..at
+    } else {
+        moved(sel.start, first_shift)..moved(sel.end, total)
+    };
+    (start..end, new, after)
+}

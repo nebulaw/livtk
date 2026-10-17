@@ -2288,14 +2288,13 @@ impl LivtkApp {
             .items_center()
             .gap_2()
             .rounded_lg()
-            .text_sm()
+            .text_base()
             .font_weight(FontWeight::MEDIUM)
             .text_color(color(TEXT_2))
             .when(open, |d| d.bg(color(SELECTED)))
             .when(!open, |d| d.hover(|h| h.bg(color(HOVER))))
             .child(div().max_w(px(220.)).truncate().child(name))
             .when(catching, |d| d.child(catching_up(self.model.current)))
-            .child(icon(Icon::CaretDown, 8., TEXT_4))
             // Its press is its own: it never drags the window.
             .on_mouse_down(
                 MouseButton::Left,

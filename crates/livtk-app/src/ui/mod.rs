@@ -196,7 +196,9 @@ const TOP_BAR: f32 = 48.;
 /// up or go.
 const TOP_FIELD_W: f32 = 520.;
 const HOVER_FADE: Duration = Duration::from_millis(150);
-/// Where the traffic lights sit in the top bar, centred in its height.
+/// Room the traffic lights take at the top bar's left, and where they sit, centred in its
+/// height.
+const TRAFFIC_ROOM: f32 = 84.;
 const TRAFFIC_LIGHTS: (f32, f32) = (20., 18.);
 /// The content width from which the dock's buttons carry labels; narrower, icons alone.
 const DOCK_WIDE: f32 = 900.;
@@ -1808,49 +1810,8 @@ impl LivtkApp {
             .pb_3()
             .pt_1()
             .gap(px(2.))
-            .child(section_label("Projects"));
-        for (i, p) in self.model.projects.iter().enumerate() {
-            let current = i == self.model.current;
-            side = side.child(
-                nav_item(
-                    SharedString::from(format!("project-{i}")),
-                    Icon::Project,
-                    &p.name,
-                    current,
-                    p.inbox,
-                )
-                .when(p.catching_up, |d| d.child(catching_up(i)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.model.select_project(i);
-                    this.sync_filter(window, cx);
-                    cx.notify();
-                })),
-            );
-        }
-        side = side.child(
-            div()
-                .id("open-folder")
-                .group("nav")
-                .px_2()
-                .h(px(NAV_ROW))
-                .text_size(px(NAV_TEXT))
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded_lg()
-                .text_color(color(TEXT_4))
-                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                .child(icon_hover(
-                    Icon::OpenProject,
-                    NAV_ICON,
-                    TEXT_4,
-                    "nav",
-                    TEXT_3,
-                ))
-                .child("Open project")
-                .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
-        );
-        side = side.child(div().h(px(14.))).child(section_label("Views"));
+            .child(section_label("Views"));
+
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
         for view in View::ALL {
@@ -2166,33 +2127,6 @@ impl LivtkApp {
             .pb_3()
             .pt_1()
             .gap(px(2.));
-        let open = self.menu == Some(Menu::Projects);
-        let projects = rail_button(
-            "rail-projects".into(),
-            Icon::Project,
-            open,
-            false,
-            self.model.project().map_or("Projects".into(), |p| {
-                if p.catching_up {
-                    SharedString::from(format!("{} · Catching up…", p.name))
-                } else {
-                    SharedString::from(p.name.clone())
-                }
-            }),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, cx| {
-                cx.stop_propagation();
-                this.toggle_menu(Menu::Projects, window, cx);
-            }),
-        );
-        rail = rail
-            .child(div().relative().child(projects).when(open, |d| {
-                let panel = self.projects_menu(cx);
-                d.child(self.popover(Menu::Projects, false, 40., panel, cx))
-            }))
-            .child(div().h(px(14.)));
         for view in View::ALL {
             let new = match view {
                 View::Inbox => inbox > 0,
@@ -2226,15 +2160,24 @@ impl LivtkApp {
 
     /// The projects, from the rail: pick one, or open another.
     fn projects_menu(&self, cx: &mut Context<Self>) -> Div {
-        let mut panel = menu_panel(240.).debug_selector(|| "projects-menu".into());
-        for (i, p) in self.model.projects.iter().enumerate() {
+        let mut panel = menu_panel(260.).debug_selector(|| "projects-menu".into());
+        for i in self.model.recent_projects() {
+            let p = &self.model.projects[i];
             let current = i == self.model.current;
             panel = panel.child(
-                option_row(SharedString::from(format!("rail-project-{i}")))
-                    .debug_selector(move || format!("rail-project-{i}"))
+                option_row(SharedString::from(format!("menu-project-{i}")))
+                    .debug_selector(move || format!("menu-project-{i}"))
                     .child(icon(Icon::Project, 14., TEXT_3))
                     .child(div().flex_1().truncate().child(p.name.clone()))
                     .when(p.catching_up, |d| d.child(catching_up(i)))
+                    .when(p.inbox > 0, |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child(p.inbox.to_string()),
+                        )
+                    })
                     .child(check(current))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.model.select_project(i);
@@ -2244,10 +2187,10 @@ impl LivtkApp {
             );
         }
         panel.child(menu_divider()).child(
-            option_row("rail-open-project".into())
-                .debug_selector(|| "rail-open-project".into())
+            option_row("menu-open-project".into())
+                .debug_selector(|| "menu-open-project".into())
                 .child(icon(Icon::OpenProject, 14., TEXT_3))
-                .child("Open project")
+                .child("Open project…")
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_menu(window, cx);
                     this.open_folder(cx);
@@ -2332,6 +2275,35 @@ impl LivtkApp {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx)));
         let titlebar = titlebar_height(window) > 0.;
+        let open = self.menu == Some(Menu::Projects);
+        let project = self.model.project();
+        let catching = project.is_some_and(|p| p.catching_up);
+        let name = project.map_or("No project".to_owned(), |p| p.name.clone());
+        let project_button = div()
+            .id("top-project")
+            .debug_selector(|| "top-project".into())
+            .h(px(30.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(color(TEXT_2))
+            .when(open, |d| d.bg(color(SELECTED)))
+            .when(!open, |d| d.hover(|h| h.bg(color(HOVER))))
+            .child(div().max_w(px(220.)).truncate().child(name))
+            .when(catching, |d| d.child(catching_up(self.model.current)))
+            .child(icon(Icon::CaretDown, 8., TEXT_4))
+            // Its press is its own: it never drags the window.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_menu(Menu::Projects, window, cx);
+                }),
+            );
         div()
             .id("top-bar")
             .debug_selector(|| "top-bar".into())
@@ -2348,6 +2320,20 @@ impl LivtkApp {
                     }
                 })
             })
+            // At its left, past the traffic lights: the open project, and the recent ones under it.
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(if titlebar { TRAFFIC_ROOM } else { 12. }))
+                    .flex()
+                    .items_center()
+                    .child(div().relative().child(project_button).when(open, |d| {
+                        let panel = self.projects_menu(cx);
+                        d.child(self.popover(Menu::Projects, false, 34., panel, cx))
+                    })),
+            )
             // Centred on the window, whatever sits at either end.
             .child(
                 div()

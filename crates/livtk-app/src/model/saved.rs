@@ -17,8 +17,9 @@ use super::{Display, GroupKey, Grouping, Layout, Model, Ordering, View};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Saved {
-    /// The open project's directory.
+    /// The open project's directory, and the projects' in the order they were last opened.
     pub project: Option<PathBuf>,
+    pub recent: Vec<PathBuf>,
     pub view: Option<String>,
     /// "list" or "board".
     pub layout: Option<String>,
@@ -163,6 +164,7 @@ impl Model {
         }
         Saved {
             project: self.project().map(|p| p.dir.clone()),
+            recent: self.recent.clone(),
             view: Some(view_name(self.view)),
             layout: Some(
                 match self.layout {
@@ -235,6 +237,7 @@ impl Model {
                     .show_dismissed = true;
             }
         }
+        self.recent = saved.recent.clone();
         if let Some(dir) = &saved.project
             && let Some(i) = self.projects.iter().position(|p| &p.dir == dir)
         {

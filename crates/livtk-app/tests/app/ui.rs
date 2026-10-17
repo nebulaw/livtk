@@ -1642,7 +1642,6 @@ fn ctrl_b_and_the_top_bar_button_collapse_and_expand_the_sidebar(cx: &mut TestAp
     assert!(cx.debug_bounds("rail").is_some(), "so does the button");
     click_on(cx, "toggle-left");
     redraw(cx);
-    assert!(cx.debug_bounds("sidebar").is_some());
 }
 
 /// The top bar's toggles at its right: the bottom bar and the detail panel, each by its button
@@ -1680,8 +1679,42 @@ fn the_top_bars_toggles_show_and_hide_the_bottom_bar_and_the_panel(cx: &mut Test
     app.read_with(cx, |a, _| assert!(a.model().detail.is_some(), "and back"));
 }
 
+/// The open project is named in the top bar; a click lists the recent ones under it, and
+/// picking one opens it.
 #[gpui_kit::test]
-fn the_rails_buttons_go_to_views_projects_and_shortcuts(cx: &mut TestAppContext) {
+fn the_top_bar_names_the_project_and_its_menu_switches(cx: &mut TestAppContext) {
+    let (a, b) = (project(), project());
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        bind_keys(cx);
+    });
+    let (pa, pb) = (a.path().to_path_buf(), b.path().to_path_buf());
+    let (app, cx) = cx.add_window_view(|window, cx| {
+        let mut model = Model::open(&[pa, pb]);
+        model.set_models_dir(None);
+        LivtkApp::new(model, window, cx)
+    });
+    resize(cx, 1400., 900.);
+    redraw(cx);
+    let bar = cx.debug_bounds("top-bar").unwrap();
+    assert!(inside(cx.debug_bounds("top-project").unwrap(), bar));
+    assert!(cx.debug_bounds("sidebar").is_some());
+    click_on(cx, "top-project");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("projects")));
+    assert!(
+        cx.debug_bounds("menu-open-project").is_some(),
+        "it can open another"
+    );
+    click_on(cx, "menu-project-1");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.menu_open(), None, "picking one closes it");
+        assert_eq!(a.model().current, 1);
+        assert_eq!(a.model().recent_projects()[0], 1, "first among the recent");
+    });
+}
+
+#[gpui_kit::test]
+fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     resize(cx, 1400., 900.);
@@ -1695,17 +1728,10 @@ fn the_rails_buttons_go_to_views_projects_and_shortcuts(cx: &mut TestAppContext)
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
     click_on(cx, "rail-Lessons");
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Lessons));
-    click_on(cx, "rail-projects");
-    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("projects")));
     assert!(
-        cx.debug_bounds("rail-open-project").is_some(),
-        "it can open another"
+        cx.debug_bounds("rail-projects").is_none(),
+        "projects are the top bar's"
     );
-    click_on(cx, "rail-project-0");
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.menu_open(), None, "picking one closes it");
-        assert_eq!(a.model().current, 0);
-    });
     click_on(cx, "rail-shortcuts");
     app.read_with(cx, |a, _| assert!(a.help_open()));
 }

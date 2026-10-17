@@ -182,3 +182,35 @@ fn the_states_a_view_was_filtered_to_come_back() {
     m.set_view(View::Tasks);
     assert_eq!(m.display().states, [livtk_core::State::Doing]);
 }
+
+/// The top bar's menu offers the open project first, then the rest most recently opened first;
+/// that order comes back after a restart.
+#[test]
+fn recent_projects_come_latest_first_and_are_kept() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    for d in &dirs {
+        project(d.path());
+    }
+    let paths: Vec<&Path> = dirs.iter().map(|d| d.path()).collect();
+    let mut m = open(&paths);
+    assert_eq!(
+        m.recent_projects(),
+        [0, 1, 2],
+        "never opened: as registered"
+    );
+    m.select_project(2);
+    m.select_project(1);
+    assert_eq!(
+        m.recent_projects(),
+        [1, 2, 0],
+        "the open one, then the latest"
+    );
+
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = open(&paths);
+    back.restore(&Saved::load(&path));
+    assert_eq!(back.current, 1);
+    assert_eq!(back.recent_projects(), [1, 2, 0]);
+}

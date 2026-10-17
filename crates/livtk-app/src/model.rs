@@ -340,9 +340,15 @@ pub fn link_choices(kind: Kind) -> Vec<LinkChoice> {
     out
 }
 
+/// The recent projects the top bar's menu shows, and how many are remembered.
+pub const RECENT_SHOWN: usize = 8;
+const RECENT_KEPT: usize = 32;
+
 pub struct Model {
     pub projects: Vec<Project>,
     pub current: usize,
+    /// The projects' directories in the order they were last opened, the latest first.
+    pub recent: Vec<PathBuf>,
     pub view: View,
     pub layout: Layout,
     /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
@@ -434,6 +440,7 @@ impl Model {
         let mut model = Model {
             projects,
             current: 0,
+            recent: Vec::new(),
             view: View::Inbox,
             layout: Layout::List,
             rows: Vec::new(),
@@ -524,7 +531,41 @@ impl Model {
             self.enter_activity();
             self.enter_graph();
             self.reload();
+            self.note_recent();
         }
+    }
+
+    /// The open project is the latest opened: first among the recent.
+    fn note_recent(&mut self) {
+        let Some(dir) = self.project().map(|p| p.dir.clone()) else {
+            return;
+        };
+        self.recent.retain(|d| d != &dir);
+        self.recent.insert(0, dir);
+        self.recent.truncate(RECENT_KEPT);
+    }
+
+    /// The projects the top bar's menu offers, as indexes into `projects`: the open one, then
+    /// the rest most recently opened first (those never opened after them, as registered), at
+    /// most `RECENT_SHOWN`.
+    pub fn recent_projects(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = Vec::new();
+        let take = |i: usize, order: &mut Vec<usize>| {
+            if i < self.projects.len() && !order.contains(&i) {
+                order.push(i);
+            }
+        };
+        take(self.current, &mut order);
+        for dir in &self.recent {
+            if let Some(i) = self.projects.iter().position(|p| &p.dir == dir) {
+                take(i, &mut order);
+            }
+        }
+        for i in 0..self.projects.len() {
+            take(i, &mut order);
+        }
+        order.truncate(RECENT_SHOWN);
+        order
     }
 
     pub fn set_view(&mut self, view: View) {

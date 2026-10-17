@@ -120,7 +120,7 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
         ),
         Menu::new("File").items([
             MenuItem::action("New Task", NewTask),
-            MenuItem::action("Open Project…", OpenFolder),
+            MenuItem::action("Open Another Project…", OpenFolder),
             MenuItem::submenu(Menu::new("Projects").items(projects(state))),
             MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),

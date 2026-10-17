@@ -137,6 +137,14 @@ fn typing_matches_actions_by_letters_and_nodes_by_words_and_keys() {
 
     m.palette_query("go les");
     assert_eq!(labels(&m)[0], "Go to Lessons");
+
+    m.palette_query("another project");
+    assert_eq!(labels(&m)[0], "Open another project…");
+    assert_eq!(
+        m.palette_run(),
+        Some(Ask::OpenFolder),
+        "the view asks for the folder"
+    );
 }
 
 #[test]

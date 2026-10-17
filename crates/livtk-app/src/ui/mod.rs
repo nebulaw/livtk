@@ -293,7 +293,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     (
         "Display",
         &["O", "or", keys::MOD, "+", "O"],
-        "Open a project folder",
+        "Open another project",
     ),
     ("Window", &[keys::MOD, "+", "W"], CLOSE_WINDOW),
     ("Window", &[keys::MOD, "+", "Q"], "Quit"),
@@ -2190,7 +2190,7 @@ impl LivtkApp {
             option_row("menu-open-project".into())
                 .debug_selector(|| "menu-open-project".into())
                 .child(icon(Icon::OpenProject, 14., TEXT_3))
-                .child("Open project…")
+                .child("Open another project…")
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_menu(window, cx);
                     this.open_folder(cx);

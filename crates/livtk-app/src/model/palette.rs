@@ -471,7 +471,7 @@ impl Model {
             }
         }
         out.push(plain(
-            "Open a project folder…",
+            "Open another project…",
             Some("O"),
             Run::Ask(Ask::OpenFolder),
         ));

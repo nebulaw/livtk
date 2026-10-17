@@ -86,11 +86,6 @@ impl TerminalPane {
         &self.focus
     }
 
-    /// What the shell named its window, if it did.
-    pub fn title(&self) -> Option<&str> {
-        self.shell.as_ref().and_then(|s| s.title.as_deref())
-    }
-
     /// The shell, if it runs.
     pub fn shell(&self) -> Option<&Shell> {
         self.shell.as_ref()

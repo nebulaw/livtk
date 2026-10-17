@@ -1,9 +1,10 @@
-//! The window: a sidebar on the black canvas, an inset content panel (header, display toolbar,
-//! the list or board), the detail panel, and overlays (new task, shortcuts, notices). It renders
-//! the model and forwards input to it; no behaviour lives here.
+//! The window: the top bar (the project, the palette's field, the panels' toggles), a sidebar on
+//! the black canvas, an inset content panel (the view itself, its dock floating over it), the
+//! bottom bar, the detail panel, and overlays (new task, shortcuts, notices). It renders the model
+//! and forwards input to it; no behaviour lives here.
 //!
-//! Keys are bound only on the list area. Text fields (the filter, notes, the new-task form) live
-//! outside it, so typing never triggers a command.
+//! Keys are bound only on the list area. Text fields (the filter, notes, the new-task form) and
+//! the terminal live outside it, so typing never triggers a command.
 
 mod activity_grid;
 pub mod contour_grid;
@@ -2275,8 +2276,6 @@ impl LivtkApp {
         )
     }
 
-    /// The top bar: the sidebar's toggle, then the view's name and how many items it holds; its
-    /// controls live in the dock.
     /// The bar across the window's top: on macOS the traffic lights at its left, and a press on
     /// it drags the window (a double-click zooms it, as the system's titlebar does). In its
     /// middle, the palette's field at rest: what it searches; a click, or its
@@ -2451,52 +2450,6 @@ impl LivtkApp {
                         format!("Detail panel · {}", keys::PANEL),
                         cx.listener(|this, _, _, cx| this.toggle_panel(cx)),
                     )),
-            )
-    }
-
-    fn header(&self, cx: &App) -> impl IntoElement {
-        let m = &self.model;
-        let shell_title = (m.view == View::Terminal)
-            .then(|| self.current_terminal())
-            .flatten()
-            .and_then(|t| t.read(cx).title().map(str::to_owned));
-        div()
-            .debug_selector(|| "view-header".into())
-            .h(px(46.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_4()
-            .border_b_1()
-            .border_color(color(BORDER))
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(color(TEXT))
-                    .child(m.view.title()),
-            )
-            .child(
-                div()
-                    .text_color(color(TEXT_4))
-                    .child(if m.view == View::Terminal {
-                        shell_title.unwrap_or_default()
-                    } else if m.view == View::Activity {
-                        format!(
-                            "{}{}",
-                            m.activity.len(),
-                            if m.activity_more { "+" } else { "" }
-                        )
-                    } else if m.view == View::Graph {
-                        let links = m.graph.edges.len();
-                        format!(
-                            "{} · {links} link{}",
-                            m.graph.nodes.len(),
-                            if links == 1 { "" } else { "s" }
-                        )
-                    } else {
-                        format!("{}", m.filtered.len())
-                    }),
             )
     }
 
@@ -5672,7 +5625,6 @@ impl Render for LivtkApp {
         let top_bar = self.top_bar(window, cx);
         let bottom = (self.bottom_open || self.bottom_leaving).then(|| self.bottom_bar(window, cx));
         self.focus_on_arrival(window, cx);
-        let header = self.header(cx).into_any_element();
         let dock = self.dock(window, cx);
         let content = self.content(window, cx);
         self.track_detail(window, cx);
@@ -6014,7 +5966,6 @@ impl Render for LivtkApp {
                                             .h_full()
                                             .flex()
                                             .flex_col()
-                                            .child(header)
                                             .child(main)
                                             // Floating over the content's bottom, centred on it; it moves
                                             // with the content as the detail panel opens beside it.

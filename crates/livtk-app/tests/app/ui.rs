@@ -1411,12 +1411,10 @@ fn the_dock_holds_what_each_view_can_do(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g r");
     draw_graph(cx);
     assert_eq!(dock_holds(cx), ["zoom-in", "dock-dismissed"], "the graph");
-    let header = cx.debug_bounds("view-header").unwrap();
-    for gone in ["dock-view", "dock-new-task"] {
-        if let Some(b) = cx.debug_bounds(gone) {
-            assert!(!inside(b, header), "{gone} is not in the top bar");
-        }
-    }
+    assert!(
+        cx.debug_bounds("view-header").is_none(),
+        "no header over the view"
+    );
 }
 
 /// A project with `n` more backlog tasks than the usual two plans and a lesson.

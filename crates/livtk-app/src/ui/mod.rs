@@ -3805,51 +3805,19 @@ impl LivtkApp {
             .into_any_element()
     }
 
-    /// A parent's sub-tasks: how many are done, of how many; in a list, with a caret that folds
-    /// them away and back (a press here is the caret's, not the row's).
-    fn sub_task_count(&self, id: Uuid, foldable: bool, cx: &mut Context<Self>) -> Option<Div> {
+    /// A parent's sub-tasks: how many are done, of how many.
+    fn sub_task_count(&self, id: Uuid) -> Option<Div> {
         let &(done, total) = self.model.progress.get(&id)?;
-        let folded = self.model.is_folded(id);
-        let count = div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_1()
-            .text_xs()
-            .text_color(color(TEXT_4))
-            .child(icon(Icon::SubTask, 12., TEXT_4))
-            .child(format!("{done}/{total}"));
-        if !foldable || !self.model.display().nest {
-            return Some(count);
-        }
         Some(
-            div().flex_none().child(
-                div()
-                    .id(SharedString::from(format!("fold-{id}")))
-                    .debug_selector(move || format!("fold-{id}"))
-                    .h(px(20.))
-                    .px_1()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .rounded_md()
-                    .hover(|s| s.bg(color(HOVER)))
-                    .child(count)
-                    .child(icon(
-                        if folded {
-                            Icon::CaretRight
-                        } else {
-                            Icon::CaretDown
-                        },
-                        10.,
-                        TEXT_4,
-                    ))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.toggle_folded(id);
-                        cx.notify();
-                    })),
-            ),
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .text_color(color(TEXT_4))
+                .child(icon(Icon::SubTask, 12., TEXT_4))
+                .child(format!("{done}/{total}")),
         )
     }
 
@@ -3916,7 +3884,7 @@ impl LivtkApp {
                     .child(r.title.clone()),
             )
             .children(self.model.parent_key(r).map(parent_chip))
-            .children(self.sub_task_count(id, true, cx));
+            .children(self.sub_task_count(id));
         if blocked {
             row = row.child(icon_tag(Icon::Blocked, "Blocked", TEXT_3));
         }
@@ -4081,7 +4049,7 @@ impl LivtkApp {
                             .child(r.key.clone())
                             .children(self.model.parent_of(r).map(parent_chip))
                             .child(div().flex_1())
-                            .children(self.sub_task_count(id, false, cx))
+                            .children(self.sub_task_count(id))
                             .when(blocked, |d| {
                                 d.child(icon(Icon::Blocked, 12., TEXT_4)).child("Blocked")
                             }),

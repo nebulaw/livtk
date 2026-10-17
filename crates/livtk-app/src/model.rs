@@ -403,8 +403,6 @@ pub struct Model {
     all: Vec<Summary>,
     displays: HashMap<View, Display>,
     collapsed: HashSet<(View, GroupKey)>,
-    /// Parents whose sub-tasks are folded away, per view.
-    folded: HashSet<(View, Uuid)>,
     /// How deep each nested sub-task sits under its parent (absent: not nested).
     pub depth: HashMap<Uuid, usize>,
     /// Each parent's sub-tasks: how many are done, of how many.
@@ -474,7 +472,6 @@ impl Model {
             all: Vec::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),
-            folded: HashSet::new(),
             depth: HashMap::new(),
             progress: HashMap::new(),
         };
@@ -1400,16 +1397,10 @@ impl Model {
                 })
         });
         self.progress = progress(&self.all);
-        let folded: HashSet<Uuid> = self
-            .folded
-            .iter()
-            .filter(|(v, _)| *v == self.view)
-            .map(|(_, id)| *id)
-            .collect();
-        let (rows, depth, hidden) = if d.nest {
-            nest(rows, |a, b| group_of(a) == group_of(b), &folded)
+        let (rows, depth) = if d.nest {
+            nest(rows, |a, b| group_of(a) == group_of(b))
         } else {
-            (rows, HashMap::new(), HashSet::new())
+            (rows, HashMap::new())
         };
         self.depth = depth;
         // The groups the rows fall in, in order; with `show_empty`, every group there can be.
@@ -1434,7 +1425,7 @@ impl Model {
             let mut count = 0;
             while let Some(r) = next.next_if(|r| group_of(r) == key) {
                 count += 1;
-                if !collapsed && !hidden.contains(&r.id) {
+                if !collapsed {
                     shown.push(r.clone());
                 }
             }
@@ -1450,19 +1441,6 @@ impl Model {
         self.filtered = rows;
         self.rows = shown;
         self.groups = groups;
-    }
-
-    /// Fold a parent's sub-tasks away in this view, or bring them back.
-    pub fn toggle_folded(&mut self, id: Uuid) {
-        if !self.folded.remove(&(self.view, id)) {
-            self.folded.insert((self.view, id));
-        }
-        self.arrange();
-        self.reselect();
-    }
-
-    pub fn is_folded(&self, id: Uuid) -> bool {
-        self.folded.contains(&(self.view, id))
     }
 
     /// The key of `r`'s parent, when `r` is a sub-task shown on its own (not under it): its
@@ -1751,13 +1729,11 @@ fn progress(all: &[Summary]) -> HashMap<Uuid, (usize, usize)> {
 const NEST_MAX: usize = 3;
 
 /// `rows` (sorted) with each sub-task moved right after its parent, when both are shown and
-/// `same_group`, keeping the order among siblings: the rows, each nested one's depth, and the
-/// rows hidden because a parent above them is `folded`.
+/// `same_group`, keeping the order among siblings: the rows, and each nested one's depth.
 fn nest(
     rows: Vec<Summary>,
     same_group: impl Fn(&Summary, &Summary) -> bool,
-    folded: &HashSet<Uuid>,
-) -> (Vec<Summary>, HashMap<Uuid, usize>, HashSet<Uuid>) {
+) -> (Vec<Summary>, HashMap<Uuid, usize>) {
     let at: HashMap<Uuid, usize> = rows.iter().enumerate().map(|(i, r)| (r.id, i)).collect();
     let mut kids: HashMap<Uuid, Vec<usize>> = HashMap::new();
     let mut nested = vec![false; rows.len()];
@@ -1772,19 +1748,17 @@ fn nest(
     }
     let mut order: Vec<usize> = Vec::with_capacity(rows.len());
     let mut depth = HashMap::new();
-    let mut hidden = HashSet::new();
     let mut seen = vec![false; rows.len()];
-    // Each top row in order, its sub-tasks depth first under it: (row, depth, under a folded
-    // parent). Then any row a loop of parents left unreached (the core refuses such a loop; a log
+    // Each top row in order, its sub-tasks depth first under it: (row, depth). Then any row a loop of parents left unreached (the core refuses such a loop; a log
     // edited by hand may not), at its own place rather than lost.
-    let mut stack: Vec<(usize, usize, bool)> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new();
     let starts = (0..rows.len()).filter(|i| !nested[*i]).chain(0..rows.len());
     for start in starts.collect::<Vec<_>>() {
         if seen[start] {
             continue;
         }
-        stack.push((start, 0, false));
-        while let Some((i, d, under_fold)) = stack.pop() {
+        stack.push((start, 0));
+        while let Some((i, d)) = stack.pop() {
             if std::mem::replace(&mut seen[i], true) {
                 continue;
             }
@@ -1793,16 +1767,12 @@ fn nest(
             if d > 0 {
                 depth.insert(id, d);
             }
-            if under_fold {
-                hidden.insert(id);
-            }
-            let fold = under_fold || folded.contains(&id);
             for &k in kids.get(&id).into_iter().flatten().rev() {
-                stack.push((k, (d + 1).min(NEST_MAX), fold));
+                stack.push((k, (d + 1).min(NEST_MAX)));
             }
         }
     }
     let mut slots: Vec<Option<Summary>> = rows.into_iter().map(Some).collect();
     let rows = order.into_iter().filter_map(|i| slots[i].take()).collect();
-    (rows, depth, hidden)
+    (rows, depth)
 }

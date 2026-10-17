@@ -1719,8 +1719,7 @@ fn family() -> (tempfile::TempDir, Model) {
 }
 
 /// A sub-task sits right under its parent when both are in the same group; one in another
-/// group stays in its own, named by its parent; folding a parent hides its sub-tasks; nesting
-/// can be turned off.
+/// group stays in its own, named by its parent; nesting can be turned off.
 #[test]
 fn sub_tasks_nest_under_their_parent_within_a_group() {
     let (_dir, mut m) = family();
@@ -1756,12 +1755,6 @@ fn sub_tasks_nest_under_their_parent_within_a_group() {
         "but named"
     );
     assert_eq!(m.progress.get(&parent.id), Some(&(0, 2)));
-
-    m.toggle_folded(parent.id);
-    assert!(!m.rows.iter().any(|r| r.id == child.id), "folded away");
-    assert!(m.is_folded(parent.id));
-    m.toggle_folded(parent.id);
-    assert!(m.rows.iter().any(|r| r.id == child.id));
 
     // A filter that shows the sub-task but not its parent shows it on its own, named.
     m.set_filter("child planned");

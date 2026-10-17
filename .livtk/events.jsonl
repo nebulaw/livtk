@@ -572,3 +572,15 @@
 {"v":1,"id":"01a147ea-7721-74ba-a1da-02f77526bccc","at":"2026-10-17T03:31:50.689Z","by":"claude","op":"node.set","node":"01a14774-2069-75c5-85d4-fd7b80c2548a","data":{"state":"review"}}
 {"v":1,"id":"01a147ea-7728-7675-b261-76b41cde74f1","at":"2026-10-17T03:31:50.696Z","by":"claude","op":"node.set","node":"01a1475d-00ba-712e-8df2-aae9154c5f19","data":{"state":"doing"}}
 {"v":1,"id":"01a147ea-7731-726d-a8f5-2f836c3967a0","at":"2026-10-17T03:31:50.705Z","by":"claude","op":"node.set","node":"01a1475d-00ba-712e-8df2-aae9154c5f19","data":{"state":"review"}}
+{"v":1,"id":"01a147ea-e328-7567-a829-06aacbd93473","at":"2026-10-17T03:32:18.344Z","by":"human","op":"node.set","node":"01a147aa-2d06-74fd-b541-8e34946e79e6","data":{"state":"done"}}
+{"v":2,"id":"01a147eb-4c63-73b5-bc5a-6cca13a2be81","at":"2026-10-17T03:32:45.283Z","by":"human","op":"node.note","node":"01a14773-cba4-709e-8586-e0d963f3474f","data":{"text":"1. Test number item"}}
+{"v":2,"id":"01a147eb-6d64-7786-86f4-b4eece5f2fbb","at":"2026-10-17T03:32:53.732Z","by":"human","op":"node.note","node":"01a14773-cba4-709e-8586-e0d963f3474f","data":{"text":"1. test item\n  1.1 test item"}}
+{"v":1,"id":"01a147eb-8180-7142-be17-0671a768e74d","at":"2026-10-17T03:32:58.880Z","by":"human","op":"node.set","node":"01a14773-cba4-709e-8586-e0d963f3474f","data":{"state":"done"}}
+{"v":1,"id":"01a147eb-9163-73f0-85e7-6cdb0f9bf29d","at":"2026-10-17T03:33:02.947Z","by":"human","op":"node.set","node":"01a14774-2069-75c5-85d4-fd7b80c2548a","data":{"state":"done"}}
+{"v":1,"id":"01a147ec-3d69-76cf-9ee9-52da739e1878","at":"2026-10-17T03:33:46.985Z","by":"human","op":"edge.add","data":{"src":"01a147e8-5335-73d1-ad74-97f785a17eba","dst":"01a1479a-d5aa-70f5-b7ed-3333999608fe","rel":"parent"}}
+{"v":1,"id":"01a147ec-6636-7133-92ed-4e3b2d12f797","at":"2026-10-17T03:33:57.430Z","by":"human","op":"edge.add","data":{"src":"01a14745-35db-767e-9d40-521f83c451bf","dst":"01a1479a-d5aa-70f5-b7ed-3333999608fe","rel":"parent"}}
+{"v":1,"id":"01a147ed-5f6e-708e-896a-f31c09e750ca","at":"2026-10-17T03:35:01.230Z","by":"human","op":"edge.remove","data":{"src":"01a14745-35db-767e-9d40-521f83c451bf","dst":"01a1479a-d5aa-70f5-b7ed-3333999608fe","rel":"parent"}}
+{"v":1,"id":"01a147ed-671c-7198-8387-be88c1f36f6a","at":"2026-10-17T03:35:03.196Z","by":"human","op":"edge.remove","data":{"src":"01a147e8-5335-73d1-ad74-97f785a17eba","dst":"01a1479a-d5aa-70f5-b7ed-3333999608fe","rel":"parent"}}
+{"v":1,"id":"01a147ed-8f37-71fb-81b9-f3b7c827e28e","at":"2026-10-17T03:35:13.463Z","by":"human","op":"node.set","node":"01a1475d-00ba-712e-8df2-aae9154c5f19","data":{"state":"done"}}
+{"v":1,"id":"01a147ed-99b2-729d-99fe-3538ae5ad374","at":"2026-10-17T03:35:16.146Z","by":"human","op":"node.set","node":"01a146db-4e4c-714b-88b7-eaed0e76619b","data":{"state":"done"}}
+{"v":2,"id":"01a147ef-c27b-768d-8b3b-a179c76eb1c7","at":"2026-10-17T03:37:37.659Z","by":"claude","op":"node.note","node":"01a1475d-00ba-712e-8df2-aae9154c5f19","data":{"text":"The developer's review: all good; remove the sub-tasks' fold. Done: no caret, no folding (and nothing remembered for it); a parent keeps its done/total count."}}

@@ -523,7 +523,11 @@ impl Model {
             } else {
                 "Show dismissed work"
             };
-            out.push(plain(label, Some("S D"), Run::ToggleDismissed));
+            out.push(plain(
+                label,
+                Some(super::keys::DISMISSED),
+                Run::ToggleDismissed,
+            ));
         }
         out.push(plain(
             "Keyboard shortcuts",

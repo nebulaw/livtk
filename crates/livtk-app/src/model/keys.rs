@@ -16,4 +16,6 @@ pub const SUBMIT: &str = if MAC { "⌘ ↵" } else { "Ctrl ↵" };
 /// Ratify as a standing rule.
 pub const STANDING: &str = if MAC { "⇧ A" } else { "Shift A" };
 /// Show or hide empty groups.
-pub const EMPTY_GROUPS: &str = if MAC { "⇧ H" } else { "Shift H" };
+pub const EMPTY_GROUPS: &str = "S E";
+/// Show or hide dismissed work.
+pub const DISMISSED: &str = "S D";

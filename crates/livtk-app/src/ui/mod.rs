@@ -242,7 +242,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         &["S", "then", "D"],
         "Show dismissed: canceled, rejected, retired",
     ),
-    ("Display", &[keys::SHIFT, "+", "H"], "Show empty groups"),
+    ("Display", &["S", "then", "E"], "Show empty groups"),
     (
         "Display",
         &["O", "or", keys::MOD, "+", "O"],
@@ -366,7 +366,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("left", PrevColumn, nav),
         KeyBinding::new("l", NextColumn, nav),
         KeyBinding::new("right", NextColumn, nav),
-        KeyBinding::new("shift-h", ToggleEmpty, nav),
+        KeyBinding::new("s e", ToggleEmpty, nav),
         KeyBinding::new("c", Note, nav),
         KeyBinding::new("o", OpenFolder, nav),
         KeyBinding::new("/", FocusFilter, nav),
@@ -510,6 +510,8 @@ pub struct LivtkApp {
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
+    /// Each board column's own scrolling, so a card moved to comes into view.
+    column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
     /// its origin turns pointer positions into the graph's own.
     graph_bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -686,6 +688,7 @@ impl LivtkApp {
             palette_input,
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
+            column_scrolls: Default::default(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
             sidebar_width: SIDEBAR_WIDTH,
@@ -1060,10 +1063,40 @@ impl LivtkApp {
             if let Some(i) = at {
                 self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
             }
+        } else if self.model.on_board() {
+            self.reveal_card();
         } else if let Some(i) = self.display_index() {
             self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
         }
         cx.notify();
+    }
+
+    /// The board's column holding the selected card scrolled into view, and the card within it.
+    fn reveal_card(&self) {
+        let Some(id) = self.model.selected().map(|r| r.id) else {
+            return;
+        };
+        let at = self
+            .model
+            .columns()
+            .iter()
+            .enumerate()
+            .find_map(|(c, (key, rows))| {
+                rows.iter().position(|r| r.id == id).map(|i| (c, *key, i))
+            });
+        if let Some((c, key, i)) = at {
+            self.board_scroll.scroll_to_item(c);
+            // The column's header comes first, then its cards.
+            self.column_scroll(key).scroll_to_item(i + 1);
+        }
+    }
+
+    fn column_scroll(&self, key: GroupKey) -> ScrollHandle {
+        self.column_scrolls
+            .borrow_mut()
+            .entry(key)
+            .or_default()
+            .clone()
     }
 
     /// `j` or `k`: move the selection `by` one, its highlight gliding there when the two rows
@@ -1518,6 +1551,13 @@ impl LivtkApp {
     }
 
     fn display_index(&self) -> Option<usize> {
+        if let Some(band) = self.model.band() {
+            let gi = self.model.groups.iter().position(|g| g.key == band)?;
+            return self
+                .items()
+                .iter()
+                .position(|it| matches!(it, Item::Band(i) if *i == gi));
+        }
         let sel = self.model.selected_index()?;
         self.items()
             .iter()
@@ -2580,7 +2620,7 @@ impl LivtkApp {
             .child(view_option(
                 "view-show-dismissed",
                 "Show dismissed work",
-                Some("H"),
+                Some(keys::DISMISSED),
                 d.show_dismissed,
                 Model::toggle_dismissed,
                 cx,
@@ -3515,7 +3555,7 @@ impl LivtkApp {
                 .child(empty(
                     view_icon(self.model.view),
                     &format!("No {what} here"),
-                    "Clear the filter, press H to show dismissed work, or N for a new task.",
+                    "Clear the filter, press S D to show dismissed work, or N for a new task.",
                 ))
                 .into_any_element();
         }
@@ -3764,6 +3804,7 @@ impl LivtkApp {
                 .border_color(color(BORDER))
                 .overflow_y_scroll()
                 .restrict_scroll_to_axis()
+                .track_scroll(&self.column_scroll(key))
                 .drag_over::<Dragged>(move |style, d, _, _| {
                     if d.fits(key) {
                         style
@@ -4908,11 +4949,11 @@ impl Render for LivtkApp {
             }))
             .on_action(cx.listener(|this, _: &PrevColumn, _, cx| {
                 this.model.select_column_by(-1);
-                cx.notify();
+                this.after_move(cx);
             }))
             .on_action(cx.listener(|this, _: &NextColumn, _, cx| {
                 this.model.select_column_by(1);
-                cx.notify();
+                this.after_move(cx);
             }))
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if this.menu.is_some() {

@@ -292,13 +292,13 @@ fn keys_are_named_as_the_platform_names_them() {
     use livtk_app::model::keys;
     if cfg!(target_os = "macos") {
         assert_eq!(
-            (keys::MOD, keys::PALETTE, keys::EMPTY_GROUPS),
-            ("⌘", "⌘ K", "⇧ H")
+            (keys::MOD, keys::PALETTE, keys::STANDING),
+            ("⌘", "⌘ K", "⇧ A")
         );
     } else {
         assert_eq!(
-            (keys::MOD, keys::PALETTE, keys::EMPTY_GROUPS),
-            ("Ctrl", "Ctrl K", "Shift H")
+            (keys::MOD, keys::PALETTE, keys::STANDING),
+            ("Ctrl", "Ctrl K", "Shift A")
         );
     }
 }

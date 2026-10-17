@@ -145,7 +145,7 @@ Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter f
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.
 Done work stays in view; what was dismissed (canceled, rejected, retired) shows with `s d`, and
-empty groups with `Shift+H`, in the view you are in.
+empty groups with `s e`, in the view you are in.
 A task's priority icon, in a row, on a card or in the detail panel, opens a menu to change it;
 a state icon in a row or on a card opens its kind's states, the moves it can make enabled and
 your own decisions (acknowledge, ratify, accept, reject) in the accent. The detail panel draws
@@ -184,7 +184,7 @@ most:
 | `b` | list or board |
 | `s d` | show dismissed work |
 | `h` `l` | board: the column left or right |
-| `Shift+H` | show empty groups |
+| `s e` | show empty groups |
 
 ## Develop
 

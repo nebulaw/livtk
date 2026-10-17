@@ -597,7 +597,7 @@ impl Model {
     }
 
     /// Whether the view is the tasks' board.
-    fn on_board(&self) -> bool {
+    pub fn on_board(&self) -> bool {
         self.view == View::Tasks && self.layout == Layout::Board
     }
 

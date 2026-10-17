@@ -1136,7 +1136,7 @@ fn the_wheel_scrolls_a_board_column_down_and_shift_scrolls_across(cx: &mut TestA
     }
     let (_app, cx) = open_app(cx, dir.path());
     // Every column, so the board is wider than the window and scrolls across.
-    cx.simulate_keystrokes("g t b shift-h");
+    cx.simulate_keystrokes("g t b s e");
     cx.run_until_parked();
     let first = cx.debug_bounds("card-LIV-3").expect("a backlog card");
     let other = cx.debug_bounds("card-LIV-1").expect("a planned card");
@@ -2087,9 +2087,9 @@ fn view_options_choose_list_or_board_above_a_line_and_keys_set_each_option(
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().layout, Layout::Board, "b still switches")
     });
-    cx.simulate_keystrokes("b shift-h");
+    cx.simulate_keystrokes("b s e");
     app.read_with(cx, |a, _| {
-        assert!(a.model().display().show_empty, "Shift+H shows empty groups");
+        assert!(a.model().display().show_empty, "s e shows empty groups");
         assert!(!a.model().display().show_dismissed, "and nothing else");
     });
     cx.simulate_keystrokes("s d");
@@ -2097,7 +2097,7 @@ fn view_options_choose_list_or_board_above_a_line_and_keys_set_each_option(
         assert!(a.model().display().show_dismissed, "h shows dismissed work");
         assert!(a.model().display().show_empty);
     });
-    cx.simulate_keystrokes("shift-h");
+    cx.simulate_keystrokes("s e");
     app.read_with(cx, |a, _| assert!(!a.model().display().show_empty));
 
     // Lessons have no board: their menu is the options alone, with no line.
@@ -2122,10 +2122,10 @@ fn the_board_shows_its_empty_columns_only_with_empty_groups(cx: &mut TestAppCont
     assert!(column(cx, "planned"), "the planned work has its column");
     assert!(!column(cx, "review"), "an empty column is hidden");
 
-    cx.simulate_keystrokes("shift-h");
+    cx.simulate_keystrokes("s e");
     redraw(cx);
-    assert!(column(cx, "review"), "Shift+H brings every column back");
-    cx.simulate_keystrokes("shift-h");
+    assert!(column(cx, "review"), "s e brings every column back");
+    cx.simulate_keystrokes("s e");
     redraw(cx);
     assert!(!column(cx, "review"));
 

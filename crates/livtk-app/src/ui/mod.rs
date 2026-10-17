@@ -2448,7 +2448,8 @@ impl LivtkApp {
             .items_center()
             .gap(px(2.))
             .rounded_xl()
-            .bg(color(SURFACE))
+            // Black, as the sidebar: the window's own colour; its border sets it apart.
+            .bg(color(WINDOW))
             .border_1()
             .border_color(color(BORDER_STRONG))
             .shadow_lg()

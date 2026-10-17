@@ -621,7 +621,7 @@ fn with_model_vectors_survive_a_rebuild_and_follow_edits() {
 
 #[test]
 #[ignore = "needs the model: LIVTK_TEST_MODELS=<dir> cargo test -- --ignored"]
-fn with_a_missing_model_search_falls_back_to_keywords() {
+fn with_model_gone_search_falls_back_to_keywords() {
     let dir = tempfile::tempdir().unwrap();
     let (mut ws, keys) = with_rules(dir.path());
     let empty = tempfile::tempdir().unwrap();

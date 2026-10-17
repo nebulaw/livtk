@@ -124,7 +124,7 @@ fn keyword_search_of_10k_nodes_per_keystroke() {
 /// `LIVTK_TEST_MODELS=<dir> cargo test --release -p livtk-core --test search -- --ignored --nocapture`
 #[test]
 #[ignore = "needs the model: LIVTK_TEST_MODELS=<dir>"]
-fn search_by_meaning_of_10k_nodes_per_keystroke() {
+fn with_model_search_by_meaning_of_10k_nodes_per_keystroke() {
     let models = PathBuf::from(std::env::var("LIVTK_TEST_MODELS").expect("set LIVTK_TEST_MODELS"));
     let (_dir, mut ws) = project_of(10_000);
     ws.set_models_dir(Some(models));

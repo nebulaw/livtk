@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 livtk-build.workspace = true
 livtk-core.workspace = true
+livtk-update.workspace = true
 gpui-kit.workspace = true
 # Code blocks in descriptions and notes coloured by language: the tree-sitter grammars of the
 # gpui-component gpui-kit is built on (and JSON, which comes with them), switched on here;

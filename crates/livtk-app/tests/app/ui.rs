@@ -2493,6 +2493,7 @@ fn the_menus_tick_what_is_on() {
         show_empty: true,
         show_dismissed: false,
         inbox: 3,
+        update: Some(15),
     };
     let bar = menu_bar(&state);
     let ticked = |menu: &str, item: &str| {
@@ -2520,6 +2521,22 @@ fn the_menus_tick_what_is_on() {
     assert_eq!(
         bar.iter().map(|m| m.name.to_string()).collect::<Vec<_>>(),
         ["livtk", "File", "Edit", "View", "Task", "Window", "Help"]
+    );
+    assert!(
+        ticked("livtk", "Restart to Update (build 15)").is_some(),
+        "offered once a build is staged"
+    );
+    let calm = menu_bar(&MenuState {
+        update: None,
+        ..state.clone()
+    });
+    let livtk = calm.iter().find(|m| m.name.as_ref() == "livtk").unwrap();
+    assert!(
+        !livtk.items.iter().any(|i| matches!(
+            i,
+            gpui_kit::MenuItem::Action { name, .. } if name.starts_with("Restart to Update")
+        )),
+        "and only then"
     );
 }
 

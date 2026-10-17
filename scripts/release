@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# A release into the local update source, from which the installed app offers "Restart to
+# Update": the bundle built from a release build, zipped as macOS zips apps, and a manifest
+# (format 1) beside it, with its build number, commit, SHA-256 and size.
+#   scripts/release [--quick] [notes]
+#     --quick  from the quick profile (seconds, not minutes): for trying an update locally
+#     notes    what changed, shown once after the update
+# The source is ~/Library/Application Support/livtk/updates, or $LIVTK_UPDATES_DIR/updates.
+# A build number comes from the commits on HEAD: commit before releasing, so a release is newer
+# than the app installed.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ "$(uname)" != Darwin ]; then
+  echo "release: releases are made on macOS for now" >&2
+  exit 1
+fi
+quick=()
+if [ "${1:-}" = "--quick" ]; then
+  quick=(--quick)
+  shift
+fi
+notes=${1:-}
+base=${LIVTK_UPDATES_DIR:-$HOME/Library/Application Support/livtk}
+source=$base/updates
+target=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)
+
+scripts/bundle-app "${quick[@]}"
+app=$target/livtk.app
+plist=$app/Contents/Info.plist
+read_key() { plutil -extract "$1" raw -o - "$plist"; }
+id=$(read_key CFBundleIdentifier)
+version=$(read_key CFBundleShortVersionString)
+build=$(read_key CFBundleVersion)
+commit=$(read_key LivtkCommit)
+if [ "$(read_key LivtkModified)" = true ]; then
+  echo "release: the sources have uncommitted changes; build $build is HEAD's number" >&2
+fi
+case "$(uname -m)" in
+  arm64) arch=aarch64 ;;
+  x86_64) arch=x86_64 ;;
+  *) echo "release: unknown architecture $(uname -m)" >&2; exit 1 ;;
+esac
+
+mkdir -p "$source"
+zip=livtk-$build.zip
+rm -f "$source/$zip"
+ditto -c -k --keepParent "$app" "$source/$zip"
+sha=$(shasum -a 256 "$source/$zip" | cut -d' ' -f1)
+size=$(stat -f %z "$source/$zip")
+# The manifest last, so a source never names an artifact that is not all there yet. Built with
+# plutil, field by field and typed, then turned into JSON.
+manifest=$source/livtk-$build.json
+draft=$(mktemp)
+plutil -create xml1 "$draft"
+plutil -insert format -integer 1 "$draft"
+plutil -insert app -string "$id" "$draft"
+plutil -insert version -string "$version" "$draft"
+plutil -insert build -integer "$build" "$draft"
+plutil -insert commit -string "$commit" "$draft"
+plutil -insert platform -string macos "$draft"
+plutil -insert arch -string "$arch" "$draft"
+plutil -insert artifact -string "$zip" "$draft"
+plutil -insert sha256 -string "$sha" "$draft"
+plutil -insert size -integer "$size" "$draft"
+plutil -insert notes -string "$notes" "$draft"
+plutil -convert json -o "$manifest" "$draft"
+rm -f "$draft"
+echo "released build $build ($commit) to $source"

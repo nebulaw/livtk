@@ -7,11 +7,11 @@ use gpui_kit::component::input;
 use gpui_kit::*;
 
 use super::{
-    About, AddLinkMenu, BringToFront, CloseWindow, Decide, GoActivity, GoDecisions, GoFindings,
-    GoGraph, GoInbox, GoLessons, GoTasks, HideApp, HideOthers, InstallCli, Minimize, NewTask, Note,
-    OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2, Priority3, Priority4, Quit, Reject,
-    ReportIssue, ShowAll, Standing, ToggleAll, ToggleEmpty, ToggleHelp, ToggleLayout,
-    ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
+    About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoActivity,
+    GoDecisions, GoFindings, GoGraph, GoInbox, GoLessons, GoTasks, HideApp, HideOthers, InstallCli,
+    Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette, Priority1, Priority2, Priority3,
+    Priority4, Quit, Reject, ReportIssue, RestartToUpdate, ShowAll, Standing, ToggleAll,
+    ToggleEmpty, ToggleHelp, ToggleLayout, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
 };
 
 /// What the menus show of the app's state: the projects and which is open, the view and its
@@ -27,6 +27,8 @@ pub struct MenuState {
     pub show_empty: bool,
     pub show_dismissed: bool,
     pub inbox: usize,
+    /// A newer build staged and waiting, by its number.
+    pub update: Option<u64>,
 }
 
 /// An item that runs `action`, ticked when `checked`.
@@ -90,19 +92,31 @@ fn projects(state: &MenuState) -> Vec<MenuItem> {
 pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
     let view = |i: usize| state.view == i;
     vec![
-        Menu::new("livtk").items([
-            MenuItem::action("About livtk", About),
-            MenuItem::separator(),
-            MenuItem::action("Install Command Line Tool", InstallCli),
-            MenuItem::separator(),
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Hide livtk", HideApp),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
-            MenuItem::separator(),
-            MenuItem::action("Quit livtk", Quit),
-        ]),
+        Menu::new("livtk").items(
+            [
+                MenuItem::action("About livtk", About),
+                MenuItem::action("Check for Updates…", CheckForUpdates),
+            ]
+            .into_iter()
+            .chain(state.update.map(|build| {
+                MenuItem::action(
+                    format!("Restart to Update (build {build})"),
+                    RestartToUpdate,
+                )
+            }))
+            .chain([
+                MenuItem::separator(),
+                MenuItem::action("Install Command Line Tool", InstallCli),
+                MenuItem::separator(),
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Hide livtk", HideApp),
+                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::action("Show All", ShowAll),
+                MenuItem::separator(),
+                MenuItem::action("Quit livtk", Quit),
+            ]),
+        ),
         Menu::new("File").items([
             MenuItem::action("New Task", NewTask),
             MenuItem::action("Open Project…", OpenFolder),

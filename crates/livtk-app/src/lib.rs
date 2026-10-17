@@ -6,3 +6,4 @@ pub mod launch;
 pub mod model;
 pub mod system;
 pub mod ui;
+pub mod updates;

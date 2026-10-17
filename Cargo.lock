@@ -3962,6 +3962,7 @@ dependencies = [
  "jiff",
  "livtk-build",
  "livtk-core",
+ "livtk-update",
  "log",
  "serde",
  "serde_json",
@@ -4005,6 +4006,17 @@ dependencies = [
  "unicode-normalization-alignments",
  "unicode_categories",
  "uuid",
+]
+
+[[package]]
+name = "livtk-update"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

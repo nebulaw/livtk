@@ -24,6 +24,20 @@ claude plugin marketplace add /path/to/this/repo     # or: /plugin marketplace a
 claude plugin install livtk@livtk                    # or: /plugin install livtk --marketplace nebulaw/tasks
 ```
 
+### Updates
+
+The app looks for a newer build when it starts, every 6 hours, and from livtk ▸ Check for
+Updates…. It stages one in the background (checking its size, SHA-256 and that it is the build
+its manifest names) and then offers **Restart to Update** in the livtk menu and the sidebar,
+never on its own. On it the app quits, a small helper inside the bundle (`livtk-update`) swaps
+the installed app for the new one and starts it; if the new build does not start, the old one
+comes back. Updates come from a local folder for now
+(`~/Library/Application Support/livtk/updates`), filled by:
+
+```
+scripts/release [--quick] ["what changed"]   # commit first: a release is numbered by its commit
+```
+
 The plugin is silent in any project without a `.livtk/` directory, so it can stay enabled
 everywhere. Optional per-project hook settings live in `.livtk/config.toml`:
 

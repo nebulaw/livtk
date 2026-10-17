@@ -89,6 +89,8 @@ actions!(
         About,
         AddLinkMenu,
         InstallCli,
+        CheckForUpdates,
+        RestartToUpdate,
         OpenGitHub,
         ReportIssue
     ]
@@ -292,6 +294,15 @@ pub fn run(dirs: Vec<PathBuf>, quiet: Option<Quiet>) {
                     app.model.tell_quiet(why);
                 }
                 app.follow_system(cx);
+                // Started by the updater: say it started well, so it stays, and what changed.
+                if crate::updates::report_started(livtk_build::BUILD) {
+                    let notes = crate::updates::notes_of(APP_ID, livtk_build::BUILD);
+                    app.model.inform(match notes {
+                        Some(n) => format!("Updated to {}. {n}", livtk_build::DESCRIBE),
+                        None => format!("Updated to {}.", livtk_build::DESCRIBE),
+                    });
+                }
+                app.watch_for_updates(cx);
                 app
             })
         }) {
@@ -510,6 +521,10 @@ pub struct LivtkApp {
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
+    /// A newer build, staged and verified, waiting for "Restart to Update".
+    update: Option<livtk_update::stage::Staged>,
+    /// A look for updates under way.
+    checking_updates: bool,
     /// Each board column's own scrolling, so a card moved to comes into view.
     column_scrolls: std::cell::RefCell<HashMap<GroupKey, ScrollHandle>>,
     /// Where the graph was drawn last frame, in window coordinates: its size fits the camera,
@@ -689,6 +704,8 @@ impl LivtkApp {
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             column_scrolls: Default::default(),
+            update: None,
+            checking_updates: false,
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
             sidebar_width: SIDEBAR_WIDTH,
@@ -1474,6 +1491,85 @@ impl LivtkApp {
         self.read_reduce_motion(cx);
     }
 
+    /// Look for updates now and every 6 hours after, as the installed app does (a test or a
+    /// development build looks only when asked).
+    pub fn watch_for_updates(&mut self, cx: &mut Context<Self>) {
+        const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+        self.check_updates(false, cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(EVERY).await;
+                if this
+                    .update(cx, |app, cx| app.check_updates(false, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Look for a newer build and stage it, off the main thread. Asked from the menu
+    /// (`asked`), the answer is told either way; on its own, only a build ready is.
+    fn check_updates(&mut self, asked: bool, cx: &mut Context<Self>) {
+        if self.checking_updates || self.update.is_some() && !asked {
+            return;
+        }
+        self.checking_updates = true;
+        let looked =
+            cx.background_spawn(async { crate::updates::check(APP_ID, livtk_build::BUILD) });
+        cx.spawn(async move |this, cx| {
+            let found = looked.await;
+            let _ = this.update(cx, |app, cx| {
+                app.checking_updates = false;
+                match found {
+                    Ok(Some(staged)) => {
+                        log::info!("update: build {} staged", staged.manifest.build);
+                        app.model.inform(format!(
+                            "livtk build {} is ready: Restart to Update, from the livtk menu or \
+                             the sidebar, when it suits you.",
+                            staged.manifest.build
+                        ));
+                        app.update = Some(staged);
+                    }
+                    Ok(None) if asked => app
+                        .model
+                        .inform(format!("livtk is up to date: {}.", livtk_build::DESCRIBE)),
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::warn!("update: {e}");
+                        if asked {
+                            app.model.warn(format!("Could not update: {e}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Restart to Update: start the helper that installs the staged build once this app has
+    /// quit, and quit (what the app remembers is written on the way out).
+    fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+        let Some(staged) = &self.update else { return };
+        let exe = std::env::current_exe().and_then(std::fs::canonicalize);
+        match exe
+            .map_err(|e| e.to_string())
+            .and_then(|exe| crate::updates::install(staged, &exe))
+        {
+            Ok(()) => {
+                log::info!("update: installing build {}", staged.manifest.build);
+                cx.quit();
+            }
+            Err(e) => {
+                self.model.warn(format!("Could not update: {e}"));
+                cx.notify();
+            }
+        }
+    }
+
     /// Ask the system whether it wants less motion, off the main thread, and do as it says.
     fn read_reduce_motion(&mut self, cx: &mut Context<Self>) {
         let asked = cx.background_spawn(async { crate::system::reduce_motion() });
@@ -1639,6 +1735,30 @@ impl LivtkApp {
             );
         }
         side.child(div().flex_1())
+            .when_some(self.update.as_ref(), |side, staged| {
+                side.child(
+                    div()
+                        .id("restart-to-update")
+                        .debug_selector(|| "restart-to-update".into())
+                        .px_2()
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded_lg()
+                        .text_color(color(ACCENT_HOVER))
+                        .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+                        .child(div().size(px(6.)).rounded_full().bg(color(ACCENT)))
+                        .child(div().flex_1().child("Restart to Update"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child(format!("build {}", staged.manifest.build)),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
+                )
+            })
             .child(
                 div()
                     .id("shortcuts")
@@ -4629,6 +4749,7 @@ impl LivtkApp {
             show_empty: d.show_empty,
             show_dismissed: d.show_dismissed,
             inbox: m.projects.iter().map(|p| p.inbox).sum(),
+            update: self.update.as_ref().map(|s| s.manifest.build),
         };
         if self.menu_state.as_ref() != Some(&state) {
             cx.set_menus(menus::menu_bar(&state));
@@ -5070,6 +5191,12 @@ impl Render for LivtkApp {
                     this.add_link_from_menu(window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
+                this.check_updates(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &RestartToUpdate, _, cx| {
+                this.restart_to_update(cx);
+            }))
             .on_action(cx.listener(|this, _: &InstallCli, _, cx| {
                 this.install_cli();
                 cx.notify();

@@ -39,7 +39,7 @@ else
   fi
   step "supply chain (cargo deny)" cargo deny --offline check
 fi
-step "tests: core and CLI" cargo test -q
+step "tests: core, CLI and updater" cargo test -q
 step "tests: the app, with UI tests" cargo test -q -p livtk-app
 if [ -d "$models/potion-retrieval-32M" ]; then
   with_models=(env LIVTK_TEST_MODELS="$models")

@@ -31,7 +31,7 @@ for arg in "$@"; do
     *) echo "bundle-app: unknown option $arg" >&2; exit 2 ;;
   esac
 done
-cargo build -q --locked --profile "$profile" -p livtk-app -p livtk-cli
+cargo build -q --locked --profile "$profile" -p livtk-app -p livtk-cli -p livtk-update
 built=$target/$profile
 # "livtk-app 0.4.0 (build 87, abc1234)", with ", modified" when the sources had changes.
 identity=$("$built/livtk-app" --version)
@@ -42,7 +42,8 @@ case "$identity" in *", modified)"*) modified=true ;; *) modified=false ;; esac
 app=$target/livtk.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
-cp "$built/livtk-app" "$built/livtk" "$app/Contents/MacOS/"
+# The app, the CLI, and the helper that installs an update once the app has quit.
+cp "$built/livtk-app" "$built/livtk" "$built/livtk-update" "$app/Contents/MacOS/"
 cat >"$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -1,0 +1,25 @@
+[package]
+name = "livtk-update"
+description = "livtk's updates: the manifest every update is described by, where updates come from, staging and verifying one, and the helper that swaps the app and rolls back"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "livtk-update"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,8 +1,19 @@
 [workspace]
 resolver = "3"
-members = ["crates/livtk-build", "crates/livtk-core", "crates/livtk-cli", "crates/livtk-app"]
+members = [
+    "crates/livtk-build",
+    "crates/livtk-core",
+    "crates/livtk-cli",
+    "crates/livtk-update",
+    "crates/livtk-app",
+]
 # The app pulls in a whole UI stack; plain `cargo build` and `cargo test` leave it out.
-default-members = ["crates/livtk-build", "crates/livtk-core", "crates/livtk-cli"]
+default-members = [
+    "crates/livtk-build",
+    "crates/livtk-core",
+    "crates/livtk-cli",
+    "crates/livtk-update",
+]
 
 [workspace.package]
 version = "0.4.0"
@@ -14,6 +25,7 @@ repository = "https://github.com/nebulaw/tasks"
 [workspace.dependencies]
 livtk-build = { path = "crates/livtk-build" }
 livtk-core = { path = "crates/livtk-core" }
+livtk-update = { path = "crates/livtk-update" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 jiff = "0.2.38"

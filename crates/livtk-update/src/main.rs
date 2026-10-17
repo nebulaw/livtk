@@ -15,7 +15,9 @@ use std::process::{Command, ExitCode};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use livtk_update::swap::{Outcome, Swap, swap};
+use std::path::Path;
+
+use livtk_update::swap::{Launcher, Outcome, Swap, swap};
 
 /// The variable a started app reads to know where to say it started.
 const HEALTH_VAR: &str = "LIVTK_UPDATE_HEALTH";
@@ -52,25 +54,8 @@ fn main() -> ExitCode {
         build,
         wait,
     };
-    let mut launch = |app: &std::path::Path| -> livtk_update::Result<()> {
-        let mut env = std::ffi::OsString::from(format!("{HEALTH_VAR}="));
-        env.push(&health);
-        let status = Command::new("open")
-            .arg("--env")
-            .arg(env)
-            .arg("-a")
-            .arg(app)
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(livtk_update::Error::Failed(format!(
-                "open {}",
-                app.display()
-            )))
-        }
-    };
-    match swap(&s, &mut launch) {
+    let mut launcher = Open;
+    match swap(&s, &mut launcher) {
         Ok(Outcome::Updated) => {
             eprintln!("livtk-update: updated to build {build}");
             ExitCode::SUCCESS
@@ -83,6 +68,37 @@ fn main() -> ExitCode {
             eprintln!("livtk-update: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Apps started and stopped as macOS does: `open`, and a signal to the app's own program.
+struct Open;
+
+impl Launcher for Open {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
+        let mut open = Command::new("open");
+        // A new instance: never just bring forward one that may still be running.
+        open.arg("-n");
+        if let Some(health) = health {
+            let mut env = std::ffi::OsString::from(format!("{HEALTH_VAR}="));
+            env.push(health);
+            open.arg("--env").arg(env);
+        }
+        if open.arg("-a").arg(app).status()?.success() {
+            Ok(())
+        } else {
+            Err(livtk_update::Error::Failed(format!(
+                "open {}",
+                app.display()
+            )))
+        }
+    }
+
+    fn stop(&mut self, app: &Path) {
+        let program = app.join("Contents/MacOS/livtk-app");
+        let _ = Command::new("pkill").arg("-f").arg(&program).status();
+        // Given a moment to go before its bundle is moved.
+        sleep(Duration::from_millis(500));
     }
 }
 

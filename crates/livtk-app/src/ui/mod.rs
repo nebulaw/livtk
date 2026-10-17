@@ -302,7 +302,14 @@ pub fn run(dirs: Vec<PathBuf>, quiet: Option<Quiet>) {
                         None => format!("Updated to {}.", livtk_build::DESCRIBE),
                     });
                 }
-                app.watch_for_updates(cx);
+                // Only the installed app looks: a development build never touches its staging.
+                let bundled = std::env::current_exe()
+                    .ok()
+                    .and_then(|e| std::fs::canonicalize(e).ok())
+                    .is_some_and(|e| crate::launch::in_bundle(&e));
+                if bundled {
+                    app.watch_for_updates(cx);
+                }
                 app
             })
         }) {
@@ -1491,8 +1498,8 @@ impl LivtkApp {
         self.read_reduce_motion(cx);
     }
 
-    /// Look for updates now and every 6 hours after, as the installed app does (a test or a
-    /// development build looks only when asked).
+    /// Look for updates now and every 6 hours after: the installed app does (a development
+    /// build or a test looks only when asked).
     pub fn watch_for_updates(&mut self, cx: &mut Context<Self>) {
         const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
         self.check_updates(false, cx);
@@ -1513,7 +1520,18 @@ impl LivtkApp {
     /// Look for a newer build and stage it, off the main thread. Asked from the menu
     /// (`asked`), the answer is told either way; on its own, only a build ready is.
     fn check_updates(&mut self, asked: bool, cx: &mut Context<Self>) {
-        if self.checking_updates || self.update.is_some() && !asked {
+        if let Some(staged) = &self.update {
+            // Staged already: told again when asked, never unpacked again under the menu.
+            if asked {
+                self.model.inform(format!(
+                    "livtk build {} is ready: Restart to Update.",
+                    staged.manifest.build
+                ));
+                cx.notify();
+            }
+            return;
+        }
+        if self.checking_updates {
             return;
         }
         self.checking_updates = true;

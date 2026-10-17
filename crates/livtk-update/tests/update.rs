@@ -164,56 +164,123 @@ fn mark(app: &Path) -> String {
     std::fs::read_to_string(app.join("Contents/mark")).unwrap()
 }
 
-#[test]
-fn the_swap_puts_the_new_build_in_place_once_it_starts_well() {
-    let dir = tempfile::tempdir().unwrap();
-    let installed = app(dir.path(), "livtk.app", "old");
-    let staged = app(&dir.path().join("staging"), "livtk.app", "new");
-    let health = dir.path().join("healthy");
-    let s = Swap {
-        installed: installed.clone(),
-        staged,
-        health: health.clone(),
-        build: 12,
-        wait: Duration::from_secs(2),
-    };
-    let mut started = Vec::new();
-    let outcome = swap(&s, &mut |app: &Path| {
-        started.push(mark(app));
-        std::fs::write(&health, "12").unwrap();
+/// A launcher that records what it starts and stops; `healthy` says whether the new build
+/// reports, and `fails` makes starting the new build fail outright.
+struct Fake {
+    started: Vec<(String, bool)>,
+    stopped: usize,
+    healthy: Option<(std::path::PathBuf, u64)>,
+    fails: bool,
+}
+
+impl Fake {
+    fn new() -> Fake {
+        Fake {
+            started: Vec::new(),
+            stopped: 0,
+            healthy: None,
+            fails: false,
+        }
+    }
+}
+
+impl livtk_update::swap::Launcher for Fake {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
+        self.started.push((mark(app), health.is_some()));
+        if health.is_some() && self.fails {
+            return Err(livtk_update::Error::Failed("open failed".into()));
+        }
+        if let (Some(h), Some((_, build))) = (health, &self.healthy) {
+            std::fs::write(h, build.to_string()).unwrap();
+        }
         Ok(())
-    })
-    .unwrap();
-    assert_eq!(outcome, Outcome::Updated);
-    assert_eq!(mark(&installed), "new");
-    assert_eq!(started, ["new"]);
-    let left: Vec<_> = std::fs::read_dir(dir.path())
+    }
+
+    fn stop(&mut self, _: &Path) {
+        self.stopped += 1;
+    }
+}
+
+fn hidden(dir: &Path) -> Vec<String> {
+    let mut left: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|n| n.starts_with('.'))
         .collect();
-    assert!(left.is_empty(), "nothing left beside it: {left:?}");
+    left.sort();
+    left
+}
+
+fn setup(dir: &Path, build: u64, wait: Duration) -> Swap {
+    Swap {
+        installed: app(dir, "livtk.app", "old"),
+        staged: app(&dir.join("staging"), "livtk.app", "new"),
+        health: dir.join("healthy"),
+        build,
+        wait,
+    }
 }
 
 #[test]
-fn a_build_that_does_not_start_well_is_rolled_back() {
+fn the_swap_puts_the_new_build_in_place_once_it_starts_well() {
     let dir = tempfile::tempdir().unwrap();
-    let installed = app(dir.path(), "livtk.app", "old");
-    let staged = app(&dir.path().join("staging"), "livtk.app", "broken");
-    let s = Swap {
-        installed: installed.clone(),
-        staged,
-        health: dir.path().join("healthy"),
-        build: 13,
-        wait: Duration::from_millis(300),
+    let s = setup(dir.path(), 12, Duration::from_secs(2));
+    let mut fake = Fake::new();
+    fake.healthy = Some((s.health.clone(), 12));
+    assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::Updated);
+    assert_eq!(mark(&s.installed), "new");
+    assert_eq!(fake.started, [("new".into(), true)], "asked to report");
+    assert!(hidden(dir.path()).is_empty(), "nothing left beside it");
+}
+
+#[test]
+fn a_build_that_does_not_start_well_is_stopped_and_rolled_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 13, Duration::from_millis(300));
+    let mut fake = Fake::new();
+    assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&s.installed), "old", "the old app is back");
+    assert_eq!(fake.stopped, 1, "the new build stopped first");
+    assert_eq!(
+        fake.started,
+        [("new".into(), true), ("old".into(), false)],
+        "the old one started again, not asked to report"
+    );
+}
+
+#[test]
+fn a_build_that_cannot_even_be_started_is_rolled_back_and_the_old_app_never_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 14, Duration::from_millis(300));
+    let mut fake = Fake::new();
+    fake.fails = true;
+    assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&s.installed), "old");
+    assert!(!hidden(dir.path()).contains(&".livtk.app-previous".to_owned()));
+    // Another update after it still has the old app to fall back on.
+    let again = Swap {
+        staged: app(&dir.path().join("staging2"), "livtk.app", "newer"),
+        ..s
     };
-    let mut started = Vec::new();
-    let outcome = swap(&s, &mut |app: &Path| {
-        started.push(mark(app));
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(outcome, Outcome::RolledBack);
-    assert_eq!(mark(&installed), "old", "the old app is back");
-    assert_eq!(started, ["broken", "old"], "and started again");
+    assert_eq!(swap(&again, &mut fake).unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&again.installed), "old");
+}
+
+#[test]
+fn an_artifact_beyond_the_manifests_folder_is_refused() {
+    let mut m = manifest(1, "/etc/hosts", HASH, 1);
+    assert!(Manifest::parse(&serde_json::to_string(&m).unwrap()).is_err());
+    m.artifact = "../x.zip".into();
+    assert!(Manifest::parse(&serde_json::to_string(&m).unwrap()).is_err());
+}
+
+#[test]
+fn an_interrupted_swap_gets_its_old_app_back_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 15, Duration::from_millis(300));
+    // As if a swap stopped after moving the old app aside.
+    std::fs::rename(&s.installed, dir.path().join(".livtk.app-previous")).unwrap();
+    let mut fake = Fake::new();
+    assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&s.installed), "old");
 }

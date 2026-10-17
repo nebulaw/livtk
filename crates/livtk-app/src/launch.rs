@@ -67,7 +67,9 @@ pub fn passed_on(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Vec<Os
         .into_iter()
         .filter(|(k, _)| {
             let k = k.to_string_lossy();
-            (k.starts_with("LIVTK_") || k.starts_with("XDG_")) && k != STARTED_IN
+            (k.starts_with("LIVTK_") || k.starts_with("XDG_"))
+                && k != STARTED_IN
+                && k != crate::updates::HEALTH_VAR
         })
         .map(|(k, v)| {
             let mut kv = k;

@@ -90,7 +90,8 @@ impl Manifest {
         if m.sha256.len() != 64 || !m.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("sha256 is not 64 hex digits".into());
         }
-        if m.artifact.is_empty() || m.artifact.contains("..") {
+        let path = std::path::Path::new(&m.artifact);
+        if m.artifact.is_empty() || path.is_absolute() || m.artifact.contains("..") {
             return Err("artifact is not a plain path beside the manifest".into());
         }
         Ok(Some(m))

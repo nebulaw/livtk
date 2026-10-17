@@ -36,12 +36,25 @@ fn beside(installed: &Path, what: &str) -> PathBuf {
     installed.with_file_name(format!(".{name}-{what}"))
 }
 
-/// Make the swap, starting each app with `launch` (which passes it the health file to write).
-pub fn swap(s: &Swap, launch: &mut dyn FnMut(&Path) -> Result<()>) -> Result<Outcome> {
+/// What the swap needs of the system: start an app (asking it, when `health` is given, to say
+/// there that it started), and stop an app that runs.
+pub trait Launcher {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> Result<()>;
+    fn stop(&mut self, app: &Path);
+}
+
+/// Make the swap. Once the installed app has been moved aside, any failure (the new build will
+/// not start, or does not say it started in time) puts it back and starts it again: the old app
+/// is never lost.
+pub fn swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
     let previous = beside(&s.installed, "previous");
     let incoming = beside(&s.installed, "incoming");
-    remove(&previous)?;
     remove(&incoming)?;
+    if !s.installed.exists() && previous.exists() {
+        // An earlier swap was interrupted with the old app moved aside: it goes back first.
+        std::fs::rename(&previous, &s.installed)?;
+    }
+    remove(&previous)?;
     // The staged build next to the installed one first: staging may be on another volume.
     move_or_copy(&s.staged, &incoming)?;
     std::fs::rename(&s.installed, &previous)?;
@@ -50,17 +63,20 @@ pub fn swap(s: &Swap, launch: &mut dyn FnMut(&Path) -> Result<()>) -> Result<Out
         return Err(e.into());
     }
     remove_file(&s.health)?;
-    launch(&s.installed)?;
-    if started(&s.health, s.build, s.wait) {
+    let started_well = launcher.start(&s.installed, Some(&s.health)).is_ok()
+        && started(&s.health, s.build, s.wait);
+    if started_well {
         remove(&previous)?;
         return Ok(Outcome::Updated);
     }
-    // It did not start well: the old app back, and started.
+    // It did not start well: stopped if it runs, moved out, the old app back and started as
+    // it always is (not asked to report: it is no update).
+    launcher.stop(&s.installed);
     let failed = beside(&s.installed, "failed");
     remove(&failed)?;
     std::fs::rename(&s.installed, &failed)?;
     std::fs::rename(&previous, &s.installed)?;
-    launch(&s.installed)?;
+    launcher.start(&s.installed, None)?;
     Ok(Outcome::RolledBack)
 }
 

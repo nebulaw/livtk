@@ -1883,6 +1883,8 @@ fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
     .unwrap();
     std::fs::write(root.join("docs/b.md"), "# Beta\n\nSee [a](a.md#second).\n").unwrap();
     let (app, cx) = open_app(cx, root);
+    // Where the reader lands, not its glide there.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1600., 1000.);
     cx.simulate_keystrokes("g o");
     redraw(cx);
@@ -2036,6 +2038,59 @@ fn a_doc_is_edited_in_place_and_saved(cx: &mut TestAppContext) {
         "saved: left at once"
     );
     app.read_with(cx, |a, _| assert!(a.model().docs.editing.is_none()));
+}
+
+/// Settings: Cmd-comma opens it; the docs' text size and density change the reader and are
+/// the model's to remember; Esc shuts it.
+#[gpui_kit::test]
+fn settings_set_how_docs_read(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    assert!(cx.debug_bounds("settings").is_some());
+    click_on(cx, "reading-size-large");
+    click_on(cx, "reading-density-compact");
+    app.read_with(cx, |a, _| {
+        let r = a.model().reading;
+        assert_eq!(
+            (r.size, r.compact),
+            (livtk_app::model::ReadingSize::Large, true)
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(cx.debug_bounds("settings").is_none());
+}
+
+/// A project without docs offers to start them: a README in docs/, opened.
+#[gpui_kit::test]
+fn the_docs_can_be_started_from_their_empty_view(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    click_on(cx, "empty-create-docs");
+    redraw(cx);
+    assert!(dir.path().join("docs/README.md").is_file());
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/README.md"))
+    });
+}
+
+/// An empty list offers its way on: the filter cleared when one hides everything.
+#[gpui_kit::test]
+fn an_empty_list_offers_to_clear_its_filter(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g t");
+    app.update(cx, |a, _| a.model_mut().set_filter("nothing matches this"));
+    redraw(cx);
+    click_on(cx, "empty-clear-filter");
+    app.read_with(cx, |a, _| {
+        assert!(a.model().display().filter.is_empty());
+        assert!(!a.model().rows.is_empty());
+    });
 }
 
 #[gpui_kit::test]

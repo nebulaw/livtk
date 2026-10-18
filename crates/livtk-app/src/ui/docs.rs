@@ -6,6 +6,7 @@
 //! and forward. What it shows is `model::docs`'s.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use gpui_component::Sizable;
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
@@ -17,23 +18,25 @@ use gpui_kit::*;
 
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
-use super::{FollowLink, LivtkApp, RevealInDoc, state_mark};
+use super::{FollowLink, LivtkApp, RevealInDoc, ease_out_cubic, state_mark};
 use crate::model::docs::{CalloutKind, DocRow, Saved, callout, find_in};
 
 /// The tree's width, a row's height and its indent per level.
 const TREE_W: f32 = 260.;
 const TREE_ROW: f32 = 28.;
 const INDENT: f32 = 14.;
-/// The doc's measure (about seventy characters a line at its size), its text and line height.
+/// The doc's measure: about seventy characters a line at its regular size (Settings sets the
+/// size and the line's height).
 const READING_W: f32 = 720.;
-const READING_TEXT: f32 = 16.;
-const READING_LINE: f32 = 1.65;
 /// The tree's search field's height.
 const SEARCH_H: f32 = 40.;
 /// The outline at the right, shown when the reader has room for it beside the doc.
 const OUTLINE_W: f32 = 220.;
 /// A found match, and the one the find bar is on.
 const FOUND: f32 = 0.28;
+/// A doc's fade as it comes in, and the glide to a heading.
+const DOC_FADE: Duration = Duration::from_millis(180);
+const GLIDE: Duration = Duration::from_millis(260);
 const FOUND_HERE: f32 = 0.6;
 
 /// What the reader keeps between frames: its scrolling, each section's markdown (with the text
@@ -51,6 +54,8 @@ pub(super) struct Reader {
     pub editor: Option<Entity<EditorState>>,
     conflict: bool,
     leaving: bool,
+    /// The glide to a heading under way, by number: a newer one stops it.
+    glide: usize,
     /// Every match, by section and range in its rendered text; the one the bar is on.
     matches: Vec<(usize, Range<usize>)>,
     at: usize,
@@ -68,6 +73,7 @@ impl Reader {
             editor: None,
             conflict: false,
             leaving: false,
+            glide: 0,
             matches: Vec::new(),
             at: 0,
         }
@@ -86,6 +92,14 @@ impl LivtkApp {
                     docs.dir
                 ),
             )
+            .child(super::empty_action(
+                "empty-create-docs",
+                "Start the docs",
+                cx.listener(|this, _, _, cx| {
+                    this.model.start_docs();
+                    cx.notify();
+                }),
+            ))
             .into_any_element();
         }
         self.sync_sections(cx);
@@ -348,7 +362,7 @@ impl LivtkApp {
         if let Some(slug) = self.model.docs.anchor.take()
             && let Some(i) = self.model.docs.page.section_of(&slug)
         {
-            self.reader.scroll.scroll_to_top_of_item(i + 1);
+            self.glide_to(i + 1, cx);
         }
     }
 
@@ -381,8 +395,9 @@ impl LivtkApp {
             .child(self.doc_header(cx));
         match &docs.text {
             Some(_) => {
+                let reading = self.model.reading;
                 for (i, (_, state)) in self.reader.sections.iter().enumerate() {
-                    page = page.child(section(i, state));
+                    page = page.child(section(i, state, reading));
                 }
                 page = page
                     .children(self.mentioned_in(cx))
@@ -398,6 +413,23 @@ impl LivtkApp {
                 }
             }
         }
+        // A doc coming in fades up, briefly; with less motion asked for, it is simply there.
+        let fade = if cx.reduce_motion() {
+            Duration::ZERO
+        } else {
+            DOC_FADE
+        };
+        let page = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .child(page)
+            .with_animation(
+                SharedString::from(format!("doc-in-{}", docs.open.clone().unwrap_or_default())),
+                Animation::new(fade).with_easing(ease_out_cubic),
+                |el, t| el.opacity(0.35 + 0.65 * t),
+            );
         div()
             .flex_1()
             .min_w_0()
@@ -806,13 +838,57 @@ impl LivtkApp {
                     .hover(|s| s.text_color(color(TEXT_2)))
                     .truncate()
                     .child(h.title.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.reader.scroll.scroll_to_top_of_item(i + 1);
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(move |this, _, _, cx| this.glide_to(i + 1, cx))),
             );
         }
         list
+    }
+
+    /// The reader glides to put its `item`th child at its top; with less motion asked for, it
+    /// is there at once.
+    fn glide_to(&mut self, item: usize, cx: &mut Context<Self>) {
+        let scroll = self.reader.scroll.clone();
+        let (Some(at), view) = (scroll.bounds_for_item(item), scroll.bounds()) else {
+            scroll.scroll_to_top_of_item(item);
+            cx.notify();
+            return;
+        };
+        let from = scroll.offset();
+        let to = (from.y - (at.top() - view.top()))
+            .min(px(0.))
+            .max(-scroll.max_offset().y);
+        if cx.reduce_motion() {
+            scroll.set_offset(point(from.x, to));
+            cx.notify();
+            return;
+        }
+        self.reader.glide += 1;
+        let glide = self.reader.glide;
+        cx.spawn(async move |this, cx| {
+            let start = std::time::Instant::now();
+            loop {
+                let t = (start.elapsed().as_secs_f32() / GLIDE.as_secs_f32()).min(1.);
+                let eased = ease_out_cubic(t);
+                let alive = this.update(cx, |this, cx| {
+                    // A newer glide takes over.
+                    if this.reader.glide != glide {
+                        return false;
+                    }
+                    this.reader
+                        .scroll
+                        .set_offset(point(from.x, from.y + (to - from.y) * eased));
+                    cx.notify();
+                    true
+                });
+                if !matches!(alive, Ok(true)) || t >= 1. {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+            }
+        })
+        .detach();
     }
 
     /// ⌘F: a bar over the reader's top right: the query, where in the matches it is, the way
@@ -1312,9 +1388,9 @@ fn measure() -> Div {
 
 /// One section of the doc, in the reading style: links followed by the app, code blocks with a
 /// copy button, a line asked to be seen scrolled to.
-fn section(i: usize, state: &Entity<TextViewState>) -> Div {
+fn section(i: usize, state: &Entity<TextViewState>, reading: crate::model::Reading) -> Div {
     let style = TextViewStyle::default()
-        .paragraph_gap(rems(1.))
+        .paragraph_gap(rems(reading.gap()))
         .heading_font_size(|level, _| {
             px(match level {
                 1 => 26.,
@@ -1327,8 +1403,8 @@ fn section(i: usize, state: &Entity<TextViewState>) -> Div {
     measure()
         .debug_selector(move || id.clone())
         .pt_4()
-        .text_size(px(READING_TEXT))
-        .line_height(relative(READING_LINE))
+        .text_size(px(reading.size.points()))
+        .line_height(relative(reading.line()))
         .text_color(color(TEXT_2))
         .child(
             TextView::new(state)

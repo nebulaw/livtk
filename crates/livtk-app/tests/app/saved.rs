@@ -214,3 +214,21 @@ fn recent_projects_come_latest_first_and_are_kept() {
     assert_eq!(back.current, 1);
     assert_eq!(back.recent_projects(), [1, 2, 0]);
 }
+
+/// How docs read comes back after a restart.
+#[test]
+fn the_reading_settings_are_kept() {
+    let a = tempfile::tempdir().unwrap();
+    project(a.path());
+    let mut m = open(&[a.path()]);
+    m.reading = livtk_app::model::Reading {
+        size: livtk_app::model::ReadingSize::Small,
+        compact: true,
+    };
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = open(&[a.path()]);
+    back.restore(&Saved::load(&path));
+    assert_eq!(back.reading, m.reading);
+}

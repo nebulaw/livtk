@@ -10,9 +10,9 @@ use super::{
     About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoActivity,
     GoDecisions, GoDocs, GoFindings, GoGraph, GoInbox, GoLessons, GoTasks, GoTerminal, HideApp,
     HideOthers, InstallCli, Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette,
-    Priority1, Priority2, Priority3, Priority4, Quit, Reject, ReportIssue, RestartToUpdate,
-    ShowAll, Standing, ToggleAll, ToggleBottom, ToggleEmpty, ToggleHelp, ToggleLayout, TogglePanel,
-    ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
+    OpenSettings, Priority1, Priority2, Priority3, Priority4, Quit, Reject, ReportIssue,
+    RestartToUpdate, ShowAll, Standing, ToggleAll, ToggleBottom, ToggleEmpty, ToggleHelp,
+    ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
 };
 
 /// What the menus show of the app's state: the projects and which is open, the view and its
@@ -96,6 +96,7 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
         Menu::new("livtk").items(
             [
                 MenuItem::action("About livtk", About),
+                MenuItem::action("Settings…", OpenSettings),
                 MenuItem::action("Check for Updates…", CheckForUpdates),
             ]
             .into_iter()

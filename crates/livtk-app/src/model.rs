@@ -97,6 +97,55 @@ impl View {
     }
 }
 
+/// How docs read, as Settings sets it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    pub size: ReadingSize,
+    pub compact: bool,
+}
+
+/// The docs' text size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReadingSize {
+    Small,
+    #[default]
+    Regular,
+    Large,
+}
+
+impl ReadingSize {
+    pub const ALL: [ReadingSize; 3] =
+        [ReadingSize::Small, ReadingSize::Regular, ReadingSize::Large];
+
+    /// The text's size in points.
+    pub const fn points(self) -> f32 {
+        match self {
+            ReadingSize::Small => 15.,
+            ReadingSize::Regular => 16.,
+            ReadingSize::Large => 18.,
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            ReadingSize::Small => "Small",
+            ReadingSize::Regular => "Regular",
+            ReadingSize::Large => "Large",
+        }
+    }
+}
+
+impl Reading {
+    /// The line's height as a share of the text's size, and the gap between paragraphs.
+    pub const fn line(self) -> f32 {
+        if self.compact { 1.45 } else { 1.65 }
+    }
+
+    pub const fn gap(self) -> f32 {
+        if self.compact { 0.7 } else { 1. }
+    }
+}
+
 /// How the task view lays out its rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -386,6 +435,8 @@ pub struct Model {
     wrote: Vec<(PathBuf, Option<Uuid>)>,
     /// Whether the human was told that this app posts no system notifications where it runs.
     pub told_no_notifications: bool,
+    /// How docs read: their text's size, and how close their lines sit.
+    pub reading: Reading,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
     /// What came into an inbox from someone else since the view last took it.
@@ -469,6 +520,7 @@ impl Model {
             docs_open: HashMap::new(),
             wrote: Vec::new(),
             told_no_notifications: false,
+            reading: Reading::default(),
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,

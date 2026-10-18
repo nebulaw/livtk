@@ -563,6 +563,33 @@ impl Model {
         true
     }
 
+    /// A project without docs gets its docs' folder and a README to begin with, opened.
+    pub fn start_docs(&mut self) {
+        let Some(p) = self.projects.get(self.current) else {
+            return;
+        };
+        let path = format!("{}/README.md", p.ws.docs_dir());
+        let file = p.ws.root().join(&path);
+        if !file.exists() {
+            let text = format!(
+                "# {name}\n\nThe docs of {name}: what it is, how it works, and how to work on it.\n\n\
+                 ## Start here\n\nWrite what someone new should read first.\n\n\
+                 > [!TIP]\n> Link a doc to a task (in its panel, Add link, A doc), and Claude reads \
+                 it when the task starts.\n",
+                name = p.name
+            );
+            let written = file
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&file, text));
+            if let Err(e) = written {
+                self.warn(format!("The docs could not be started: {e}"));
+                return;
+            }
+        }
+        self.open_doc(&path);
+    }
+
     /// Edit the open doc in the app: its text to edit, as it is on disk.
     pub fn edit_doc(&mut self) -> Option<String> {
         let path = self.docs.open.clone()?;

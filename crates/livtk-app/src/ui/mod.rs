@@ -84,6 +84,7 @@ actions!(
         GoDocs,
         FindInDoc,
         SaveDoc,
+        OpenSettings,
         DocBack,
         DocForward,
         ZoomIn,
@@ -242,7 +243,7 @@ const TITLE_LINE: f32 = 28.;
 const TEXTAREA_PX: Pixels = px(4.);
 
 /// Quick to start, gentle to land: the panel opening.
-fn ease_out_cubic(t: f32) -> f32 {
+pub(super) fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
@@ -495,6 +496,7 @@ pub fn bind_keys(cx: &mut App) {
         // The Docs view's: find in the doc, back and forward through the docs read.
         KeyBinding::new("secondary-f", FindInDoc, None),
         KeyBinding::new("secondary-s", SaveDoc, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-[", DocBack, None),
         KeyBinding::new("secondary-]", DocForward, None),
         KeyBinding::new("secondary-alt-b", TogglePanel, None),
@@ -678,6 +680,8 @@ pub struct LivtkApp {
     help: bool,
     /// The About modal is open.
     about: bool,
+    /// Settings, open.
+    settings: bool,
     /// What the menu bar and the Dock menu were last made from.
     menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
@@ -888,6 +892,7 @@ impl LivtkApp {
             form: None,
             help: false,
             about: false,
+            settings: false,
             menu_state: None,
             editing: None,
             last_detail: None,
@@ -1110,7 +1115,7 @@ impl LivtkApp {
     /// Give the keys to what is in front: the new-task form, the palette, the find bar, else the
     /// list.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.help || self.about {
+        if self.help || self.about || self.settings {
             self.modal_focus.focus(window, cx);
         } else if let Some(form) = &self.form {
             form.title.read(cx).focus_handle(cx).focus(window, cx);
@@ -1854,7 +1859,9 @@ impl LivtkApp {
     /// Close the overlay on top, and only it (About, the shortcuts, the palette, then the form),
     /// and give the keys to what is now on top.
     fn close_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.about {
+        if self.settings {
+            self.settings = false;
+        } else if self.about {
             self.about = false;
         } else if self.help {
             self.help = false;
@@ -1874,6 +1881,7 @@ impl LivtkApp {
         self.form = None;
         self.help = false;
         self.about = false;
+        self.settings = false;
         self.focus_main(window, cx);
         cx.notify();
     }
@@ -3710,8 +3718,13 @@ impl LivtkApp {
             return empty(
                 Icon::OpenProject,
                 "No livtk projects yet",
-                "Run `livtk init` in a project, then open it with Open project, or start `livtk-app DIR`.",
+                "Run `livtk init` in a project, then open it here, or start `livtk-app DIR`.",
             )
+            .child(empty_action(
+                "empty-open-project",
+                "Open a project",
+                cx.listener(|this, _, _, cx| this.open_folder(cx)),
+            ))
             .into_any_element();
         }
         match (self.model.view, self.model.layout) {
@@ -3731,6 +3744,7 @@ impl LivtkApp {
                 ),
             )
             .debug_selector(|| "board-empty".into())
+            .children(self.empty_list_action(cx))
             .into_any_element(),
             (View::Tasks, Layout::Board) => self.board(cx).into_any_element(),
             _ => self.list(window, cx).into_any_element(),
@@ -4245,17 +4259,43 @@ impl LivtkApp {
             .into_any_element()
     }
 
+    /// An empty list's way on: the filter cleared, when one hides what is there; else a new
+    /// task, where tasks are.
+    fn empty_list_action(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        if !self.model.display().filter.is_empty() {
+            return Some(empty_action(
+                "empty-clear-filter",
+                "Clear the filter",
+                cx.listener(|this, _, window, cx| {
+                    this.model.set_filter("");
+                    this.sync_filter(window, cx);
+                    cx.notify();
+                }),
+            ));
+        }
+        (self.model.view == View::Tasks).then(|| {
+            empty_action(
+                "empty-new-task",
+                "New task",
+                cx.listener(|this, _, window, cx| this.open_form(window, cx)),
+            )
+        })
+    }
+
     /// Tasks, lessons, decisions or findings: a virtualised list in solid group bands.
     fn list(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.model.rows.is_empty() && self.model.groups.is_empty() {
             let what = self.model.view.title().to_lowercase();
             return div()
                 .size_full()
-                .child(empty(
-                    view_icon(self.model.view),
-                    &format!("No {what} here"),
-                    "Clear the filter, press S D to show dismissed work, or N for a new task.",
-                ))
+                .child(
+                    empty(
+                        view_icon(self.model.view),
+                        &format!("No {what} here"),
+                        "Clear the filter, press S D to show dismissed work, or N for a new task.",
+                    )
+                    .children(self.empty_list_action(cx)),
+                )
                 .into_any_element();
         }
         // The rows, then the dock's room at the end of what scrolls.
@@ -5477,6 +5517,104 @@ impl LivtkApp {
     }
 
     /// About livtk: its name, which build this is, what it is for, where it lives.
+    /// Settings: how docs read (their text's size, how close their lines sit).
+    fn settings_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.settings {
+            return None;
+        }
+        let reading = self.model.reading;
+        let choice = |id: String, label: &'static str, on: bool| {
+            div()
+                .id(SharedString::from(id.clone()))
+                .debug_selector(move || id.clone())
+                .h(px(26.))
+                .px_3()
+                .flex()
+                .items_center()
+                .rounded_md()
+                .text_sm()
+                .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
+                .when(!on, |d| {
+                    d.text_color(color(TEXT_3))
+                        .hover(|h| h.text_color(color(TEXT_2)))
+                })
+                .child(label)
+        };
+        let segmented = || {
+            div()
+                .flex()
+                .p(px(2.))
+                .gap(px(2.))
+                .rounded_lg()
+                .bg(color(SURFACE))
+                .border_1()
+                .border_color(color(BORDER))
+        };
+        let mut sizes = segmented();
+        for size in crate::model::ReadingSize::ALL {
+            sizes = sizes.child(
+                choice(
+                    format!("reading-size-{}", size.name().to_lowercase()),
+                    size.name(),
+                    reading.size == size,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model.reading.size = size;
+                    cx.notify();
+                })),
+            );
+        }
+        let mut density = segmented();
+        for (compact, label) in [(false, "Comfortable"), (true, "Compact")] {
+            density = density.child(
+                choice(
+                    format!("reading-density-{}", label.to_lowercase()),
+                    label,
+                    reading.compact == compact,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model.reading.compact = compact;
+                    cx.notify();
+                })),
+            );
+        }
+        let row = |label: &'static str, control: Div| {
+            div()
+                .flex()
+                .items_center()
+                .child(div().flex_1().text_color(color(TEXT_2)).child(label))
+                .child(control)
+        };
+        let card = div()
+            .debug_selector(|| "settings".into())
+            .w(px(480.))
+            .p_5()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .child("livtk")
+                    .child("›")
+                    .child("Settings"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT_4))
+                    .child("Reading docs"),
+            )
+            .child(row("Text size", sizes))
+            .child(row("Density", density));
+        Some(self.modal("settings-modal", true, true, card, cx))
+    }
+
     fn about_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.about {
             return None;
@@ -5917,6 +6055,7 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
+        let settings = self.settings_overlay(cx);
         let palette = self.palette_overlay(cx);
         let notice = self.notice(cx);
         let list_area = div()
@@ -6080,6 +6219,12 @@ impl Render for LivtkApp {
             }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                this.show_over_form(window, cx);
+                this.settings = true;
+                this.modal_focus.focus(window, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.show_over_form(window, cx);
                 this.about = true;
@@ -6239,6 +6384,7 @@ impl Render for LivtkApp {
             .children(palette)
             .children(help)
             .children(about)
+            .children(settings)
             .children(notice)
             .children(drag)
     }
@@ -6935,6 +7081,30 @@ fn empty(glyph: Icon, title: &str, hint: &str) -> Div {
                 .text_color(color(TEXT_4))
                 .child(hint.to_owned()),
         )
+}
+
+/// An empty state's way on: one button, the accent's.
+fn empty_action(
+    id: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .mt_3()
+        .h(px(30.))
+        .px_3()
+        .flex()
+        .items_center()
+        .rounded_lg()
+        .bg(color(ACCENT))
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color(TEXT))
+        .hover(|h| h.bg(color(ACCENT_HOVER)))
+        .child(label)
+        .on_click(on_click)
 }
 
 /// A row that flashes the accent once when someone else changed it.

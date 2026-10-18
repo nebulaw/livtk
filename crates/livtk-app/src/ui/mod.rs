@@ -83,6 +83,7 @@ actions!(
         GoTerminal,
         GoDocs,
         FindInDoc,
+        SaveDoc,
         DocBack,
         DocForward,
         ZoomIn,
@@ -293,6 +294,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "R"], "Graph"),
     ("Navigate", &["G", "then", "O"], "Docs"),
     ("Docs", &[keys::MOD, "+", "F"], "Find in the doc"),
+    ("Docs", &[keys::MOD, "+", "S"], "Save the doc being edited"),
     ("Docs", &[keys::MOD, "+", "["], "Back to the doc before"),
     ("Docs", &[keys::MOD, "+", "]"], "Forward again"),
     ("Navigate", &["G", "then", "X"], "Terminal"),
@@ -492,6 +494,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-j", ToggleBottom, None),
         // The Docs view's: find in the doc, back and forward through the docs read.
         KeyBinding::new("secondary-f", FindInDoc, None),
+        KeyBinding::new("secondary-s", SaveDoc, None),
         KeyBinding::new("secondary-[", DocBack, None),
         KeyBinding::new("secondary-]", DocForward, None),
         KeyBinding::new("secondary-alt-b", TogglePanel, None),
@@ -1116,6 +1119,8 @@ impl LivtkApp {
                 .read(cx)
                 .focus_handle(cx)
                 .focus(window, cx);
+        } else if let Some(editor) = &self.reader.editor {
+            editor.read(cx).focus_handle(cx).focus(window, cx);
         } else if self.reader.finding {
             self.reader.find.read(cx).focus_handle(cx).focus(window, cx);
         } else {
@@ -6021,9 +6026,14 @@ impl Render for LivtkApp {
             (self.model.view == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
         let docs_search = (self.model.view == View::Docs && !self.model.docs.tree.is_empty())
             .then(|| self.docs_search_field());
-        let main = match self.terminal_view(cx) {
-            Some(t) => div().flex_1().min_h_0().child(t).into_any_element(),
-            None => list_area.into_any_element(),
+        // Editing a doc: its editor in the list's place too, so typing is text.
+        let editing = (self.model.view == View::Docs)
+            .then(|| self.doc_editor(cx))
+            .flatten();
+        let main = match (self.terminal_view(cx), editing) {
+            (_, Some(e)) => e,
+            (Some(t), None) => div().flex_1().min_h_0().child(t).into_any_element(),
+            (None, None) => list_area.into_any_element(),
         };
         div()
             .size_full()
@@ -6133,6 +6143,11 @@ impl Render for LivtkApp {
             // closes its menu, an editor cancels, a modal closes) take it first, as GPUI stops an
             // action at the first handler, so it reaches here only from the rest (a note).
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
+                // Editing a doc, Esc leaves (asking first, with unsaved text).
+                if this.reader.editor.is_some() {
+                    this.doc_leave_edit(false, window, cx);
+                    return;
+                }
                 // In the find bar, Esc shuts it.
                 if this.reader.finding {
                     this.close_find(window, cx);
@@ -6142,6 +6157,7 @@ impl Render for LivtkApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FindInDoc, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &SaveDoc, _, cx| this.doc_save(false, cx)))
             .on_action(cx.listener(|this, _: &DocBack, _, cx| {
                 if this.model.view == View::Docs {
                     this.model.doc_back();

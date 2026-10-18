@@ -8,7 +8,7 @@
 use std::ops::Range;
 
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_component::text::{
     MarkdownNode, RangeHighlight, TextView, TextViewState, TextViewStyle, markdown_ast,
 };
@@ -18,7 +18,7 @@ use gpui_kit::*;
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
 use super::{FollowLink, LivtkApp, RevealInDoc, state_mark};
-use crate::model::docs::{CalloutKind, DocRow, callout, find_in};
+use crate::model::docs::{CalloutKind, DocRow, Saved, callout, find_in};
 
 /// The tree's width, a row's height and its indent per level.
 const TREE_W: f32 = 260.;
@@ -46,6 +46,11 @@ pub(super) struct Reader {
     pub finding: bool,
     /// The tree's search, across the docs' titles and text.
     pub search: Entity<InputState>,
+    /// The doc's markdown, while it is edited in the app; whether the file changed on disk
+    /// since (a save then asks), and whether leaving would lose what was typed (Esc asks).
+    pub editor: Option<Entity<EditorState>>,
+    conflict: bool,
+    leaving: bool,
     /// Every match, by section and range in its rendered text; the one the bar is on.
     matches: Vec<(usize, Range<usize>)>,
     at: usize,
@@ -60,6 +65,9 @@ impl Reader {
             find: cx.new(|cx| InputState::new(window, cx).placeholder("Find in the doc")),
             finding: false,
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search docs")),
+            editor: None,
+            conflict: false,
+            leaving: false,
             matches: Vec::new(),
             at: 0,
         }
@@ -520,6 +528,23 @@ impl LivtkApp {
                     cx.notify();
                 })),
         );
+        let file = path.clone();
+        let actions = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(header_button(
+                "doc-edit",
+                Icon::Edit,
+                "Edit",
+                cx.listener(|this, _, window, cx| this.doc_start_edit(window, cx)),
+            ))
+            .child(header_button(
+                "doc-open-editor",
+                Icon::ArrowUpRight,
+                "Open in editor",
+                cx.listener(move |this, _, _, cx| this.open_in_editor(&file, cx)),
+            ));
         measure()
             .debug_selector(|| "doc-header".into())
             .pt(px(40.))
@@ -527,7 +552,13 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .gap_3()
-            .child(crumbs)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(div().flex_1().child(crumbs))
+                    .child(actions),
+            )
             .child(
                 div()
                     .debug_selector(|| "doc-title".into())
@@ -972,6 +1003,306 @@ impl LivtkApp {
             cx.notify();
         }
     }
+}
+
+impl LivtkApp {
+    /// Edit the open doc in the app: the reader gives way to its markdown.
+    pub(super) fn doc_start_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.model.edit_doc() else {
+            return;
+        };
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("markdown")
+                .line_number(false)
+                .soft_wrap(true)
+        });
+        editor.update(cx, |s, cx| s.set_value(text, window, cx));
+        editor.read(cx).focus_handle(cx).focus(window, cx);
+        self.reader.editor = Some(editor);
+        self.reader.conflict = false;
+        self.reader.leaving = false;
+        cx.notify();
+    }
+
+    /// What is typed differs from what was last read or saved.
+    fn edit_dirty(&self, cx: &App) -> bool {
+        match (&self.reader.editor, &self.model.docs.editing) {
+            (Some(editor), Some(edit)) => editor.read(cx).value().as_ref() != edit.base,
+            _ => false,
+        }
+    }
+
+    /// ⌘S: written, unless the file changed on disk meanwhile (then asked); `force`, written
+    /// over whatever it holds.
+    pub(super) fn doc_save(&mut self, force: bool, cx: &mut Context<Self>) {
+        let Some(editor) = &self.reader.editor else {
+            return;
+        };
+        let text = editor.read(cx).value().to_string();
+        match self.model.save_doc(&text, force) {
+            Saved::Written => {
+                self.reader.conflict = false;
+                self.reader.leaving = false;
+            }
+            Saved::Changed => self.reader.conflict = true,
+            Saved::Failed(why) => self.model.warn(format!("The doc was not saved: {why}")),
+        }
+        cx.notify();
+    }
+
+    /// Esc: the reader again; with unsaved text, asked first (a second Esc keeps editing).
+    pub(super) fn doc_leave_edit(
+        &mut self,
+        discard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.edit_dirty(cx) && !discard {
+            self.reader.leaving = !self.reader.leaving;
+            cx.notify();
+            return;
+        }
+        self.reader.editor = None;
+        self.reader.conflict = false;
+        self.reader.leaving = false;
+        self.model.stop_edit_doc();
+        self.focus_main(window, cx);
+        cx.notify();
+    }
+
+    /// The doc in the editor the system has for it: `$VISUAL`, else VS Code, else the one
+    /// macOS opens text with.
+    pub(super) fn open_in_editor(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(file) = self.model.doc_file(path) else {
+            return;
+        };
+        let visual = std::env::var("VISUAL")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let run = |program: &str, args: &[&str]| {
+            std::process::Command::new(program)
+                .args(args)
+                .arg(&file)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .is_ok()
+        };
+        let opened = match &visual {
+            Some(v) => {
+                let mut parts = v.split_whitespace();
+                let program = parts.next().unwrap_or_default();
+                let args: Vec<&str> = parts.filter(|a| *a != "-w" && *a != "--wait").collect();
+                run(program, &args)
+            }
+            None => run("code", &[]) || run("open", &["-t"]) || run("xdg-open", &[]),
+        };
+        if !opened {
+            self.model
+                .warn("No editor would open the doc. Set VISUAL to the one you use.");
+        }
+        cx.notify();
+    }
+
+    /// The doc being edited, in the content's place (outside the list's keys, so typing is
+    /// text): a bar with where it is, what to do, and the markdown.
+    pub(super) fn doc_editor(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editor = self.reader.editor.as_ref()?;
+        let path = self.model.docs.editing.as_ref()?.path.clone();
+        let dirty = self.edit_dirty(cx);
+        let bar = div()
+            .debug_selector(|| "doc-editor-bar".into())
+            .h(px(44.))
+            .flex_none()
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(color(BORDER))
+            .text_sm()
+            .child(icon(Icon::Edit, 14., TEXT_3))
+            .child(div().text_color(color(TEXT_2)).child(path))
+            .when(dirty, |d| {
+                d.child(
+                    div()
+                        .debug_selector(|| "doc-unsaved".into())
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(color(PROGRESS)),
+                )
+            })
+            .child(div().flex_1())
+            .child(bar_button(
+                "doc-edit-done",
+                "Done",
+                "Esc",
+                false,
+                cx.listener(|this, _, window, cx| this.doc_leave_edit(false, window, cx)),
+            ))
+            .child(bar_button(
+                "doc-edit-save",
+                "Save",
+                "⌘S",
+                true,
+                cx.listener(|this, _, _, cx| this.doc_save(false, cx)),
+            ));
+        let ask = |id: &'static str, text: &'static str, hue: u32| {
+            div()
+                .debug_selector(move || id.into())
+                .h(px(40.))
+                .flex_none()
+                .px_4()
+                .flex()
+                .items_center()
+                .gap_3()
+                .bg(with_alpha(hue, 0.08))
+                .border_b_1()
+                .border_color(color(BORDER))
+                .text_sm()
+                .child(icon(Icon::Error, 14., hue))
+                .child(div().flex_1().text_color(color(TEXT_2)).child(text))
+        };
+        let conflict = self.reader.conflict.then(|| {
+            ask(
+                "doc-conflict",
+                "The doc changed on disk since you began. Save over it, or take what is there?",
+                PROGRESS,
+            )
+            .child(bar_button(
+                "doc-take-theirs",
+                "Take theirs",
+                "",
+                false,
+                cx.listener(|this, _, window, cx| {
+                    this.reader.editor = None;
+                    this.model.stop_edit_doc();
+                    this.doc_start_edit(window, cx);
+                }),
+            ))
+            .child(bar_button(
+                "doc-save-over",
+                "Save over it",
+                "",
+                true,
+                cx.listener(|this, _, _, cx| this.doc_save(true, cx)),
+            ))
+        });
+        let leaving = self.reader.leaving.then(|| {
+            ask("doc-leaving", "What you typed is not saved.", PROGRESS)
+                .child(bar_button(
+                    "doc-discard",
+                    "Discard",
+                    "",
+                    false,
+                    cx.listener(|this, _, window, cx| this.doc_leave_edit(true, window, cx)),
+                ))
+                .child(bar_button(
+                    "doc-save-leave",
+                    "Save and close",
+                    "",
+                    true,
+                    cx.listener(|this, _, window, cx| {
+                        this.doc_save(false, cx);
+                        if !this.reader.conflict {
+                            this.doc_leave_edit(true, window, cx);
+                        }
+                    }),
+                ))
+        });
+        Some(
+            div()
+                .debug_selector(|| "doc-editor".into())
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(bar)
+                .children(conflict)
+                .children(leaving)
+                .child(
+                    div().flex_1().min_h_0().flex().justify_center().child(
+                        div()
+                            .w_full()
+                            .max_w(px(READING_W + 120.))
+                            .h_full()
+                            .px_6()
+                            .py_4()
+                            .text_size(px(14.))
+                            .child(Editor::new(editor).appearance(false).h_full()),
+                    ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// A small button of the header's: an icon and a name, quiet.
+fn header_button(
+    id: &'static str,
+    glyph: Icon,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .group(id)
+        .h(px(26.))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded_md()
+        .text_xs()
+        .text_color(color(TEXT_4))
+        .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT_2)))
+        .child(icon_hover(glyph, 13., TEXT_4, id, TEXT_2))
+        .child(label)
+        .on_click(on_click)
+}
+
+/// A button of the editor's bar: a name and its keys; the main one in the accent.
+fn bar_button(
+    id: &'static str,
+    label: &'static str,
+    keys: &'static str,
+    main: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .h(px(28.))
+        .px_3()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .font_weight(FontWeight::MEDIUM)
+        .when(main, |d| {
+            d.bg(color(ACCENT))
+                .text_color(color(TEXT))
+                .hover(|h| h.bg(color(ACCENT_HOVER)))
+        })
+        .when(!main, |d| {
+            d.border_1()
+                .border_color(color(BORDER_STRONG))
+                .text_color(color(TEXT_2))
+                .hover(|h| h.bg(color(HOVER)))
+        })
+        .child(label)
+        .when(!keys.is_empty(), |d| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(with_alpha(TEXT, 0.6))
+                    .child(keys),
+            )
+        })
+        .on_click(on_click)
 }
 
 /// The doc's width, centred in the reader, with room at either side.

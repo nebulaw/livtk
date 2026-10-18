@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::Path;
 
+use livtk_app::model::docs::Saved as Written;
 use livtk_app::model::docs::{
     CalloutKind, DocRow, callout, find_in, front, link_keys, local_images, page, slug,
 };
@@ -463,4 +464,36 @@ fn a_mermaid_diagram_draws_and_a_broken_one_says_why() {
         livtk_app::ui::diagram::size_of("<svg viewBox=\"0 0 120.5 40\" width=\"10\">"),
         Some((120.5, 40.))
     );
+}
+
+#[test]
+fn an_edit_saves_unless_the_file_changed_meanwhile() {
+    let dir = project();
+    let mut m = open(dir.path());
+    m.open_doc("docs/README.md");
+    let text = m.edit_doc().unwrap();
+    assert!(text.starts_with("# Start here"));
+    assert_eq!(
+        m.save_doc("# Start here\nEdited.\n", false),
+        Written::Written
+    );
+    let file = dir.path().join("docs/README.md");
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "# Start here\nEdited.\n"
+    );
+    assert_eq!(
+        m.docs.text.as_deref(),
+        Some("# Start here\nEdited.\n"),
+        "the reader too"
+    );
+    // Someone else writes the file meanwhile: asked, not overwritten; forced, written.
+    fs::write(&file, "# Theirs\n").unwrap();
+    assert_eq!(m.save_doc("# Mine\n", false), Written::Changed);
+    assert_eq!(fs::read_to_string(&file).unwrap(), "# Theirs\n");
+    assert_eq!(m.save_doc("# Mine\n", true), Written::Written);
+    assert_eq!(fs::read_to_string(&file).unwrap(), "# Mine\n");
+    // Another doc opened: the edit is over.
+    m.open_doc("docs/guide/setup.md");
+    assert!(m.docs.editing.is_none());
 }

@@ -1996,6 +1996,48 @@ fn callouts_diagrams_and_frontmatter_show(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("doc-status").is_some(), "the status");
 }
 
+/// Edit puts the doc's markdown in the reader's place; Cmd-S writes it; Esc with unsaved text
+/// asks first, and leaves once saved.
+#[gpui_kit::test]
+fn a_doc_is_edited_in_place_and_saved(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "# Alpha\n").unwrap();
+    let (app, cx) = open_app(cx, root);
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    click_on(cx, "doc-edit");
+    redraw(cx);
+    assert!(cx.debug_bounds("doc-editor").is_some(), "the editor");
+    assert!(
+        cx.debug_bounds("docs-tree").is_none(),
+        "in the reader's place"
+    );
+    cx.simulate_keystrokes("cmd-down");
+    cx.simulate_input("More.");
+    redraw(cx);
+    assert!(cx.debug_bounds("doc-unsaved").is_some(), "unsaved");
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("doc-leaving").is_some(),
+        "asked before leaving"
+    );
+    cx.simulate_keystrokes("secondary-s");
+    redraw(cx);
+    let saved = std::fs::read_to_string(root.join("docs/a.md")).unwrap();
+    assert!(saved.contains("More."), "{saved:?}");
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("doc-editor").is_none(),
+        "saved: left at once"
+    );
+    app.read_with(cx, |a, _| assert!(a.model().docs.editing.is_none()));
+}
+
 #[gpui_kit::test]
 fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();

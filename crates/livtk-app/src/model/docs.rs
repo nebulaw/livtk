@@ -42,9 +42,29 @@ pub struct Docs {
     pub mentions: Vec<Node>,
     /// What the open doc says of itself in its frontmatter.
     pub front: Front,
+    /// The doc being edited in the app, with its text as it was when the edit began (or was
+    /// last saved): what the file must still hold for a save to go ahead unasked.
+    pub editing: Option<Edit>,
     /// A search across the docs, and what it found.
     pub query: String,
     pub results: Vec<livtk_core::docs::Found>,
+}
+
+/// A doc being edited: which, and its text as last read or written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub path: String,
+    pub base: String,
+}
+
+/// What a save did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Saved {
+    Written,
+    /// The file changed on disk since the edit began: nothing written. Saving again, forced,
+    /// writes over it.
+    Changed,
+    Failed(String),
 }
 
 /// A doc's frontmatter, the YAML block at its very top between `---` lines: its title, its
@@ -504,6 +524,10 @@ impl Model {
 
     /// Show the doc at `path`, as it is, outside the history.
     fn show_doc(&mut self, path: &str) {
+        // Another doc: the edit of this one is over (the app asks before leaving unsaved text).
+        if self.docs.editing.as_ref().is_some_and(|e| e.path != path) {
+            self.docs.editing = None;
+        }
         if let Some(p) = self.projects.get(self.current) {
             self.docs_open.insert(p.dir.clone(), path.to_owned());
         }
@@ -537,6 +561,53 @@ impl Model {
         }
         self.load_docs();
         true
+    }
+
+    /// Edit the open doc in the app: its text to edit, as it is on disk.
+    pub fn edit_doc(&mut self) -> Option<String> {
+        let path = self.docs.open.clone()?;
+        let file = self.doc_file(&path)?;
+        let text = std::fs::read_to_string(file).ok()?;
+        self.docs.editing = Some(Edit {
+            path,
+            base: text.clone(),
+        });
+        Some(text)
+    }
+
+    /// Write `text` over the doc being edited, unless the file changed on disk since the edit
+    /// began; `force`, whatever it holds now.
+    pub fn save_doc(&mut self, text: &str, force: bool) -> Saved {
+        let Some(edit) = self.docs.editing.clone() else {
+            return Saved::Failed("no doc is being edited".into());
+        };
+        let Some(file) = self.doc_file(&edit.path) else {
+            return Saved::Failed("the project is gone".into());
+        };
+        let now = std::fs::read_to_string(&file).unwrap_or_default();
+        if !force && now != edit.base {
+            return Saved::Changed;
+        }
+        if let Err(e) = std::fs::write(&file, text) {
+            return Saved::Failed(e.to_string());
+        }
+        self.docs.editing = Some(Edit {
+            path: edit.path,
+            base: text.to_owned(),
+        });
+        self.load_docs();
+        Saved::Written
+    }
+
+    /// Done editing: the reader again, as the file is.
+    pub fn stop_edit_doc(&mut self) {
+        self.docs.editing = None;
+        self.load_docs();
+    }
+
+    /// The file a doc is, wherever the project is.
+    pub fn doc_file(&self, path: &str) -> Option<std::path::PathBuf> {
+        Some(self.projects.get(self.current)?.ws.root().join(path))
     }
 
     /// Search the docs' titles and text for `query`; empty, the tree again.

@@ -51,6 +51,8 @@ icons! {
     Outline => "list",
     /// Copying a code block.
     Copy => "copy",
+    /// Opening a doc in another app.
+    ArrowUpRight => "arrow-up-right",
     /// The find bar's way to the match before, and the next.
     ChevronUp => "chevron-up",
     ChevronDown => "chevron-down",

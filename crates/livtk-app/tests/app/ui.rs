@@ -1832,6 +1832,40 @@ fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
     });
 }
 
+/// A doc longer than the page scrolls.
+#[gpui_kit::test]
+fn a_long_doc_scrolls(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    let long: String = (1..=200).map(|i| format!("Line {i}\n\n")).collect();
+    std::fs::write(root.join("docs/long.md"), format!("# Long\n\n{long}")).unwrap();
+    let (_app, cx) = open_app(cx, root);
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    let page = cx.debug_bounds("doc-page").expect("the page");
+    let before = cx.debug_bounds("doc-text").expect("the doc");
+    assert!(
+        before.size.height > page.size.height,
+        "longer than the page: {before:?}"
+    );
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: page.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-400.),
+        )),
+        ..Default::default()
+    });
+    redraw(cx);
+    let after = cx.debug_bounds("doc-text").unwrap();
+    assert!(
+        after.top() < before.top(),
+        "scrolled: {before:?} then {after:?}"
+    );
+}
+
 #[gpui_kit::test]
 fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();

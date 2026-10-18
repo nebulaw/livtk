@@ -175,8 +175,11 @@ impl LivtkApp {
             .min_w_0()
             .h_full()
             .overflow_y_scroll()
+            // A column, so the doc is as tall as it is (a row would stretch it to the page's
+            // height and leave nothing to scroll), centred across.
             .flex()
-            .justify_center()
+            .flex_col()
+            .items_center()
             .child(page)
     }
 

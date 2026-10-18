@@ -211,6 +211,40 @@ fn the_doc_being_read_gone_from_disk_gives_the_list_back() {
 }
 
 #[test]
+fn folds_stay_with_their_project_and_reading_ignores_left_and_right() {
+    let a = project();
+    let b = project();
+    let mut m = Model::open(&[a.path().to_path_buf(), b.path().to_path_buf()]);
+    m.set_models_dir(None);
+    let at = |dir: &Path| {
+        let dir = fs::canonicalize(dir).unwrap();
+        m.projects
+            .iter()
+            .position(|p| fs::canonicalize(&p.dir).unwrap() == dir)
+            .unwrap()
+    };
+    let (ia, ib) = (at(a.path()), at(b.path()));
+    m.select_project(ia);
+    m.set_view(View::Docs);
+    m.toggle_doc_folder("docs/guide");
+    m.select_project(ib);
+    m.set_view(View::Tasks);
+    // Into B's docs by a link, from outside the view: A's folds stay A's.
+    m.open_doc("docs/README.md");
+    assert!(m.docs.shut.is_empty(), "B's own folds");
+    m.select_project(ia);
+    m.set_view(View::Tasks);
+    m.set_view(View::Docs);
+    assert!(m.docs.shut.contains("docs/guide"), "A's kept");
+    // Reading, Left and Right leave the list alone.
+    m.open_doc("docs/guide/setup.md");
+    m.select_column_by(-1);
+    m.select_column_by(-1);
+    m.leave_doc();
+    assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/setup.md");
+}
+
+#[test]
 fn the_doc_open_is_remembered_per_project() {
     let dir = project();
     let mut m = open(dir.path());

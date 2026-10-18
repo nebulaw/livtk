@@ -645,6 +645,9 @@ impl Model {
         }
         if let Some(p) = self.projects.get(self.current) {
             self.docs_open.insert(p.dir.clone(), path.to_owned());
+            // This project's folds, whatever was loaded last (another project's, outside the
+            // view).
+            self.docs.shut = self.docs_shut.get(&p.dir).cloned().unwrap_or_default();
         }
         // Its folders open, so the list shows it, highlighted.
         let mut at = path;

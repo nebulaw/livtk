@@ -804,8 +804,11 @@ impl Model {
 
     /// `h` and `l` on the board: to the column `delta` along, as far down as it goes.
     pub fn select_column_by(&mut self, delta: isize) {
-        // In the docs' list, across is in and out of the folders.
+        // In the docs' list, across is in and out of the folders; reading, it is nothing.
         if self.view == View::Docs {
+            if self.docs.reading {
+                return;
+            }
             if delta < 0 {
                 self.docs_left();
             } else {

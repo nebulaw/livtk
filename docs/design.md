@@ -3,6 +3,9 @@
 How livtk's app is put together, so every view reads as made by one hand. A new view is built
 from these parts; one that needs something else changes this page first.
 
+This grammar is for now. It will change to fit agentic work: views of who is working on what,
+with their chats, terminals and the rest. When that comes, it changes here first.
+
 ## Three places
 
 - **Left: where to go.** The sidebar: projects, the views, the tools. Navigation only, in

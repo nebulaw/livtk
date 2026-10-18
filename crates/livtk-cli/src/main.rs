@@ -540,6 +540,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Doc { action } => match action {
             DocAction::List => output::docs(ws, json),
             DocAction::Link { key, path } => {
+                let path = from_here(&path);
                 let events = ws.execute(
                     Command::DocLink {
                         node: key.clone(),
@@ -550,6 +551,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 output::doc_changed(ws, &key, &path, true, &events, json)
             }
             DocAction::Unlink { key, path } => {
+                let path = from_here(&path);
                 let events = ws.execute(
                     Command::DocUnlink {
                         node: key.clone(),
@@ -559,7 +561,14 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 )?;
                 output::doc_changed(ws, &key, &path, false, &events, json)
             }
-            DocAction::Links { of } => output::doc_links(ws, &of, json),
+            DocAction::Links { of } => {
+                let of = if of.contains('/') || livtk_core::docs::is_doc(&of) {
+                    from_here(&of)
+                } else {
+                    of
+                };
+                output::doc_links(ws, &of, json)
+            }
         },
         Cmd::Link { key, rel, other } => link(ws, key, rel, other, true, by, json),
         Cmd::Unlink { key, rel, other } => link(ws, key, rel, other, false, by, json),
@@ -741,4 +750,16 @@ fn read_body(body: Option<String>) -> Result<Option<String>> {
         }
         _ => Ok(body),
     }
+}
+
+/// A doc's path as typed in the shell: from the folder it runs in, as every command's paths
+/// are, made whole so the core can find it in the project.
+fn from_here(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return path.to_owned();
+    }
+    std::env::current_dir()
+        .map(|d| d.join(p).to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_owned())
 }

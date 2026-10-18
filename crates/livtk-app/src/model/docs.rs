@@ -102,9 +102,11 @@ impl Model {
             return;
         };
         let tree = p.ws.docs();
+        // The doc remembered, while it is there; else the first.
         let open = self
             .docs_open
             .get(&p.dir)
+            .filter(|path| p.ws.root().join(path).is_file())
             .cloned()
             .or_else(|| tree.all().first().map(|d| d.path.clone()));
         let text = open
@@ -114,7 +116,7 @@ impl Model {
             .as_ref()
             .map(|path| p.ws.doc_nodes(path).unwrap_or_default())
             .unwrap_or_default();
-        self.docs.stamp = stamp(&p.ws.root().join(p.ws.docs_dir()));
+        self.docs.stamp = stamp(p.ws.root(), &p.ws.docs_dir(), open.as_deref());
         self.docs.dir = p.ws.docs_dir();
         self.docs.prefix = p.ws.config().prefix.clone();
         self.docs.tree = tree;
@@ -155,7 +157,7 @@ impl Model {
         let Some(p) = self.projects.get(self.current) else {
             return false;
         };
-        if stamp(&p.ws.root().join(p.ws.docs_dir())) == self.docs.stamp {
+        if stamp(p.ws.root(), &p.ws.docs_dir(), self.docs.open.as_deref()) == self.docs.stamp {
             return false;
         }
         self.load_docs();
@@ -205,17 +207,21 @@ impl Model {
 }
 
 /// `text` with every bare node key of the project's `prefix` (`TAS-12`) made a link to it
-/// (`livtk:TAS-12`), so a click opens the node; keys in code, or already in a link, stay as
-/// they are.
+/// (`livtk:TAS-12`), so a click opens the node. Keys stay as they are where a link would break
+/// the markdown or mean nothing: in code (fenced, indented or inline), in a link's text or
+/// destination, in an autolink or a URL, and in a link's reference definition.
 pub fn link_keys(text: &str, prefix: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut fenced = false;
     for line in text.split_inclusive('\n') {
         let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
+        let fence = t.starts_with("```") || t.starts_with("~~~");
+        if fence {
             fenced = !fenced;
         }
-        if fenced || t.starts_with("```") || t.starts_with("~~~") {
+        let indented = line.starts_with("    ") || line.starts_with('\t');
+        let definition = t.starts_with('[') && t.contains("]:");
+        if fence || fenced || indented || definition {
             out.push_str(line);
             continue;
         }
@@ -227,19 +233,51 @@ pub fn link_keys(text: &str, prefix: &str) -> String {
 fn link_line(line: &str, prefix: &str, out: &mut String) {
     let head = format!("{prefix}-");
     let bytes = line.as_bytes();
-    let mut code = false;
+    // Where the scan is: in inline code, in a link's text, its destination, or `<…>`.
+    let (mut code, mut text, mut dest, mut angle) = (false, 0usize, 0usize, false);
+    // The start of the word the scan is in, to tell a URL.
+    let mut word = 0;
     let mut i = 0;
     while i < line.len() {
         let c = bytes[i];
+        if c.is_ascii_whitespace() {
+            word = i + 1;
+        }
+        if !code {
+            match c {
+                b'[' if dest == 0 => text += 1,
+                b']' if dest == 0 && text > 0 => {
+                    text -= 1;
+                    if bytes.get(i + 1) == Some(&b'(') {
+                        dest = 1;
+                        out.push_str("](");
+                        i += 2;
+                        continue;
+                    }
+                }
+                b'(' if dest > 0 => dest += 1,
+                b')' if dest > 0 => dest -= 1,
+                b'<' if dest == 0 => angle = true,
+                b'>' => angle = false,
+                _ => {}
+            }
+        }
         if c == b'`' {
             code = !code;
         }
-        let starts_key = !code
+        let free = !code && text == 0 && dest == 0 && !angle;
+        let before = &line[word.min(i)..i];
+        let in_url = before.contains("://") || before.starts_with("www.");
+        let starts_key = free
+            && !in_url
             && line[i..].starts_with(&head)
             && (i == 0 || {
                 let before = bytes[i - 1];
                 !(before.is_ascii_alphanumeric()
-                    || matches!(before, b'[' | b'/' | b'-' | b'(' | b':'))
+                    || matches!(
+                        before,
+                        b'/' | b'-' | b':' | b'=' | b'?' | b'&' | b'#' | b'.' | b'_'
+                    ))
             });
         if starts_key {
             let digits = line[i + head.len()..]
@@ -248,9 +286,7 @@ fn link_line(line: &str, prefix: &str, out: &mut String) {
                 .count();
             let end = i + head.len() + digits;
             let after = bytes.get(end).copied();
-            let ends_key = digits > 0
-                && !after.is_some_and(|a| a.is_ascii_alphanumeric() || a == b']' || a == b'-');
-            if ends_key {
+            if digits > 0 && !after.is_some_and(|a| a.is_ascii_alphanumeric() || a == b'-') {
                 let key = &line[i..end];
                 out.push_str(&format!("[{key}](livtk:{key})"));
                 i = end;
@@ -282,20 +318,26 @@ impl Model {
     }
 }
 
-/// The files under `dir` as a number that changes when one does: each one's path, size and
-/// time.
-fn stamp(dir: &std::path::Path) -> u64 {
+/// The docs under `dir` (from the project's folder `root`), and the doc `open` wherever it is,
+/// as a number that changes when one does: each one's path, size and time. Hidden files and
+/// folders are passed over, as the tree passes over them.
+fn stamp(root: &std::path::Path, dir: &str, open: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    let mut stack = vec![dir.to_path_buf()];
+    let mut stack = vec![root.join(dir)];
     while let Some(d) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else {
             continue;
         };
-        let mut entries: Vec<_> = entries.flatten().collect();
+        let mut entries: Vec<_> = entries
+            .flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for e in entries {
-            let Ok(meta) = e.metadata() else { continue };
+            let Ok(meta) = e.metadata() else {
+                continue;
+            };
             e.path().hash(&mut h);
             if meta.is_dir() {
                 stack.push(e.path());
@@ -304,6 +346,13 @@ fn stamp(dir: &std::path::Path) -> u64 {
                 meta.modified().ok().hash(&mut h);
             }
         }
+    }
+    if let Some(path) = open
+        && let Ok(meta) = std::fs::metadata(root.join(path))
+    {
+        path.hash(&mut h);
+        meta.len().hash(&mut h);
+        meta.modified().ok().hash(&mut h);
     }
     h.finish()
 }

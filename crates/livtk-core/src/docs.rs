@@ -115,7 +115,14 @@ pub fn title_of(text: &str) -> Option<String> {
         }
         let hashes = t.chars().take_while(|c| *c == '#').count();
         if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
-            let title = t[hashes..].trim().trim_end_matches('#').trim();
+            let title = t[hashes..].trim();
+            // A closing run of `#` goes only when a space comes before it: `# Using C#` keeps it.
+            let bare = title.trim_end_matches('#');
+            let title = if bare.len() < title.len() && bare.ends_with(char::is_whitespace) {
+                bare.trim()
+            } else {
+                title
+            };
             if !title.is_empty() {
                 return Some(title.to_owned());
             }
@@ -129,9 +136,8 @@ pub fn title_of(text: &str) -> Option<String> {
 pub fn normalize(root: &Path, path: &str) -> Option<String> {
     let p = Path::new(path);
     let relative: PathBuf = if p.is_absolute() {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        p.strip_prefix(&root).ok()?.to_path_buf()
+        let root = real(root);
+        real(p).strip_prefix(&root).ok()?.to_path_buf()
     } else {
         p.to_path_buf()
     };
@@ -147,6 +153,40 @@ pub fn normalize(root: &Path, path: &str) -> Option<String> {
         }
     }
     (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// `p` with its links resolved as far as it exists: the part that is there made real, the rest
+/// (a file gone, say) joined on as written. So a path through a linked folder (`/tmp`, which is
+/// `/private/tmp`) matches its project's however much of it is left.
+fn real(p: &Path) -> PathBuf {
+    if let Ok(r) = p.canonicalize() {
+        return r;
+    }
+    match (p.parent(), p.file_name()) {
+        (Some(parent), Some(name)) if parent != p => real(parent).join(name),
+        _ => p.to_path_buf(),
+    }
+}
+
+/// `%20` and its kind decoded, as a link's destination writes what a path holds.
+fn decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(&a), Some(&b)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(h), Some(l)) = (hex(a), hex(b))
+        {
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Where a link inside a doc leads.
@@ -179,6 +219,9 @@ pub fn resolve(from: &str, href: &str) -> Option<Target> {
         Some((f, a)) => (f, Some(a.to_owned())),
         None => (href, None),
     };
+    // A query means nothing to a file; spaces and the like come encoded.
+    let file = decode(file.split_once('?').map_or(file, |(f, _)| f));
+    let file = file.as_str();
     // From the project's folder when it starts with `/`, else from the doc's own folder.
     let base = match file.strip_prefix('/') {
         Some(_) => String::new(),

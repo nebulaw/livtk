@@ -247,3 +247,50 @@ fn links_come_back_when_the_store_is_rebuilt_from_the_log() {
     let ws = Workspace::open(dir.path()).unwrap();
     assert_eq!(ws.docs_of(&a).unwrap().len(), 1);
 }
+
+#[test]
+fn a_log_rewritten_without_a_link_takes_it_away() {
+    let (dir, mut ws) = workspace();
+    let a = task(&mut ws, "first");
+    let log = dir.path().join(".livtk/events.jsonl");
+    let before = fs::read_to_string(&log).unwrap();
+    link(&mut ws, &a, "docs/README.md");
+    drop(ws);
+    // As a checkout puts the log back as it was.
+    fs::write(&log, before).unwrap();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    assert!(ws.docs_of(&a).unwrap().is_empty(), "gone with its event");
+    assert_eq!(
+        link(&mut ws, &a, "docs/README.md"),
+        1,
+        "and can be made again"
+    );
+}
+
+#[test]
+fn titles_keep_a_hash_of_their_own_and_links_are_decoded() {
+    assert_eq!(docs::title_of("# Using C#\n").as_deref(), Some("Using C#"));
+    assert_eq!(docs::title_of("# Closed ##\n").as_deref(), Some("Closed"));
+    assert_eq!(
+        docs::resolve("docs/a.md", "my%20doc.md?x=1#top"),
+        Some(Target::Doc {
+            path: "docs/my doc.md".into(),
+            anchor: Some("top".into())
+        })
+    );
+}
+
+#[test]
+fn an_absolute_path_through_a_linked_folder_is_the_projects() {
+    let (dir, _ws) = workspace();
+    let real = dir.path().canonicalize().unwrap();
+    // The project as reached through a link to it, and a doc that is not there (any more).
+    let link_dir = tempfile::tempdir().unwrap();
+    let via = link_dir.path().join("project");
+    std::os::unix::fs::symlink(&real, &via).unwrap();
+    let gone = via.join("docs/gone.md");
+    assert_eq!(
+        docs::normalize(dir.path(), gone.to_str().unwrap()).as_deref(),
+        Some("docs/gone.md")
+    );
+}

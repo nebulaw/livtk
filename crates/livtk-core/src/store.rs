@@ -249,7 +249,7 @@ impl Store {
             tx.execute_batch(
                 "INSERT INTO nodes_fts (nodes_fts) VALUES ('delete-all'); \
                  DELETE FROM events; DELETE FROM nodes; DELETE FROM edges; \
-                 DELETE FROM counters;",
+                 DELETE FROM doc_links; DELETE FROM counters;",
             )?;
         }
         let mut warnings = Vec::new();

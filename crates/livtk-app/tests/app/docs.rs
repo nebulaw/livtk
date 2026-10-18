@@ -212,6 +212,59 @@ fn keys_in_a_doc_become_links_but_not_in_code() {
         "[LIV-4](x) xLIV-5 LIV-6a"
     );
     assert_eq!(link_keys("café LIV-7", "LIV"), "café [LIV-7](livtk:LIV-7)");
+    // Where a link would break the markdown or mean nothing, keys stay.
+    for kept in [
+        "[see LIV-8 notes](url)\n",
+        "[x](https://jira/browse?id=LIV-9)\n",
+        "<https://x/LIV-10>\n",
+        "https://jira/browse/LIV-11 and more\n",
+        "    LIV-12 in indented code\n",
+        "[ref]: https://x/LIV-13\n",
+    ] {
+        assert_eq!(link_keys(kept, "LIV"), kept);
+    }
+    assert_eq!(
+        link_keys("[a](b) then LIV-14\n", "LIV"),
+        "[a](b) then [LIV-14](livtk:LIV-14)\n",
+        "after a link, keys link again"
+    );
+}
+
+/// Whatever the text, linking keys never breaks it: every character kept, in order.
+#[test]
+fn linking_keys_keeps_any_text_whole() {
+    let pieces = [
+        "LIV-1", "é", " ", "[", "]", "(", ")", "<", ">", "`", "\n", "https://", "日本", "LIV-",
+        "🦀", "\t", "#", "LIV-22x", "www.",
+    ];
+    for a in pieces {
+        for b in pieces {
+            for c in pieces {
+                let text = format!("{a}{b}{c}");
+                let out = link_keys(&text, "LIV");
+                // Taking the links away gives the text back.
+                let mut back = out.clone();
+                while let Some(i) = back.find("](livtk:") {
+                    let start = back[..i].rfind('[').unwrap();
+                    let end = back[i..].find(')').unwrap() + i;
+                    let key = back[start + 1..i].to_owned();
+                    back.replace_range(start..=end, &key);
+                }
+                assert_eq!(back, text, "{out:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_remembered_doc_gone_from_disk_gives_way_to_the_first() {
+    let dir = project();
+    let mut m = open(dir.path());
+    m.open_doc("docs/README.md");
+    fs::remove_file(dir.path().join("docs/README.md")).unwrap();
+    m.set_view(View::Tasks);
+    m.set_view(View::Docs);
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
 }
 
 #[test]

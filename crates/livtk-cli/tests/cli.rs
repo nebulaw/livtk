@@ -636,3 +636,41 @@ fn a_write_from_the_cli_runs_the_projects_hooks_apart() {
     .unwrap();
     assert_eq!(line["key"], "LIV-1");
 }
+
+/// A doc's path is read from the folder the command runs in, as a shell's paths are: from a
+/// subfolder, `README.md` is the one there, not the project's.
+#[test]
+fn doc_paths_are_read_from_the_folder_livtk_runs_in() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        livtk(dir.path(), As::Human, &["init", "--prefix", "DOC"])
+            .status
+            .success()
+    );
+    std::fs::create_dir_all(dir.path().join("docs/guide")).unwrap();
+    std::fs::write(dir.path().join("README.md"), "# Root\n").unwrap();
+    std::fs::write(dir.path().join("docs/guide/setup.md"), "# Setup\n").unwrap();
+    assert!(
+        livtk(dir.path(), As::Human, &["new", "Write it"])
+            .status
+            .success()
+    );
+    let guide = dir.path().join("docs/guide");
+    let out = livtk(&guide, As::Human, &["doc", "link", "DOC-1", "setup.md"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "DOC-1 docs/guide/setup.md: linked"
+    );
+    let out = livtk(&guide, As::Human, &["doc", "link", "DOC-1", "README.md"]);
+    assert!(
+        !out.status.success(),
+        "no README.md here, though the project has one"
+    );
+    let out = livtk(&guide, As::Human, &["doc", "links", "setup.md"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("DOC-1"));
+}

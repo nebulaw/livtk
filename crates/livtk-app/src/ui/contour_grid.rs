@@ -212,7 +212,7 @@ impl ContourGrid {
                     .flex_col()
                     .justify_center()
                     .gap(px(2.))
-                    .rounded_lg()
+                    .rounded_xl()
                     .bg(color(SURFACE))
                     .border_1()
                     .border_color(color(BORDER_STRONG))
@@ -398,7 +398,7 @@ impl RenderOnce for ContourGrid {
         } else {
             holder
                 .p(px(20.))
-                .rounded(px(14.))
+                .rounded_xl()
                 .bg(color(0x000000))
                 .border_1()
                 .border_color(color(BORDER))

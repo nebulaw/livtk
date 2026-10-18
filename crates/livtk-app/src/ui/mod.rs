@@ -1992,7 +1992,8 @@ impl LivtkApp {
                         .id("restart-to-update")
                         .debug_selector(|| "restart-to-update".into())
                         .px_2()
-                        .h(px(28.))
+                        .h(px(NAV_ROW))
+                        .text_size(px(NAV_TEXT))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -3535,11 +3536,13 @@ impl LivtkApp {
 
     /// One group of the open node's links, each with an × that removes it.
     fn link_group(&self, g: &LinkGroup, cx: &mut Context<Self>) -> Div {
-        let mut out = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_xs().text_color(color(TEXT_4)).child(g.label));
+        let mut out = div().flex().flex_col().gap_1().child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color(TEXT_4))
+                .child(g.label),
+        );
         let (rel, outgoing) = (g.rel, g.outgoing);
         let group = g.label.to_lowercase().replace(' ', "-");
         for b in &g.briefs {
@@ -3612,7 +3615,13 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_xs().text_color(color(TEXT_4)).child("Docs"));
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT_4))
+                    .child("Docs"),
+            );
         for (path, title) in docs {
             let gone = title.is_none();
             let (open, unlink_path, node) = (path.clone(), path.clone(), key.to_owned());
@@ -5132,6 +5141,7 @@ impl LivtkApp {
                         .pt_2()
                         .pb_1()
                         .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(color(TEXT_4))
                         .child(s),
                 );
@@ -5189,11 +5199,11 @@ impl LivtkApp {
                         d.child(
                             div()
                                 .flex_none()
-                                .h(px(22.))
+                                .h(px(20.))
                                 .px_2()
                                 .flex()
                                 .items_center()
-                                .rounded_lg()
+                                .rounded_full()
                                 .border_1()
                                 .border_color(color(BORDER_STRONG))
                                 .text_xs()
@@ -5362,6 +5372,7 @@ impl LivtkApp {
                     div()
                         .pb_1()
                         .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(color(TEXT_4))
                         .child(*section),
                 );
@@ -5627,11 +5638,6 @@ impl LivtkApp {
             .flex_col()
             .items_center()
             .gap_2()
-            .rounded_xl()
-            .bg(color(LIFTED))
-            .border_1()
-            .border_color(color(BORDER_STRONG))
-            .shadow_lg()
             .child(icon(Icon::Inbox, 32., ACCENT))
             .child(
                 div()
@@ -5726,6 +5732,7 @@ impl LivtkApp {
         let close = div()
             .id(close_name.clone())
             .debug_selector(move || close_name.to_string())
+            .group("toast-close")
             .size(px(20.))
             .flex_none()
             .flex()
@@ -5733,7 +5740,7 @@ impl LivtkApp {
             .justify_center()
             .rounded_lg()
             .hover(|s| s.bg(color(HOVER)))
-            .child(icon(Icon::Close, 14., TEXT_3))
+            .child(icon_hover(Icon::Close, 14., TEXT_4, "toast-close", TEXT))
             .tooltip(|window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new("Close").build(window, cx)
             })
@@ -7093,7 +7100,7 @@ fn empty_action(
         .id(id)
         .debug_selector(move || id.into())
         .mt_3()
-        .h(px(30.))
+        .h(px(28.))
         .px_3()
         .flex()
         .items_center()

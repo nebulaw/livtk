@@ -66,7 +66,9 @@ impl LivtkApp {
             .p(px(2.))
             .gap(px(2.))
             .rounded_lg()
-            .bg(color(SURFACE));
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER));
         for (choice, label) in [
             (Who::All, "All"),
             (Who::Human, "You"),
@@ -140,7 +142,7 @@ impl LivtkApp {
                 div()
                     .id("grid-unpick")
                     .debug_selector(|| "grid-unpick".into())
-                    .h(px(22.))
+                    .h(px(20.))
                     .px_2()
                     .flex()
                     .items_center()
@@ -167,18 +169,21 @@ fn grid_button(id: &'static str, label: String, open: bool) -> Stateful<Div> {
     div()
         .id(id)
         .debug_selector(move || id.into())
-        .h(px(22.))
+        .h(px(24.))
         .px_2()
         .flex()
         .items_center()
         .gap_1()
-        .rounded_md()
+        .rounded_lg()
         .border_1()
-        .border_color(color(BORDER))
-        .when(open, |d| d.bg(color(SELECTED)))
-        .when(!open, |d| d.hover(|h| h.bg(color(HOVER))))
+        .when(open, |d| {
+            d.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
+        })
+        .when(!open, |d| {
+            d.border_color(color(BORDER)).hover(|h| h.bg(color(HOVER)))
+        })
         .child(label)
-        .child(icon(Icon::CaretDown, 8., TEXT_4))
+        .child(icon(Icon::CaretDown, 10., TEXT_4))
 }
 
 /// What a day's count says, in the grid's what: "No activity", "1 event", "4 decisions".

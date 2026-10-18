@@ -674,3 +674,27 @@ fn doc_paths_are_read_from_the_folder_livtk_runs_in() {
     let out = livtk(&guide, As::Human, &["doc", "links", "setup.md"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("DOC-1"));
 }
+
+/// Starting a task names the docs it is linked to, to read first.
+#[test]
+fn starting_a_task_names_its_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        livtk(dir.path(), As::Human, &["init", "--prefix", "DOC"])
+            .status
+            .success()
+    );
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(dir.path().join("docs/design.md"), "# The design\n").unwrap();
+    for (who, args) in [
+        (As::Claude, vec!["new", "Build it"]),
+        (As::Claude, vec!["doc", "link", "DOC-1", "docs/design.md"]),
+        (As::Claude, vec!["move", "DOC-1", "planned"]),
+        (As::Human, vec!["ack", "DOC-1"]),
+    ] {
+        assert!(livtk(dir.path(), who, &args).status.success(), "{args:?}");
+    }
+    let out = livtk(dir.path(), As::Claude, &["start", "DOC-1"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("read: docs/design.md  The design"), "{text}");
+}

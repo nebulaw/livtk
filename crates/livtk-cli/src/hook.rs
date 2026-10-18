@@ -359,6 +359,16 @@ fn section(b: &mut String, title: &str, tasks: &[livtk_core::Summary], ws: &Work
             let _ = write!(b, " (last: {what}, by {})", e.by);
         }
         b.push('\n');
+        // Its docs, to read: what the work is written against.
+        let docs: Vec<String> = ws
+            .docs_of(&t.key)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(path, title)| title.map(|t| format!("{path} ({})", short(&t))))
+            .collect();
+        if !docs.is_empty() {
+            let _ = writeln!(b, "    docs to read: {}", docs.join(", "));
+        }
     }
     if tasks.len() > LIST_MAX {
         let _ = writeln!(b, "  and {} more (`livtk list`)", tasks.len() - LIST_MAX);

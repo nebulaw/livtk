@@ -587,3 +587,28 @@ fn hooks_stay_under_20ms() {
         );
     }
 }
+
+/// A task in progress names its docs in the session's brief, to read.
+#[test]
+fn the_brief_names_the_docs_of_the_work_in_progress() {
+    let dir = project();
+    let d = dir.path();
+    fs::create_dir_all(d.join("docs")).unwrap();
+    fs::write(d.join("docs/design.md"), "# The design\n").unwrap();
+    for (human, args) in [
+        (false, vec!["new", "draw a window"]),
+        (false, vec!["doc", "link", "1", "docs/design.md"]),
+        (false, vec!["move", "1", "planned"]),
+        (true, vec!["ack", "1"]),
+        (false, vec!["start", "1"]),
+    ] {
+        livtk(d, human, &args);
+    }
+    let input = json!({ "hook_event_name": "SessionStart", "source": "startup", "cwd": d });
+    let v = answer("session-start", &input).unwrap();
+    let brief = context_of(&v);
+    assert!(
+        brief.contains("    docs to read: docs/design.md (The design)"),
+        "{brief}"
+    );
+}

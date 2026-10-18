@@ -7,6 +7,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 You implement one livtk task.
 
 - Start with `livtk show KEY`. The plan and its acceptance check are your brief; stay inside them.
+  Read the docs it lists: the work is written against them.
 - Read the code before changing it. Make the smallest change that does the job, in the style of
   the code around it.
 - Run the acceptance check yourself and look at the real result.

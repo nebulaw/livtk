@@ -241,6 +241,18 @@ pub fn moved(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Res
             }
         }
     }
+    // Started: the docs it is linked to, to read first.
+    let started = events.iter().any(|e| {
+        matches!(&e.op, Op::NodeSet { node, data } if *node == before.id && data.state == Some(State::Doing))
+    });
+    if started {
+        for (path, title) in ws.docs_of(&before.key).unwrap_or_default() {
+            match title {
+                Some(t) => println!("  read: {path}  {t}"),
+                None => println!("  read: {path}  (missing)"),
+            }
+        }
+    }
     if events.is_empty() {
         println!("{}: nothing changed", before.key);
     }

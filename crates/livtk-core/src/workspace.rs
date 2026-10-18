@@ -466,6 +466,22 @@ impl Workspace {
         Ok(nodes)
     }
 
+    /// The nodes that mention the doc at `path` in their title, plan or notes, but are not
+    /// linked to it (those are its links).
+    pub fn doc_mentions(&self, path: &str) -> Result<Vec<Node>> {
+        let linked = self.store.doc_nodes(path)?;
+        let mut nodes = Vec::new();
+        for id in self.store.mentioning(path)? {
+            if linked.contains(&id) {
+                continue;
+            }
+            if let Some(n) = self.store.node(id)? {
+                nodes.push(n);
+            }
+        }
+        Ok(nodes)
+    }
+
     /// Every doc some node is linked to, with how many nodes.
     pub fn linked_docs(&self) -> Result<Vec<(String, usize)>> {
         self.store.linked_docs()

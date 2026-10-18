@@ -26,6 +26,8 @@ const INDENT: f32 = 14.;
 const READING_W: f32 = 720.;
 const READING_TEXT: f32 = 16.;
 const READING_LINE: f32 = 1.65;
+/// The tree's search field's height.
+const SEARCH_H: f32 = 40.;
 /// The outline at the right, shown when the reader has room for it beside the doc.
 const OUTLINE_W: f32 = 220.;
 /// A found match, and the one the find bar is on.
@@ -40,6 +42,8 @@ pub(super) struct Reader {
     shown: Option<String>,
     pub find: Entity<InputState>,
     pub finding: bool,
+    /// The tree's search, across the docs' titles and text.
+    pub search: Entity<InputState>,
     /// Every match, by section and range in its rendered text; the one the bar is on.
     matches: Vec<(usize, Range<usize>)>,
     at: usize,
@@ -53,6 +57,7 @@ impl Reader {
             shown: None,
             find: cx.new(|cx| InputState::new(window, cx).placeholder("Find in the doc")),
             finding: false,
+            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search docs")),
             matches: Vec::new(),
             at: 0,
         }
@@ -96,9 +101,14 @@ impl LivtkApp {
             .border_r_1()
             .border_color(color(BORDER))
             .p_2()
+            // Room for the search field above, which floats there outside the list's keys.
+            .pt(px(SEARCH_H + 8.))
             .flex()
             .flex_col()
             .gap(px(1.));
+        if !docs.query.trim().is_empty() {
+            return self.search_results(tree, cx);
+        }
         for (i, row) in docs.rows().into_iter().enumerate() {
             let highlighted = i == docs.index;
             let open =
@@ -155,6 +165,128 @@ impl LivtkApp {
             tree = tree.child(line);
         }
         tree
+    }
+
+    /// What a search found, in place of the tree: each doc with the lines it is in. A click
+    /// opens it with the find bar on the query.
+    fn search_results(&self, mut list: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let docs = &self.model.docs;
+        if docs.results.is_empty() {
+            return list.child(
+                div()
+                    .p_2()
+                    .text_sm()
+                    .text_color(color(TEXT_4))
+                    .child("Nothing found"),
+            );
+        }
+        for f in &docs.results {
+            let path = f.path.clone();
+            let id = format!("doc-found-{path}");
+            list = list.child(
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .debug_selector(move || id.clone())
+                    .px_2()
+                    .py(px(6.))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .rounded_md()
+                    .hover(|h| h.bg(color(HOVER)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(color(TEXT_2))
+                            .truncate()
+                            .child(f.title.clone()),
+                    )
+                    .children(f.lines.iter().take(2).map(|l| {
+                        div()
+                            .text_xs()
+                            .text_color(color(TEXT_3))
+                            .truncate()
+                            .child(l.clone())
+                    }))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .truncate()
+                            .child(f.path.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_found(&path, window, cx);
+                    })),
+            );
+        }
+        list
+    }
+
+    /// A doc a search found, opened with the find bar on what was searched.
+    pub(super) fn open_found(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.model.docs.query.clone();
+        self.model.open_doc(path);
+        self.reader
+            .find
+            .update(cx, |s, cx| s.set_value(query, window, cx));
+        self.reader.finding = true;
+        self.reader.find.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    /// The tree's search field, floating over the tree's top, outside the list's keys.
+    pub(super) fn docs_search_field(&self) -> Div {
+        div()
+            .debug_selector(|| "docs-search".into())
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(TREE_W))
+            .h(px(SEARCH_H))
+            .px_2()
+            .pt_2()
+            .child(
+                div()
+                    .h_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(color(BORDER))
+                    .bg(color(SURFACE))
+                    .child(icon(Icon::Search, 13., TEXT_4))
+                    .child(div().flex_1().min_w_0().child(super::flush_input(
+                        Input::new(&self.reader.search).xsmall(),
+                        24.,
+                    ))),
+            )
+    }
+
+    /// The search field changed: the docs searched again; Enter opens the first found.
+    pub(super) fn on_docs_search(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let q = self.reader.search.read(cx).value().to_string();
+                self.model.search_docs(&q);
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } => {
+                if let Some(first) = self.model.docs.results.first().map(|f| f.path.clone()) {
+                    self.open_found(&first, window, cx);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Each section's markdown, made or brought up to date for the open doc; a new doc starts
@@ -242,7 +374,9 @@ impl LivtkApp {
                 for (i, (_, state)) in self.reader.sections.iter().enumerate() {
                     page = page.child(section(i, state));
                 }
-                page = page.child(self.doc_footer(cx));
+                page = page
+                    .children(self.mentioned_in(cx))
+                    .child(self.doc_footer(cx));
             }
             None => {
                 if let Some(path) = &docs.open {
@@ -411,6 +545,105 @@ impl LivtkApp {
                     .child(path.clone()),
             )
             .child(chips)
+    }
+
+    /// Mentioned in: the docs that link to this one, and the tasks that mention it without
+    /// being linked to it. A click opens one.
+    fn mentioned_in(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let docs = &self.model.docs;
+        if docs.backlinks.is_empty() && docs.mentions.is_empty() {
+            return None;
+        }
+        let mut list = div().flex().flex_col().gap(px(2.));
+        for d in &docs.backlinks {
+            let path = d.path.clone();
+            let id = format!("doc-backlink-{path}");
+            list = list.child(
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .debug_selector(move || id.clone())
+                    .h(px(30.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .text_sm()
+                    .hover(|h| h.bg(color(HOVER)))
+                    .child(icon(Icon::Docs, 13., TEXT_4))
+                    .child(
+                        div()
+                            .text_color(color(TEXT_2))
+                            .truncate()
+                            .child(d.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child(d.path.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.open_doc(&path);
+                        cx.notify();
+                    })),
+            );
+        }
+        for n in &docs.mentions {
+            let key = n.key.clone();
+            let id = format!("doc-mention-{key}");
+            list = list.child(
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .debug_selector(move || id.clone())
+                    .h(px(30.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .text_sm()
+                    .hover(|h| h.bg(color(HOVER)))
+                    .child(state_mark(n.kind, n.state))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(color(TEXT_3))
+                            .child(key.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(color(TEXT_2))
+                            .child(n.title.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.show_node(&key);
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(
+            measure()
+                .debug_selector(|| "doc-mentioned".into())
+                .mt(px(40.))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color(TEXT_4))
+                        .child("Mentioned in"),
+                )
+                .child(list),
+        )
     }
 
     /// Under the doc: the docs before and after it, in the tree's order.

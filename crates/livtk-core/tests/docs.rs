@@ -294,3 +294,85 @@ fn an_absolute_path_through_a_linked_folder_is_the_projects() {
         Some("docs/gone.md")
     );
 }
+
+#[test]
+fn links_in_a_doc_are_read_and_the_docs_linking_to_one_found() {
+    let text = "See [setup](guide/setup.md \"Setup\") and <https://x.y>.\n`[not](a.md)`\n```\n[no](b.md)\n```\n[ref]: ../c.md\n";
+    assert_eq!(
+        docs::links_in(text),
+        ["guide/setup.md", "https://x.y", "../c.md"].map(String::from)
+    );
+    let (dir, ws) = workspace();
+    write(
+        dir.path(),
+        "docs/README.md",
+        "# Start\nSee [setup](guide/setup.md).\n",
+    );
+    write(
+        dir.path(),
+        "docs/zeta.md",
+        "Back to [setup](/docs/guide/setup.md#top).\n",
+    );
+    let tree = ws.docs();
+    let all = tree.all();
+    let linking: Vec<_> = docs::linking_to(dir.path(), &all, "docs/guide/setup.md")
+        .into_iter()
+        .map(|d| d.path.clone())
+        .collect();
+    assert_eq!(linking, ["docs/README.md", "docs/zeta.md"]);
+}
+
+#[test]
+fn a_search_finds_docs_by_title_first_then_by_text() {
+    let (dir, ws) = workspace();
+    write(
+        dir.path(),
+        "docs/zeta.md",
+        "Nothing.\nHow to set up the build.\n",
+    );
+    let tree = ws.docs();
+    let found = docs::search(dir.path(), &tree.all(), "SETUP");
+    let paths: Vec<_> = found.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["docs/guide/setup.md"], "the title, case aside");
+    let found = docs::search(dir.path(), &tree.all(), "set up");
+    assert_eq!(found[0].path, "docs/zeta.md");
+    assert_eq!(
+        found[0].lines,
+        ["How to set up the build."],
+        "the line it is in"
+    );
+    assert!(docs::search(dir.path(), &tree.all(), "  ").is_empty());
+}
+
+#[test]
+fn nodes_mentioning_a_doc_are_found_but_not_those_linked() {
+    let (_dir, mut ws) = workspace();
+    let a = task(&mut ws, "Rewrite docs/guide/setup.md");
+    let b = task(&mut ws, "second");
+    ws.execute(
+        Command::Note {
+            node: b.clone(),
+            text: "see docs/guide/setup.md for 100% of it".into(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let c = task(&mut ws, "third");
+    link(&mut ws, &c, "docs/guide/setup.md");
+    let mut keys: Vec<_> = ws
+        .doc_mentions("docs/guide/setup.md")
+        .unwrap()
+        .into_iter()
+        .map(|n| n.key)
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [a, b],
+        "by title and by note; the linked one is its link"
+    );
+    assert!(
+        ws.doc_mentions("docs/guide/set%p.md").unwrap().is_empty(),
+        "% is a character"
+    );
+}

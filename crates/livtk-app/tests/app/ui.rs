@@ -1949,6 +1949,34 @@ fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
     });
 }
 
+/// The tree's search: typed into, it shows what it found in place of the tree; a result
+/// opens with the find bar on the query.
+#[gpui_kit::test]
+fn the_docs_search_finds_and_opens_with_the_find_bar(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "# Alpha\n").unwrap();
+    std::fs::write(root.join("docs/b.md"), "# Beta\n\nThe hidden needle.\n").unwrap();
+    let (app, cx) = open_app(cx, root);
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    click_on(cx, "docs-search");
+    cx.simulate_input("needle");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("doc-row-docs/a.md").is_none(),
+        "the tree gives way"
+    );
+    click_on(cx, "doc-found-docs/b.md");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/b.md"))
+    });
+    cx.update(|window, cx| assert!(app.read(cx).doc_find(window, cx).0, "the find bar, on it"));
+}
+
 #[gpui_kit::test]
 fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();

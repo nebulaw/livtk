@@ -539,6 +539,26 @@ impl Store {
         rows.iter().map(|s| parse_uuid(s)).collect()
     }
 
+    /// The nodes whose title, plan or notes mention `text`, newest change first.
+    pub fn mentioning(&self, text: &str) -> Result<Vec<Uuid>> {
+        let like = format!(
+            "%{}%",
+            text.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id FROM nodes n WHERE n.title LIKE ?1 ESCAPE '\\' OR n.body LIKE ?1 ESCAPE '\\' \
+             OR EXISTS (SELECT 1 FROM events e WHERE e.node = n.id AND e.op = 'node.note' \
+                 AND e.line LIKE ?1 ESCAPE '\\') \
+             ORDER BY n.updated DESC",
+        )?;
+        let rows: Vec<String> = stmt
+            .query_map([like], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.iter().map(|s| parse_uuid(s)).collect()
+    }
+
     /// Every path some node is linked to, with how many nodes.
     pub fn linked_docs(&self) -> Result<Vec<(String, usize)>> {
         let mut stmt = self

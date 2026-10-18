@@ -35,11 +35,13 @@ pub enum DocPick {
     ForDoc(String),
 }
 
-/// A doc the palette found: its path and title.
+/// A doc the palette found: its path and title, and the line its text matched in, when it
+/// was found by its text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DocItem {
     pub path: String,
     pub title: String,
+    pub line: Option<String>,
 }
 
 /// A link waiting for its other end: from (or to) `node`, by `choice`.
@@ -231,13 +233,27 @@ impl Model {
                         DocItem {
                             path: d.path.clone(),
                             title: d.title.clone(),
+                            line: None,
                         },
                     )
                 })
             })
             .collect();
         scored.sort_by_key(|(s, _)| -s);
-        scored.into_iter().map(|(_, d)| d).collect()
+        let mut out: Vec<DocItem> = scored.into_iter().map(|(_, d)| d).collect();
+        // Then those whose text holds it, with the line it is in.
+        if !query.trim().is_empty() {
+            for f in livtk_core::docs::search(p.ws.root(), &tree.all(), query) {
+                if !out.iter().any(|d| d.path == f.path) {
+                    out.push(DocItem {
+                        path: f.path,
+                        title: f.title,
+                        line: f.lines.into_iter().next(),
+                    });
+                }
+            }
+        }
+        out
     }
 
     pub fn close_palette(&mut self) {

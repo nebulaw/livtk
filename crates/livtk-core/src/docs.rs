@@ -237,3 +237,137 @@ pub fn resolve(from: &str, href: &str) -> Option<Target> {
     let path = normalize(Path::new(""), &joined)?;
     Some(Target::Doc { path, anchor })
 }
+
+/// Every link a doc's markdown makes, as written: `[text](href)`, `<href>`, and reference
+/// definitions (`[name]: href`). Links in code are left out.
+pub fn links_in(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || line.starts_with("    ") {
+            continue;
+        }
+        // `[name]: href`
+        if t.starts_with('[')
+            && let Some((_, rest)) = t.split_once("]:")
+        {
+            if let Some(href) = rest.split_whitespace().next() {
+                out.push(href.trim_matches(['<', '>']).to_owned());
+            }
+            continue;
+        }
+        let mut code = false;
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'`' => code = !code,
+                // `<https://…>` or `<other.md>`, not an HTML tag.
+                b'<' if !code => {
+                    if let Some(end) = line[i + 1..].find('>') {
+                        let inner = &line[i + 1..i + 1 + end];
+                        if !inner.contains(char::is_whitespace)
+                            && (inner.contains("://")
+                                || is_doc(inner.split('#').next().unwrap_or("")))
+                        {
+                            out.push(inner.to_owned());
+                        }
+                        i += end + 1;
+                    }
+                }
+                b']' if !code && bytes.get(i + 1) == Some(&b'(') => {
+                    let start = i + 2;
+                    let mut depth = 1;
+                    let mut j = start;
+                    while j < bytes.len() {
+                        match bytes[j] {
+                            b'(' => depth += 1,
+                            b')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    // The destination, without a title after it (`(href "title")`).
+                    let dest = line[start..j.min(line.len())].trim();
+                    let href = dest.split_whitespace().next().unwrap_or_default();
+                    if !href.is_empty() {
+                        out.push(href.trim_matches(['<', '>']).to_owned());
+                    }
+                    i = j;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The docs among `docs` (paths, from `root`) that link to the doc at `path`.
+pub fn linking_to<'a>(root: &Path, docs: &[&'a Doc], path: &str) -> Vec<&'a Doc> {
+    docs.iter()
+        .copied()
+        .filter(|d| d.path != path)
+        .filter(|d| {
+            let text = fs::read_to_string(root.join(&d.path)).unwrap_or_default();
+            links_in(&text).iter().any(|href| {
+                matches!(resolve(&d.path, href), Some(Target::Doc { path: p, .. }) if p == path)
+            })
+        })
+        .collect()
+}
+
+/// A doc a search found: which, and up to three of its lines with the query in them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub path: String,
+    pub title: String,
+    pub lines: Vec<String>,
+}
+
+/// The docs among `docs` whose title or text holds `query`, case aside: those it names first,
+/// then the rest, each with the lines it is in.
+pub fn search(root: &Path, docs: &[&Doc], query: &str) -> Vec<Found> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut named = Vec::new();
+    let mut rest = Vec::new();
+    for d in docs {
+        let text = fs::read_to_string(root.join(&d.path)).unwrap_or_default();
+        let lines: Vec<String> = text
+            .lines()
+            .filter(|l| l.to_lowercase().contains(&q))
+            .map(|l| l.trim().trim_start_matches('#').trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .take(3)
+            .collect();
+        let in_title = d.title.to_lowercase().contains(&q) || d.path.to_lowercase().contains(&q);
+        if !in_title && lines.is_empty() {
+            continue;
+        }
+        let found = Found {
+            path: d.path.clone(),
+            title: d.title.clone(),
+            lines,
+        };
+        if in_title {
+            named.push(found);
+        } else {
+            rest.push(found);
+        }
+    }
+    named.extend(rest);
+    named
+}

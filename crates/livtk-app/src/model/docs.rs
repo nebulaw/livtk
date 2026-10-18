@@ -36,6 +36,13 @@ pub struct Docs {
     pub forward: Vec<String>,
     /// A heading to show once the doc is drawn (a link to `doc.md#heading`), by its slug.
     pub anchor: Option<String>,
+    /// What else points at the open doc: the docs that link to it, the nodes that mention it
+    /// (without being linked to it).
+    pub backlinks: Vec<livtk_core::docs::Doc>,
+    pub mentions: Vec<Node>,
+    /// A search across the docs, and what it found.
+    pub query: String,
+    pub results: Vec<livtk_core::docs::Found>,
 }
 
 /// A doc as the reader lays it out: its title (its first heading, when that is a level-one
@@ -283,6 +290,24 @@ impl Model {
             .as_deref()
             .map(|t| page(&link_keys(t, &p.ws.config().prefix)))
             .unwrap_or_default();
+        self.docs.backlinks = open
+            .as_ref()
+            .map(|path| {
+                let all = tree.all();
+                livtk_core::docs::linking_to(p.ws.root(), &all, path)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.docs.mentions = open
+            .as_ref()
+            .map(|path| p.ws.doc_mentions(path).unwrap_or_default())
+            .unwrap_or_default();
+        if !self.docs.query.is_empty() {
+            self.docs.results =
+                livtk_core::docs::search(p.ws.root(), &tree.all(), &self.docs.query);
+        }
         self.docs.dir = p.ws.docs_dir();
         self.docs.prefix = p.ws.config().prefix.clone();
         self.docs.tree = tree;
@@ -384,6 +409,17 @@ impl Model {
         }
         self.load_docs();
         true
+    }
+
+    /// Search the docs' titles and text for `query`; empty, the tree again.
+    pub fn search_docs(&mut self, query: &str) {
+        self.docs.query = query.to_owned();
+        self.docs.results = match self.projects.get(self.current) {
+            Some(p) if !query.trim().is_empty() => {
+                livtk_core::docs::search(p.ws.root(), &self.docs.tree.all(), query)
+            }
+            _ => Vec::new(),
+        };
     }
 
     pub(super) fn docs_select_by(&mut self, delta: isize) {

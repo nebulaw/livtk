@@ -350,3 +350,58 @@ fn back_and_forward_walk_the_docs_opened_and_neighbours_follow_the_tree() {
         "a new way forgets the way forward"
     );
 }
+
+#[test]
+fn the_open_doc_knows_what_links_to_it_and_what_mentions_it() {
+    let dir = project();
+    write(
+        dir.path(),
+        "docs/guide/usage.md",
+        "# Usage\nFirst [set it up](setup.md).\n",
+    );
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    ws.execute(
+        Command::Note {
+            node: "LIV-2".into(),
+            text: "docs/guide/setup.md is out of date".into(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    drop(ws);
+    let mut m = open(dir.path());
+    m.open_doc("docs/guide/setup.md");
+    let linking: Vec<_> = m.docs.backlinks.iter().map(|d| d.path.clone()).collect();
+    assert_eq!(linking, ["docs/guide/usage.md"]);
+    let mentioning: Vec<_> = m.docs.mentions.iter().map(|n| n.key.clone()).collect();
+    assert_eq!(mentioning, ["LIV-2"]);
+}
+
+#[test]
+fn searching_the_docs_finds_by_title_and_text_and_the_palette_shows_the_line() {
+    let dir = project();
+    write(
+        dir.path(),
+        "docs/guide/usage.md",
+        "# Usage\nRun the deploy script.\n",
+    );
+    let mut m = open(dir.path());
+    m.search_docs("deploy");
+    let found: Vec<_> = m.docs.results.iter().map(|f| f.path.clone()).collect();
+    assert_eq!(found, ["docs/guide/usage.md"]);
+    m.search_docs("");
+    assert!(m.docs.results.is_empty(), "the tree again");
+    m.open_palette();
+    m.palette_query("deploy script");
+    let line = m
+        .palette
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Doc(d) => d.line.clone(),
+            _ => None,
+        });
+    assert_eq!(line.as_deref(), Some("Run the deploy script."));
+}

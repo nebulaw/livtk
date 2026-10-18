@@ -727,6 +727,7 @@ impl LivtkApp {
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
             cx.subscribe_in(&reader.find, window, Self::on_find),
+            cx.subscribe_in(&reader.search, window, Self::on_docs_search),
             // Focus can end up nowhere: the focused input was in a panel that closed, or an
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
@@ -5274,6 +5275,7 @@ impl LivtkApp {
                         .text_color(color(TEXT_4))
                         .child(title_case(n.kind.as_str())),
                 ),
+            // Found by its text: the line it is in; else where it is.
             PaletteItem::Doc(d) => row
                 .child(icon(Icon::Docs, 16., TEXT_3))
                 .child(
@@ -5290,7 +5292,7 @@ impl LivtkApp {
                         .truncate()
                         .text_xs()
                         .text_color(color(TEXT_4))
-                        .child(d.path.clone()),
+                        .child(d.line.clone().unwrap_or_else(|| d.path.clone())),
                 ),
         }
     }
@@ -6016,6 +6018,8 @@ impl Render for LivtkApp {
         // reaches the shell.
         let find_bar =
             (self.model.view == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
+        let docs_search = (self.model.view == View::Docs && !self.model.docs.tree.is_empty())
+            .then(|| self.docs_search_field());
         let main = match self.terminal_view(cx) {
             Some(t) => div().flex_1().min_h_0().child(t).into_any_element(),
             None => list_area.into_any_element(),
@@ -6204,7 +6208,8 @@ impl Render for LivtkApp {
                                             )
                                             // The docs' find bar, over the reader's top right,
                                             // outside the list's keys so typing in it is text.
-                                            .children(find_bar),
+                                            .children(find_bar)
+                                            .children(docs_search),
                                     ),
                             )
                             .children(bottom),

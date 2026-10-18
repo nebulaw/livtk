@@ -1793,7 +1793,7 @@ fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Docs));
     assert!(cx.debug_bounds("docs-tree").is_some(), "the tree");
-    assert!(cx.debug_bounds("doc-text").is_some(), "a doc open");
+    assert!(cx.debug_bounds("doc-header").is_some(), "a doc open");
     click_on(cx, "doc-row-docs/README.md");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().docs.open.as_deref(), Some("docs/README.md"))
@@ -1845,10 +1845,11 @@ fn a_long_doc_scrolls(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g o");
     redraw(cx);
     let page = cx.debug_bounds("doc-page").expect("the page");
-    let before = cx.debug_bounds("doc-text").expect("the doc");
+    let before = cx.debug_bounds("doc-header").expect("the doc's header");
+    let end = cx.debug_bounds("doc-footer").expect("its end");
     assert!(
-        before.size.height > page.size.height,
-        "longer than the page: {before:?}"
+        end.bottom() > page.bottom(),
+        "longer than the page: {end:?}"
     );
     cx.simulate_event(gpui_kit::ScrollWheelEvent {
         position: page.center(),
@@ -1859,11 +1860,93 @@ fn a_long_doc_scrolls(cx: &mut TestAppContext) {
         ..Default::default()
     });
     redraw(cx);
-    let after = cx.debug_bounds("doc-text").unwrap();
+    let after = cx.debug_bounds("doc-header").unwrap();
     assert!(
         after.top() < before.top(),
         "scrolled: {before:?} then {after:?}"
     );
+}
+
+/// The reader: the doc's title in its header, its headings in the outline (a click goes
+/// there), a link to a heading of another doc landing on it, Cmd-F finding in the doc, and
+/// Cmd-[ going back.
+#[gpui_kit::test]
+fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    let filler: String = (1..=40).map(|i| format!("Line {i}\n\n")).collect();
+    std::fs::write(
+        root.join("docs/a.md"),
+        format!("# Alpha\n\nIntro.\n\n## First\n\n{filler}## Second\n\nThe needle.\n\n{filler}"),
+    )
+    .unwrap();
+    std::fs::write(root.join("docs/b.md"), "# Beta\n\nSee [a](a.md#second).\n").unwrap();
+    let (app, cx) = open_app(cx, root);
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/a.md"))
+    });
+    assert!(cx.debug_bounds("doc-title").is_some());
+    assert!(
+        cx.debug_bounds("doc-outline").is_some(),
+        "two headings: an outline"
+    );
+    // The outline goes to a heading: its section comes to the top.
+    click_on(cx, "doc-outline-second");
+    redraw(cx);
+    let page = cx.debug_bounds("doc-page").unwrap();
+    let second = cx
+        .debug_bounds("doc-section-2")
+        .expect("the second heading's section");
+    assert!(
+        (f32::from(second.top()) - f32::from(page.top())).abs() < 2.,
+        "at the top: {second:?} in {page:?}"
+    );
+    // Find: the needle.
+    cx.simulate_keystrokes("secondary-f");
+    redraw(cx);
+    assert!(cx.debug_bounds("doc-find").is_some(), "the find bar");
+    cx.update(|window, cx| {
+        assert_eq!(
+            app.read(cx).doc_find(window, cx),
+            (true, true),
+            "open, with the keys"
+        );
+    });
+    cx.simulate_input("needle");
+    redraw(cx);
+    cx.update(|window, cx| {
+        assert_eq!(
+            app.read(cx).doc_find(window, cx),
+            (true, true),
+            "still, after typing"
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    cx.update(|window, cx| {
+        assert!(!app.read(cx).doc_find(window, cx).0, "Esc shuts it");
+    });
+    assert!(cx.debug_bounds("doc-find").is_none(), "and it is gone");
+    // Another doc, a link to a heading of the first: it lands there; Cmd-[ goes back.
+    click_on(cx, "doc-row-docs/b.md");
+    cx.dispatch_action(livtk_app::ui::FollowLink {
+        href: "a.md#second".into(),
+    });
+    redraw(cx);
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/a.md"));
+        assert_eq!(a.model().docs.anchor, None, "landed")
+    });
+    cx.simulate_keystrokes("secondary-[");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/b.md"))
+    });
 }
 
 #[gpui_kit::test]

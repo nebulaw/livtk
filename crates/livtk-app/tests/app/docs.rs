@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::Path;
 
-use livtk_app::model::docs::{DocRow, link_keys};
+use livtk_app::model::docs::{DocRow, find_in, link_keys, page, slug};
 use livtk_app::model::{DocPick, Item, Model, Saved, View};
 use livtk_core::{Actor, Command, Kind, Workspace};
 
@@ -275,4 +275,78 @@ fn docs_are_read_again_when_they_change_on_disk() {
     write(dir.path(), "docs/new.md", "# New\n");
     assert!(m.refresh_docs());
     assert!(paths(&m).contains(&"docs/new.md".to_owned()));
+}
+
+#[test]
+fn a_doc_is_laid_out_as_its_title_and_a_section_at_each_heading() {
+    let text = "# Guide\n\nIntro [ref].\n\n## Install it\n\nSteps.\n\n```\n## not a heading\n```\n\n### Then\n\n## Install it\n\n#### Deep stays in\n\n[ref]: https://example.com\n";
+    let p = page(text);
+    assert_eq!(p.title.as_deref(), Some("Guide"));
+    let heads: Vec<_> = p
+        .sections
+        .iter()
+        .map(|s| s.heading.as_ref().map(|h| (h.level, h.slug.clone())))
+        .collect();
+    assert_eq!(
+        heads,
+        [
+            None,
+            Some((2, "install-it".into())),
+            Some((3, "then".into())),
+            Some((2, "install-it-1".into())),
+        ],
+        "the intro, then each heading to level three; the same twice numbered"
+    );
+    assert!(
+        p.sections[1].text.contains("## not a heading"),
+        "fences are text"
+    );
+    assert!(p.sections[3].text.contains("#### Deep stays in"));
+    assert!(
+        p.sections
+            .iter()
+            .all(|s| s.text.contains("[ref]: https://example.com")),
+        "every section knows the doc's references"
+    );
+    assert_eq!(p.section_of("then"), Some(2));
+    assert_eq!(
+        page("Text first\n# Not the title\n").title,
+        None,
+        "only a heading on top"
+    );
+    assert_eq!(slug("What's new, in 2.0?"), "whats-new-in-20");
+}
+
+#[test]
+fn finding_in_the_text_is_case_blind() {
+    assert_eq!(find_in("Setup the setup", "SETUP"), [0..5, 10..15]);
+    assert!(find_in("anything", "  ").is_empty());
+}
+
+#[test]
+fn back_and_forward_walk_the_docs_opened_and_neighbours_follow_the_tree() {
+    let dir = project();
+    let mut m = open(dir.path());
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
+    m.open_doc("docs/guide/usage.md");
+    m.open_doc("docs/README.md#start-here");
+    assert_eq!(
+        m.docs.anchor.as_deref(),
+        Some("start-here"),
+        "a heading to land on"
+    );
+    m.doc_back();
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/usage.md"));
+    m.doc_back();
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
+    m.doc_forward();
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/usage.md"));
+    let (prev, next) = m.doc_neighbours();
+    assert_eq!(prev.map(|d| d.path.as_str()), Some("docs/guide/setup.md"));
+    assert_eq!(next.map(|d| d.path.as_str()), Some("docs/README.md"));
+    m.open_doc("docs/README.md");
+    assert!(
+        m.docs.forward.is_empty(),
+        "a new way forgets the way forward"
+    );
 }

@@ -27,6 +27,164 @@ pub struct Docs {
     pub prefix: String,
     /// What the docs' files looked like when last read: their paths, sizes and times.
     stamp: u64,
+    /// The open doc laid out as the reader shows it: its title and its sections.
+    pub page: Page,
+    /// When the open doc last changed on disk.
+    pub modified: Option<std::time::SystemTime>,
+    /// The docs gone back from, and forward to again.
+    pub back: Vec<String>,
+    pub forward: Vec<String>,
+    /// A heading to show once the doc is drawn (a link to `doc.md#heading`), by its slug.
+    pub anchor: Option<String>,
+}
+
+/// A doc as the reader lays it out: its title (its first heading, when that is a level-one
+/// heading at its top), then its sections, one at each heading of levels one to three, the
+/// first without one when text comes before the first heading.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Page {
+    pub title: Option<String>,
+    pub sections: Vec<Section>,
+}
+
+/// A part of a doc: its heading, and its markdown (the heading's own line included).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    pub heading: Option<Heading>,
+    pub text: String,
+}
+
+/// A heading: its level, its text, and its slug, as `#slug` links name it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    pub level: u8,
+    pub title: String,
+    pub slug: String,
+}
+
+impl Page {
+    /// The section a `#slug` link goes to.
+    pub fn section_of(&self, slug: &str) -> Option<usize> {
+        self.sections
+            .iter()
+            .position(|s| s.heading.as_ref().is_some_and(|h| h.slug == slug))
+    }
+}
+
+/// `text` laid out as a page. A section's markdown carries the doc's link reference
+/// definitions too, so a reference link works in whichever section it is.
+pub fn page(text: &str) -> Page {
+    let mut title = None;
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current = Section {
+        heading: None,
+        text: String::new(),
+    };
+    let mut definitions = String::new();
+    let mut slugs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut fenced = false;
+    let mut seen_text = false;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if !fenced && t.starts_with('[') && t.contains("]:") {
+            definitions.push_str(line);
+            continue;
+        }
+        let heading = (!fenced && !line.starts_with("    "))
+            .then(|| heading_of(t))
+            .flatten()
+            .filter(|(level, _)| *level <= 3);
+        match heading {
+            Some((1, h)) if title.is_none() && !seen_text && sections.is_empty() => {
+                title = Some(h);
+            }
+            Some((level, h)) => {
+                if !current.text.trim().is_empty() || current.heading.is_some() {
+                    sections.push(current);
+                }
+                let base = slug(&h);
+                let n = slugs.entry(base.clone()).or_insert(0);
+                let slug = if *n == 0 {
+                    base.clone()
+                } else {
+                    format!("{base}-{n}")
+                };
+                *n += 1;
+                current = Section {
+                    heading: Some(Heading {
+                        level,
+                        title: h,
+                        slug,
+                    }),
+                    text: line.to_owned(),
+                };
+                seen_text = true;
+            }
+            None => {
+                if !line.trim().is_empty() {
+                    seen_text = true;
+                }
+                current.text.push_str(line);
+            }
+        }
+    }
+    if !current.text.trim().is_empty() || current.heading.is_some() {
+        sections.push(current);
+    }
+    if !definitions.is_empty() {
+        for s in &mut sections {
+            s.text.push_str("\n\n");
+            s.text.push_str(&definitions);
+        }
+    }
+    Page { title, sections }
+}
+
+/// A heading line's level and text: `## Setup ##` is (2, "Setup").
+fn heading_of(line: &str) -> Option<(u8, String)> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if !(1..=6).contains(&hashes) || !line[hashes..].starts_with([' ', '\t']) {
+        return None;
+    }
+    livtk_core::docs::title_of(line).map(|t| (u8::try_from(hashes).unwrap_or(6), t))
+}
+
+/// A heading's slug, as GitHub makes it: lower case, spaces as `-`, punctuation dropped.
+pub fn slug(title: &str) -> String {
+    title
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where `query` is in `text`, case aside: the byte ranges, in order.
+pub fn find_in(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let lower = text.to_lowercase();
+    let q = query.to_lowercase();
+    // Lower case can change a character's length; only text that keeps it is searched as is.
+    if lower.len() != text.len() {
+        return text
+            .match_indices(query)
+            .map(|(i, m)| i..i + m.len())
+            .collect();
+    }
+    lower
+        .match_indices(&q)
+        .map(|(i, m)| i..i + m.len())
+        .collect()
 }
 
 /// A row of the tree as shown: a folder (open or shut) or a doc, each at its depth.
@@ -117,6 +275,14 @@ impl Model {
             .map(|path| p.ws.doc_nodes(path).unwrap_or_default())
             .unwrap_or_default();
         self.docs.stamp = stamp(p.ws.root(), &p.ws.docs_dir(), open.as_deref());
+        self.docs.modified = open
+            .as_ref()
+            .and_then(|path| std::fs::metadata(p.ws.root().join(path)).ok())
+            .and_then(|m| m.modified().ok());
+        self.docs.page = text
+            .as_deref()
+            .map(|t| page(&link_keys(t, &p.ws.config().prefix)))
+            .unwrap_or_default();
         self.docs.dir = p.ws.docs_dir();
         self.docs.prefix = p.ws.config().prefix.clone();
         self.docs.tree = tree;
@@ -127,8 +293,64 @@ impl Model {
         self.docs.index = self.docs.index.min(rows.len().saturating_sub(1));
     }
 
-    /// Open the doc at `path`, in the Docs view.
+    /// Open the doc at `path`, in the Docs view, the one open before it kept to go back to.
     pub fn open_doc(&mut self, path: &str) {
+        let (path, anchor) = match path.split_once('#') {
+            Some((p, a)) => (p, Some(a.to_owned())),
+            None => (path, None),
+        };
+        if let Some(was) = self.docs.open.clone()
+            && was != path
+            && self.view == View::Docs
+        {
+            self.docs.back.push(was);
+            self.docs.forward.clear();
+        }
+        self.docs.anchor = anchor;
+        self.show_doc(path);
+    }
+
+    /// Back to the doc open before: the one left kept to go forward to.
+    pub fn doc_back(&mut self) {
+        if let Some(to) = self.docs.back.pop() {
+            if let Some(was) = self.docs.open.clone() {
+                self.docs.forward.push(was);
+            }
+            self.show_doc(&to);
+        }
+    }
+
+    pub fn doc_forward(&mut self) {
+        if let Some(to) = self.docs.forward.pop() {
+            if let Some(was) = self.docs.open.clone() {
+                self.docs.back.push(was);
+            }
+            self.show_doc(&to);
+        }
+    }
+
+    /// The docs before and after the open one, in the tree's order.
+    pub fn doc_neighbours(
+        &self,
+    ) -> (
+        Option<&livtk_core::docs::Doc>,
+        Option<&livtk_core::docs::Doc>,
+    ) {
+        let all = self.docs.tree.all();
+        let Some(i) = all
+            .iter()
+            .position(|d| Some(&d.path) == self.docs.open.as_ref())
+        else {
+            return (None, None);
+        };
+        (
+            i.checked_sub(1).and_then(|j| all.get(j).copied()),
+            all.get(i + 1).copied(),
+        )
+    }
+
+    /// Show the doc at `path`, as it is, outside the history.
+    fn show_doc(&mut self, path: &str) {
         if let Some(p) = self.projects.get(self.current) {
             self.docs_open.insert(p.dir.clone(), path.to_owned());
         }

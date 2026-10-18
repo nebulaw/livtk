@@ -41,6 +41,14 @@ use crate::model::{
 use icons::{Icon, icon, icon_hover};
 use theme::*;
 
+/// A line of a doc asked to be seen (a match found), at `top` in the window: the reader scrolls
+/// to it.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
+#[action(namespace = livtk, no_json)]
+pub struct RevealInDoc {
+    pub top: f32,
+}
+
 /// A link in a doc clicked, to follow: another doc, a node (`livtk:KEY`), a web page.
 #[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
 #[action(namespace = livtk, no_json)]
@@ -73,6 +81,9 @@ actions!(
         GoGraph,
         GoTerminal,
         GoDocs,
+        FindInDoc,
+        DocBack,
+        DocForward,
         ZoomIn,
         ZoomOut,
         ZoomFit,
@@ -280,6 +291,9 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "F"], "Findings"),
     ("Navigate", &["G", "then", "R"], "Graph"),
     ("Navigate", &["G", "then", "O"], "Docs"),
+    ("Docs", &[keys::MOD, "+", "F"], "Find in the doc"),
+    ("Docs", &[keys::MOD, "+", "["], "Back to the doc before"),
+    ("Docs", &[keys::MOD, "+", "]"], "Forward again"),
     ("Navigate", &["G", "then", "X"], "Terminal"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
@@ -475,6 +489,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-k", OpenPalette, None),
         KeyBinding::new("secondary-b", ToggleSidebar, None),
         KeyBinding::new("secondary-j", ToggleBottom, None),
+        // The Docs view's: find in the doc, back and forward through the docs read.
+        KeyBinding::new("secondary-f", FindInDoc, None),
+        KeyBinding::new("secondary-[", DocBack, None),
+        KeyBinding::new("secondary-]", DocForward, None),
         KeyBinding::new("secondary-alt-b", TogglePanel, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
         // Ctrl+N and Ctrl+P are Control on every platform, as in every Mac text field.
@@ -617,6 +635,8 @@ pub struct LivtkApp {
     rail_epoch: usize,
     /// The sidebar's width the last change slid from.
     rail_from: Option<f32>,
+    /// The docs reader: its scrolling, its sections, its find bar.
+    reader: docs::Reader,
     /// Each project's terminal, by its folder: started the first time it is shown, kept while
     /// the app runs.
     terminals: HashMap<PathBuf, Entity<terminal::TerminalPane>>,
@@ -701,10 +721,12 @@ impl LivtkApp {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter…"));
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
+        let reader = docs::Reader::new(window, cx);
         let subscriptions = vec![
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
+            cx.subscribe_in(&reader.find, window, Self::on_find),
             // Focus can end up nowhere: the focused input was in a panel that closed, or an
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
@@ -836,6 +858,7 @@ impl LivtkApp {
             rail_was: None,
             rail_epoch: 0,
             rail_from: None,
+            reader,
             terminals: HashMap::new(),
             last_place: None,
             bottom_open: false,
@@ -1079,7 +1102,8 @@ impl LivtkApp {
         }
     }
 
-    /// Give the keys to what is in front: the new-task form, the palette, else the list.
+    /// Give the keys to what is in front: the new-task form, the palette, the find bar, else the
+    /// list.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.help || self.about {
             self.modal_focus.focus(window, cx);
@@ -1090,6 +1114,8 @@ impl LivtkApp {
                 .read(cx)
                 .focus_handle(cx)
                 .focus(window, cx);
+        } else if self.reader.finding {
+            self.reader.find.read(cx).focus_handle(cx).focus(window, cx);
         } else {
             self.focus_main(window, cx);
         }
@@ -1215,6 +1241,18 @@ impl LivtkApp {
             Some(pane) => pane.read(cx).focus_handle().clone().focus(window, cx),
             None => self.nav.focus(window, cx),
         }
+    }
+
+    /// Whether the docs' find bar is open, and whether its field has the keys.
+    pub fn doc_find(&self, window: &Window, cx: &App) -> (bool, bool) {
+        (
+            self.reader.finding,
+            self.reader
+                .find
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window),
+        )
     }
 
     /// Whether the terminal has the keys.
@@ -3673,7 +3711,7 @@ impl LivtkApp {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
-            (View::Docs, _) => self.docs_view(cx),
+            (View::Docs, _) => self.docs_view(window, cx),
             // Drawn in the list's place, outside its keys: `terminal_view`.
             (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
@@ -5897,6 +5935,8 @@ impl Render for LivtkApp {
                     this.escape(window, cx);
                 } else if this.help || this.about || this.form.is_some() {
                     this.close_top(window, cx);
+                } else if this.reader.finding {
+                    this.close_find(window, cx);
                 } else if this.model.view == View::Activity
                     && this.model.detail.is_none()
                     && this.model.grid.pick.span.is_some()
@@ -5974,6 +6014,8 @@ impl Render for LivtkApp {
             .child(content);
         // The terminal takes the list's place, outside the list's keys, so every plain key
         // reaches the shell.
+        let find_bar =
+            (self.model.view == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
         let main = match self.terminal_view(cx) {
             Some(t) => div().flex_1().min_h_0().child(t).into_any_element(),
             None => list_area.into_any_element(),
@@ -6086,9 +6128,28 @@ impl Render for LivtkApp {
             // closes its menu, an editor cancels, a modal closes) take it first, as GPUI stops an
             // action at the first handler, so it reaches here only from the rest (a note).
             .on_action(cx.listener(|this, _: &input::Escape, window, cx| {
+                // In the find bar, Esc shuts it.
+                if this.reader.finding {
+                    this.close_find(window, cx);
+                    return;
+                }
                 this.focus_main(window, cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &FindInDoc, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &DocBack, _, cx| {
+                if this.model.view == View::Docs {
+                    this.model.doc_back();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &DocForward, _, cx| {
+                if this.model.view == View::Docs {
+                    this.model.doc_forward();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, r: &RevealInDoc, _, cx| this.reveal_in_doc(r.top, cx)))
             .child(top_bar)
             .child(
                 div()
@@ -6140,7 +6201,10 @@ impl Render for LivtkApp {
                                                     .flex()
                                                     .justify_center()
                                                     .children(dock),
-                                            ),
+                                            )
+                                            // The docs' find bar, over the reader's top right,
+                                            // outside the list's keys so typing in it is text.
+                                            .children(find_bar),
                                     ),
                             )
                             .children(bottom),

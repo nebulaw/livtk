@@ -41,10 +41,19 @@ icons! {
     Decisions => "route",
     Findings => "medical-flask",
     Graph => "circuit-board",
-    /// The project's docs, and a doc in the tree.
-    Docs => "book-content",
+    /// The project's docs.
+    Docs => "book",
     Terminal => "terminal",
+    /// A project, and a shut folder in the docs' tree; an open one.
     Project => "folder",
+    FolderOpen => "folder-open",
+    /// A doc's outline, On this page.
+    Outline => "list",
+    /// Copying a code block.
+    Copy => "copy",
+    /// The find bar's way to the match before, and the next.
+    ChevronUp => "chevron-up",
+    ChevronDown => "chevron-down",
     OpenProject => "folder-plus",
     Shortcuts => "help-circle",
     NewTask => "pencil-sparkles",

@@ -1773,11 +1773,12 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
     });
 }
 
-/// G then O opens the docs: the tree at the left, a doc open at the right. A click in the tree
-/// opens a doc; a link followed opens another doc, or a node in the panel, whose Docs group
-/// lists what it is linked to.
+/// G then O opens the docs as a list, as the tasks are: J and K walk it, Enter opens a doc to
+/// read in the list's place with its details in the panel, Esc gives the list back. A link
+/// followed opens another doc, or a node in the panel (Esc gives the doc's details back), whose
+/// Docs group lists what it is linked to.
 #[gpui_kit::test]
-fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
+fn the_docs_list_opens_a_doc_to_read_and_follows_links(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path();
     std::fs::create_dir_all(root.join("docs/guide")).unwrap();
@@ -1792,12 +1793,50 @@ fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g o");
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Docs));
-    assert!(cx.debug_bounds("docs-tree").is_some(), "the tree");
-    assert!(cx.debug_bounds("doc-header").is_some(), "a doc open");
+    assert!(cx.debug_bounds("docs-list").is_some(), "the list");
+    assert!(
+        cx.debug_bounds("doc-band-docs/guide").is_some(),
+        "a folder's band"
+    );
+    assert!(cx.debug_bounds("doc-reader").is_none(), "nothing read yet");
+    assert!(cx.debug_bounds("doc-panel").is_none(), "nor its panel");
+    // J onto the band, Enter folds it; again unfolds; J onto setup, Enter reads it.
+    cx.simulate_keystrokes("j enter");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("doc-row-docs/guide/setup.md").is_none(),
+        "folded"
+    );
+    cx.simulate_keystrokes("enter j enter");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/guide/setup.md"));
+        assert!(a.model().docs.reading);
+    });
+    assert!(cx.debug_bounds("doc-reader").is_some(), "the reader");
+    assert!(
+        cx.debug_bounds("docs-list").is_none(),
+        "in the list's place"
+    );
+    assert!(
+        cx.debug_bounds("doc-panel").is_some(),
+        "its details in the panel"
+    );
+    // Esc: the list again, on the doc.
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(cx.debug_bounds("docs-list").is_some(), "the list again");
+    assert!(cx.debug_bounds("doc-panel").is_none());
     click_on(cx, "doc-row-docs/README.md");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().docs.open.as_deref(), Some("docs/README.md"))
     });
+    // The panel put away stays away; the panel's key brings it back.
+    click_on(cx, "close-doc-panel");
+    assert!(cx.debug_bounds("doc-panel").is_none(), "put away");
+    cx.dispatch_action(livtk_app::ui::TogglePanel);
+    redraw(cx);
+    assert!(cx.debug_bounds("doc-panel").is_some(), "back");
     cx.dispatch_action(livtk_app::ui::FollowLink {
         href: "guide/setup.md".into(),
     });
@@ -1809,12 +1848,13 @@ fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
             "a link to a doc"
         )
     });
+    // A task linked, in the panel's Tasks: a click opens it in the panel, Esc gives the doc's
+    // details back.
     app.update(cx, |a, _| {
         a.model_mut().link_doc("LIV-1", "docs/guide/setup.md", true)
     });
-    cx.dispatch_action(livtk_app::ui::FollowLink {
-        href: "livtk:LIV-1".into(),
-    });
+    redraw(cx);
+    click_on(cx, "doc-link-LIV-1");
     settle(cx);
     app.read_with(cx, |a, _| {
         assert_eq!(
@@ -1824,8 +1864,22 @@ fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
     });
     assert!(
         cx.debug_bounds("detail-docs").is_some(),
-        "the panel lists its docs"
+        "the task's panel lists its docs"
     );
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    app.read_with(cx, |a, _| {
+        assert!(a.model().detail.is_none());
+        assert!(a.model().docs.reading, "still reading");
+    });
+    assert!(
+        cx.debug_bounds("doc-panel").is_some(),
+        "the doc's details again"
+    );
+    cx.dispatch_action(livtk_app::ui::FollowLink {
+        href: "livtk:LIV-1".into(),
+    });
+    settle(cx);
     click_on(cx, "detail-doc-docs/guide/setup.md");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().docs.open.as_deref(), Some("docs/guide/setup.md"))
@@ -1842,7 +1896,7 @@ fn a_long_doc_scrolls(cx: &mut TestAppContext) {
     std::fs::write(root.join("docs/long.md"), format!("# Long\n\n{long}")).unwrap();
     let (_app, cx) = open_app(cx, root);
     resize(cx, 1400., 900.);
-    cx.simulate_keystrokes("g o");
+    cx.simulate_keystrokes("g o enter");
     redraw(cx);
     let page = cx.debug_bounds("doc-page").expect("the page");
     let before = cx.debug_bounds("doc-header").expect("the doc's header");
@@ -1867,7 +1921,7 @@ fn a_long_doc_scrolls(cx: &mut TestAppContext) {
     );
 }
 
-/// The reader: the doc's title in its header, its headings in the outline (a click goes
+/// The reader: the doc's title over it, its headings in the panel's On this page (a click goes
 /// there), a link to a heading of another doc landing on it, Cmd-F finding in the doc, and
 /// Cmd-[ going back.
 #[gpui_kit::test]
@@ -1886,7 +1940,7 @@ fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
     // Where the reader lands, not its glide there.
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1600., 1000.);
-    cx.simulate_keystrokes("g o");
+    cx.simulate_keystrokes("g o enter");
     redraw(cx);
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().docs.open.as_deref(), Some("docs/a.md"))
@@ -1934,7 +1988,8 @@ fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
     });
     assert!(cx.debug_bounds("doc-find").is_none(), "and it is gone");
     // Another doc, a link to a heading of the first: it lands there; Cmd-[ goes back.
-    click_on(cx, "doc-row-docs/b.md");
+    app.update(cx, |a, _| a.model_mut().open_doc("docs/b.md"));
+    redraw(cx);
     cx.dispatch_action(livtk_app::ui::FollowLink {
         href: "a.md#second".into(),
     });
@@ -1951,10 +2006,10 @@ fn the_reader_has_an_outline_finds_and_goes_back(cx: &mut TestAppContext) {
     });
 }
 
-/// The tree's search: typed into, it shows what it found in place of the tree; a result
-/// opens with the find bar on the query.
+/// The docs are searched through the filter, as a list is: what it found listed in place of
+/// every doc; one opens with the find bar on the query.
 #[gpui_kit::test]
-fn the_docs_search_finds_and_opens_with_the_find_bar(cx: &mut TestAppContext) {
+fn the_docs_filter_searches_and_opens_with_the_find_bar(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path();
     std::fs::create_dir_all(root.join("docs")).unwrap();
@@ -1962,24 +2017,29 @@ fn the_docs_search_finds_and_opens_with_the_find_bar(cx: &mut TestAppContext) {
     std::fs::write(root.join("docs/b.md"), "# Beta\n\nThe hidden needle.\n").unwrap();
     let (app, cx) = open_app(cx, root);
     resize(cx, 1600., 1000.);
-    cx.simulate_keystrokes("g o");
+    cx.simulate_keystrokes("g o /");
     redraw(cx);
-    click_on(cx, "docs-search");
+    assert!(cx.debug_bounds("filter-menu").is_some(), "the filter");
     cx.simulate_input("needle");
     redraw(cx);
     assert!(
         cx.debug_bounds("doc-row-docs/a.md").is_none(),
-        "the tree gives way"
+        "only what it found"
     );
-    click_on(cx, "doc-found-docs/b.md");
+    assert!(cx.debug_bounds("doc-row-docs/b.md").is_some());
+    // Enter gives the keys back to the list; Enter there opens what is highlighted.
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    cx.simulate_keystrokes("enter");
     redraw(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().docs.open.as_deref(), Some("docs/b.md"))
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/b.md"));
+        assert!(a.model().docs.reading);
     });
     cx.update(|window, cx| assert!(app.read(cx).doc_find(window, cx).0, "the find bar, on it"));
 }
 
-/// A doc's callouts and diagrams are blocks of their own; its frontmatter shows in its header.
+/// A doc's callouts and diagrams are blocks of their own; its frontmatter shows in its panel.
 #[gpui_kit::test]
 fn callouts_diagrams_and_frontmatter_show(cx: &mut TestAppContext) {
     let dir = project();
@@ -1992,7 +2052,7 @@ fn callouts_diagrams_and_frontmatter_show(cx: &mut TestAppContext) {
     .unwrap();
     let (_app, cx) = open_app(cx, root);
     resize(cx, 1600., 1000.);
-    cx.simulate_keystrokes("g o");
+    cx.simulate_keystrokes("g o enter");
     redraw(cx);
     assert!(cx.debug_bounds("callout-note").is_some(), "the callout");
     assert!(cx.debug_bounds("doc-status").is_some(), "the status");
@@ -2008,13 +2068,13 @@ fn a_doc_is_edited_in_place_and_saved(cx: &mut TestAppContext) {
     std::fs::write(root.join("docs/a.md"), "# Alpha\n").unwrap();
     let (app, cx) = open_app(cx, root);
     resize(cx, 1600., 1000.);
-    cx.simulate_keystrokes("g o");
+    cx.simulate_keystrokes("g o enter");
     redraw(cx);
     click_on(cx, "doc-edit");
     redraw(cx);
     assert!(cx.debug_bounds("doc-editor").is_some(), "the editor");
     assert!(
-        cx.debug_bounds("docs-tree").is_none(),
+        cx.debug_bounds("doc-reader").is_none(),
         "in the reader's place"
     );
     cx.simulate_keystrokes("cmd-down");

@@ -1,5 +1,5 @@
-//! The Docs view: the project's docs as a tree (folders open and shut), the doc open, read from
-//! disk, and the nodes linked to it. Read again whenever the view loads, so what changed on disk
+//! The Docs view: the project's docs as a list (folders as bands, open and shut), the doc open,
+//! read from disk, and the nodes linked to it. Read again whenever the view loads, so what changed on disk
 //! shows. Links between nodes and docs go through the log (`Command::DocLink`).
 
 use std::collections::HashSet;
@@ -20,8 +20,16 @@ pub struct Docs {
     pub linked: Vec<Node>,
     /// Folders shut, by path.
     pub shut: HashSet<String>,
-    /// The tree's highlighted row.
+    /// The list's highlighted line.
     pub index: usize,
+    /// Whether the open doc is being read: the reader in the list's place, its details in the
+    /// panel (unless the panel was put away).
+    pub reading: bool,
+    pub hide_panel: bool,
+    /// What the list shows of each doc: the kinds and states of the nodes linked to it, and when
+    /// it last changed on disk.
+    pub marks: std::collections::HashMap<String, Vec<(livtk_core::Kind, livtk_core::State)>>,
+    pub edited: std::collections::HashMap<String, std::time::SystemTime>,
     /// The docs' folder (for the empty view), and the project's key prefix (for keys in docs).
     pub dir: String,
     pub prefix: String,
@@ -331,61 +339,83 @@ pub fn find_in(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
-/// A row of the tree as shown: a folder (open or shut) or a doc, each at its depth.
+/// A line of the docs' list as shown: a folder's band (open or shut, with how many docs are
+/// under it), or a doc (with the line a search found it by).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocRow {
-    Folder {
+    Band {
         path: String,
         name: String,
-        depth: usize,
+        count: usize,
         open: bool,
     },
     Doc {
         path: String,
         title: String,
-        depth: usize,
+        line: Option<String>,
     },
 }
 
 impl DocRow {
     pub fn path(&self) -> &str {
         match self {
-            DocRow::Folder { path, .. } | DocRow::Doc { path, .. } => path,
+            DocRow::Band { path, .. } | DocRow::Doc { path, .. } => path,
         }
     }
 }
 
 impl Docs {
-    /// The tree's rows as shown: a shut folder's contents left out.
+    /// The list's lines as shown: what a search found, else the docs at the top, then each
+    /// folder's band and its docs, a shut folder's left out with every folder under it.
     pub fn rows(&self) -> Vec<DocRow> {
-        let mut out = Vec::new();
-        self.push_rows(&self.tree, 0, &mut out);
+        if !self.query.trim().is_empty() {
+            return self
+                .results
+                .iter()
+                .map(|f| DocRow::Doc {
+                    path: f.path.clone(),
+                    title: f.title.clone(),
+                    line: f.lines.first().cloned(),
+                })
+                .collect();
+        }
+        let mut out: Vec<DocRow> = self.tree.docs.iter().map(doc_row).collect();
+        for f in &self.tree.folders {
+            self.push_band(f, "", &mut out);
+        }
         out
     }
 
-    fn push_rows(&self, folder: &Folder, depth: usize, out: &mut Vec<DocRow>) {
-        for f in &folder.folders {
-            let open = !self.shut.contains(&f.path);
-            out.push(DocRow::Folder {
-                path: f.path.clone(),
-                name: f.name.clone(),
-                depth,
+    fn push_band(&self, folder: &Folder, above: &str, out: &mut Vec<DocRow>) {
+        let name = if above.is_empty() {
+            capitalised(&folder.name)
+        } else {
+            format!("{above} / {}", capitalised(&folder.name))
+        };
+        let open = !self.shut.contains(&folder.path);
+        // A folder of folders alone needs no band of its own: theirs name it.
+        if !folder.docs.is_empty() {
+            out.push(DocRow::Band {
+                path: folder.path.clone(),
+                name: name.clone(),
+                count: folder.all().len(),
                 open,
             });
-            if open {
-                self.push_rows(f, depth + 1, out);
-            }
         }
-        for d in &folder.docs {
-            out.push(DocRow::Doc {
-                path: d.path.clone(),
-                title: d.title.clone(),
-                depth,
-            });
+        if open {
+            out.extend(folder.docs.iter().map(doc_row));
+            for f in &folder.folders {
+                self.push_band(f, &name, out);
+            }
         }
     }
 
-    /// The open doc's title, as the tree names it.
+    /// Every doc in the list's order, shut folders' too: the way previous and next go.
+    pub fn ordered(&self) -> Vec<&livtk_core::docs::Doc> {
+        in_order(&self.tree)
+    }
+
+    /// The open doc's title, as the list names it.
     pub fn title_of(&self, path: &str) -> Option<&str> {
         self.tree
             .all()
@@ -393,6 +423,35 @@ impl Docs {
             .find(|d| d.path == path)
             .map(|d| d.title.as_str())
     }
+}
+
+/// Every doc under `folder` in the list's order: its own first, then each folder's.
+fn in_order(folder: &Folder) -> Vec<&livtk_core::docs::Doc> {
+    fn walk<'a>(f: &'a Folder, out: &mut Vec<&'a livtk_core::docs::Doc>) {
+        out.extend(&f.docs);
+        for sub in &f.folders {
+            walk(sub, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(folder, &mut out);
+    out
+}
+
+fn doc_row(d: &livtk_core::docs::Doc) -> DocRow {
+    DocRow::Doc {
+        path: d.path.clone(),
+        title: d.title.clone(),
+        line: None,
+    }
+}
+
+/// `name` with its first letter a capital: a folder named as a heading would be.
+pub fn capitalised(name: &str) -> String {
+    let mut c = name.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 impl Model {
@@ -410,7 +469,7 @@ impl Model {
             .get(&p.dir)
             .filter(|path| p.ws.root().join(path).is_file())
             .cloned()
-            .or_else(|| tree.all().first().map(|d| d.path.clone()));
+            .or_else(|| in_order(&tree).first().map(|d| d.path.clone()));
         let text = open
             .as_ref()
             .and_then(|path| std::fs::read_to_string(p.ws.root().join(path)).ok());
@@ -456,6 +515,23 @@ impl Model {
             self.docs.results =
                 livtk_core::docs::search(p.ws.root(), &tree.all(), &self.docs.query);
         }
+        // What the list shows of each doc: its linked nodes' states, when it changed.
+        let mut marks = std::collections::HashMap::new();
+        for (path, _) in p.ws.linked_docs().unwrap_or_default() {
+            let nodes = p.ws.doc_nodes(&path).unwrap_or_default();
+            marks.insert(path, nodes.iter().map(|n| (n.kind, n.state)).collect());
+        }
+        self.docs.marks = marks;
+        self.docs.edited = tree
+            .all()
+            .iter()
+            .filter_map(|d| {
+                let t = std::fs::metadata(p.ws.root().join(&d.path))
+                    .and_then(|m| m.modified())
+                    .ok()?;
+                Some((d.path.clone(), t))
+            })
+            .collect();
         self.docs.dir = p.ws.docs_dir();
         self.docs.prefix = p.ws.config().prefix.clone();
         self.docs.tree = tree;
@@ -466,7 +542,8 @@ impl Model {
         self.docs.index = self.docs.index.min(rows.len().saturating_sub(1));
     }
 
-    /// Open the doc at `path`, in the Docs view, the one open before it kept to go back to.
+    /// Open the doc at `path` to read, in the Docs view, the one open before it kept to go back
+    /// to.
     pub fn open_doc(&mut self, path: &str) {
         let (path, anchor) = match path.split_once('#') {
             Some((p, a)) => (p, Some(a.to_owned())),
@@ -481,6 +558,21 @@ impl Model {
         }
         self.docs.anchor = anchor;
         self.show_doc(path);
+        self.docs.reading = true;
+    }
+
+    /// Done reading: the list again, on the doc that was open.
+    pub fn leave_doc(&mut self) {
+        self.docs.reading = false;
+        self.docs.anchor = None;
+        if let Some(i) = self
+            .docs
+            .rows()
+            .iter()
+            .position(|r| Some(r.path()) == self.docs.open.as_deref())
+        {
+            self.docs.index = i;
+        }
     }
 
     /// Back to the doc open before: the one left kept to go forward to.
@@ -502,14 +594,14 @@ impl Model {
         }
     }
 
-    /// The docs before and after the open one, in the tree's order.
+    /// The docs before and after the open one, in the list's order.
     pub fn doc_neighbours(
         &self,
     ) -> (
         Option<&livtk_core::docs::Doc>,
         Option<&livtk_core::docs::Doc>,
     ) {
-        let all = self.docs.tree.all();
+        let all = self.docs.ordered();
         let Some(i) = all
             .iter()
             .position(|d| Some(&d.path) == self.docs.open.as_ref())
@@ -531,7 +623,7 @@ impl Model {
         if let Some(p) = self.projects.get(self.current) {
             self.docs_open.insert(p.dir.clone(), path.to_owned());
         }
-        // Its folders open, so the tree shows it, highlighted.
+        // Its folders open, so the list shows it, highlighted.
         let mut at = path;
         while let Some((parent, _)) = at.rsplit_once('/') {
             self.docs.shut.remove(parent);
@@ -637,9 +729,11 @@ impl Model {
         Some(self.projects.get(self.current)?.ws.root().join(path))
     }
 
-    /// Search the docs' titles and text for `query`; empty, the tree again.
+    /// Search the docs' titles and text for `query`, what it finds listed; empty, every doc
+    /// again.
     pub fn search_docs(&mut self, query: &str) {
         self.docs.query = query.to_owned();
+        self.docs.index = 0;
         self.docs.results = match self.projects.get(self.current) {
             Some(p) if !query.trim().is_empty() => {
                 livtk_core::docs::search(p.ws.root(), &self.docs.tree.all(), query)
@@ -655,11 +749,11 @@ impl Model {
         }
     }
 
-    /// Enter on the tree: a doc opens, a folder opens or shuts.
+    /// Enter on the list: a doc opens to read, a folder's band opens or shuts.
     pub(super) fn docs_enter(&mut self) {
         match self.docs.rows().get(self.docs.index).cloned() {
             Some(DocRow::Doc { path, .. }) => self.open_doc(&path),
-            Some(DocRow::Folder { path, .. }) => self.toggle_doc_folder(&path),
+            Some(DocRow::Band { path, .. }) => self.toggle_doc_folder(&path),
             None => {}
         }
     }

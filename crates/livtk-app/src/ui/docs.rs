@@ -1,9 +1,10 @@
-//! The Docs view: the project's docs as a tree at the left, the doc open in the middle as a
-//! reader, and its outline at the right. The reader: a header (where the doc is, its title, when
-//! it changed, the tasks linked to it), then the doc a section at each heading, at a reading
-//! size and width, then the docs before and after it. The outline follows the reading and jumps
-//! to a heading; a link to `doc.md#heading` lands on it. ⌘F finds in the doc, ⌘[ and ⌘] go back
-//! and forward. What it shows is `model::docs`'s.
+//! The Docs view, in the app's grammar (docs/design.md): the docs as a list in the middle, a
+//! folder's band over its docs; a doc opened to read takes the list's place behind a bar (back
+//! and forward, where it is, Edit, Open in editor), its details in the panel (what it says of
+//! itself, the tasks linked to it, what mentions it, On this page). The doc reads a section at
+//! each heading, at a reading size and width, then the docs before and after it. On this page
+//! follows the reading and jumps to a heading; a link to `doc.md#heading` lands on it. ⌘F finds
+//! in the doc, ⌘[ and ⌘] go back and forward. What it shows is `model::docs`'s.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -19,19 +20,13 @@ use gpui_kit::*;
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
 use super::{FollowLink, LivtkApp, RevealInDoc, ease_out_cubic, state_mark};
-use crate::model::docs::{CalloutKind, DocRow, Saved, callout, find_in};
+use crate::model::docs::{CalloutKind, DocRow, Saved, callout, capitalised, find_in};
 
-/// The tree's width, a row's height and its indent per level.
-const TREE_W: f32 = 260.;
-const TREE_ROW: f32 = 28.;
-const INDENT: f32 = 14.;
+/// The marks of linked tasks a doc's row shows, before it counts the rest.
+const MARKS: usize = 4;
 /// The doc's measure: about seventy characters a line at its regular size (Settings sets the
 /// size and the line's height).
 const READING_W: f32 = 720.;
-/// The tree's search field's height.
-const SEARCH_H: f32 = 40.;
-/// The outline at the right, shown when the reader has room for it beside the doc.
-const OUTLINE_W: f32 = 220.;
 /// A found match, and the one the find bar is on.
 const FOUND: f32 = 0.28;
 /// A doc's fade as it comes in, and the glide to a heading.
@@ -47,8 +42,8 @@ pub(super) struct Reader {
     shown: Option<String>,
     pub find: Entity<InputState>,
     pub finding: bool,
-    /// The tree's search, across the docs' titles and text.
-    pub search: Entity<InputState>,
+    /// The list's scrolling.
+    pub list: ScrollHandle,
     /// The doc's markdown, while it is edited in the app; whether the file changed on disk
     /// since (a save then asks), and whether leaving would lose what was typed (Esc asks).
     pub editor: Option<Entity<EditorState>>,
@@ -69,7 +64,7 @@ impl Reader {
             shown: None,
             find: cx.new(|cx| InputState::new(window, cx).placeholder("Find in the doc")),
             finding: false,
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search docs")),
+            list: ScrollHandle::new(),
             editor: None,
             conflict: false,
             leaving: false,
@@ -87,10 +82,7 @@ impl LivtkApp {
             return super::empty(
                 Icon::Docs,
                 "No docs yet",
-                &format!(
-                    "Markdown files under {}/ show here, its folders as a tree.",
-                    docs.dir
-                ),
+                &format!("Markdown files under {}/ show here, by folder.", docs.dir),
             )
             .child(super::empty_action(
                 "empty-create-docs",
@@ -102,150 +94,209 @@ impl LivtkApp {
             ))
             .into_any_element();
         }
-        self.sync_sections(cx);
+        if docs.reading && docs.open.is_some() {
+            self.sync_sections(cx);
+            return self.reader(window, cx).into_any_element();
+        }
+        self.docs_list(cx).into_any_element()
+    }
+
+    /// The docs as a list, as the tasks are: each folder a band (a click folds it), each doc a
+    /// row (a click opens it to read). A search in the filter lists what it found instead.
+    fn docs_list(&self, cx: &mut Context<Self>) -> Div {
+        let docs = &self.model.docs;
+        let rows = docs.rows();
+        if rows.is_empty() {
+            return div().size_full().child(super::empty(
+                Icon::Search,
+                "Nothing found",
+                "No doc's title or text holds what the filter says.",
+            ));
+        }
+        let mut list = div()
+            .id("docs-list")
+            .debug_selector(|| "docs-list".into())
+            .track_scroll(&self.reader.list)
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for (i, row) in rows.into_iter().enumerate() {
+            let highlighted = i == docs.index;
+            list = list.child(match row {
+                DocRow::Band {
+                    path,
+                    name,
+                    count,
+                    open,
+                } => self.doc_band(i, path, name, count, open, highlighted, cx),
+                DocRow::Doc { path, title, line } => {
+                    self.doc_line(i, path, title, line, highlighted, cx)
+                }
+            });
+        }
+        // Room at the end, under the dock.
         div()
             .size_full()
+            .child(list.children((0..super::DOCK_ROWS).map(|_| super::dock_room())))
+    }
+
+    /// A folder's band, as a group's in the task list: its caret, its name and how many docs.
+    #[allow(clippy::too_many_arguments)]
+    fn doc_band(
+        &self,
+        i: usize,
+        path: String,
+        name: String,
+        count: usize,
+        open: bool,
+        highlighted: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = format!("doc-band-{path}");
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id.clone())
+            .w_full()
+            .h(px(ROW))
+            .flex_none()
+            .px_4()
             .flex()
-            .child(self.docs_tree(cx))
-            .child(self.reader(window, cx))
+            .items_center()
+            .gap_2()
+            .bg(color(if highlighted { SELECTED } else { SURFACE }))
+            .border_b_1()
+            .border_color(color(BORDER))
+            .hover(|s| s.bg(color(HOVER)))
+            .child(icon(
+                if open {
+                    Icon::CaretDown
+                } else {
+                    Icon::CaretRight
+                },
+                10.,
+                TEXT_4,
+            ))
+            .child(icon(
+                if open {
+                    Icon::FolderOpen
+                } else {
+                    Icon::Project
+                },
+                14.,
+                TEXT_3,
+            ))
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT))
+                    .child(name),
+            )
+            .child(div().text_color(color(TEXT_4)).child(format!("{count}")))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.model.docs.index = i;
+                this.model.toggle_doc_folder(&path);
+                cx.notify();
+            }))
             .into_any_element()
     }
 
-    /// The tree: folders open and shut, docs open on a click; the highlighted row follows the
-    /// keys (J, K and Enter, as in the lists).
-    fn docs_tree(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// A doc's row: its title (and the line a search found it by), the states of the tasks
+    /// linked to it, when it last changed.
+    fn doc_line(
+        &self,
+        i: usize,
+        path: String,
+        title: String,
+        line: Option<String>,
+        highlighted: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let docs = &self.model.docs;
-        let mut tree = div()
-            .id("docs-tree")
-            .debug_selector(|| "docs-tree".into())
-            .w(px(TREE_W))
+        let (own, moving) = self.highlight(&path, highlighted);
+        let marks = docs.marks.get(&path).cloned().unwrap_or_default();
+        let more = marks.len().saturating_sub(MARKS);
+        let edited = docs.edited.get(&path).and_then(|t| {
+            let t = jiff::Timestamp::try_from(*t).ok()?;
+            Some(super::ago(&format!("{t:.3}")))
+        });
+        let id = format!("doc-row-{path}");
+        let searched = !docs.query.trim().is_empty();
+        div()
+            .id(SharedString::from(id.clone()))
+            .debug_selector(move || id.clone())
+            .relative()
+            .w_full()
+            .h(px(ROW))
             .flex_none()
-            .h_full()
-            .overflow_y_scroll()
-            .border_r_1()
-            .border_color(color(BORDER))
-            .p_2()
-            // Room for the search field above, which floats there outside the list's keys.
-            .pt(px(SEARCH_H + 8.))
+            .px_4()
             .flex()
-            .flex_col()
-            .gap(px(1.));
-        if !docs.query.trim().is_empty() {
-            return self.search_results(tree, cx);
-        }
-        for (i, row) in docs.rows().into_iter().enumerate() {
-            let highlighted = i == docs.index;
-            let open =
-                matches!(&row, DocRow::Doc { path, .. } if docs.open.as_deref() == Some(path));
-            let id = format!("doc-row-{}", row.path());
-            let line = div()
-                .id(SharedString::from(id.clone()))
-                .debug_selector(move || id.clone())
-                .group("doc-row")
-                .h(px(TREE_ROW))
-                .flex_none()
-                .pr_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded_lg()
-                .text_sm()
-                .when(highlighted || open, |d| d.bg(color(SELECTED)))
-                .when(!highlighted && !open, |d| d.hover(|h| h.bg(color(HOVER))))
-                .text_color(color(if open { TEXT } else { TEXT_3 }));
-            let line = match row {
-                DocRow::Folder {
-                    path,
-                    name,
-                    depth,
-                    open,
-                } => line
-                    .pl(px(8. + depth as f32 * INDENT))
-                    .child(icon(
-                        if open {
-                            Icon::FolderOpen
-                        } else {
-                            Icon::Project
-                        },
-                        14.,
-                        TEXT_4,
-                    ))
-                    .child(div().truncate().child(name))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.docs.index = i;
-                        this.model.toggle_doc_folder(&path);
-                        cx.notify();
-                    })),
-                DocRow::Doc { path, title, depth } => line
-                    // A doc's name lines up with its folder's, past where the folder's icon is.
-                    .pl(px(8. + depth as f32 * INDENT + 22.))
-                    .child(div().flex_1().min_w_0().truncate().child(title))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.docs.index = i;
-                        this.model.open_doc(&path);
-                        cx.notify();
-                    })),
-            };
-            tree = tree.child(line);
-        }
-        tree
-    }
-
-    /// What a search found, in place of the tree: each doc with the lines it is in. A click
-    /// opens it with the find bar on the query.
-    fn search_results(&self, mut list: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
-        let docs = &self.model.docs;
-        if docs.results.is_empty() {
-            return list.child(
+            .items_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(color(CONTENT))
+            .when(own, |d| d.bg(color(SELECTED)))
+            .when(!highlighted, |d| d.hover(|s| s.bg(color(HOVER))))
+            .children(moving.map(|(from, to, epoch)| super::glide_highlight(from, to, epoch)))
+            .child(icon(Icon::Article, 15., TEXT_4))
+            .child(
                 div()
-                    .p_2()
-                    .text_sm()
+                    .flex_none()
+                    .max_w(relative(0.6))
+                    .truncate()
+                    .text_color(color(TEXT))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
                     .text_color(color(TEXT_4))
-                    .child("Nothing found"),
-            );
-        }
-        for f in &docs.results {
-            let path = f.path.clone();
-            let id = format!("doc-found-{path}");
-            list = list.child(
+                    .children(line),
+            )
+            .child(
                 div()
-                    .id(SharedString::from(id.clone()))
-                    .debug_selector(move || id.clone())
-                    .px_2()
-                    .py(px(6.))
                     .flex_none()
                     .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .rounded_lg()
-                    .hover(|h| h.bg(color(HOVER)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(color(TEXT_2))
-                            .truncate()
-                            .child(f.title.clone()),
+                    .items_center()
+                    .gap_1()
+                    .children(
+                        marks
+                            .iter()
+                            .take(MARKS)
+                            .map(|&(kind, state)| state_mark(kind, state)),
                     )
-                    .children(f.lines.iter().take(2).map(|l| {
-                        div()
-                            .text_xs()
-                            .text_color(color(TEXT_3))
-                            .truncate()
-                            .child(l.clone())
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(color(TEXT_4))
-                            .truncate()
-                            .child(f.path.clone()),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_found(&path, window, cx);
-                    })),
-            );
-        }
-        list
+                    .when(more > 0, |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child(format!("+{more}")),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .w(px(60.))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .children(edited),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.model.docs.index = i;
+                if searched {
+                    this.open_found(&path, window, cx);
+                } else {
+                    this.model.open_doc(&path);
+                    cx.notify();
+                }
+            }))
+            .into_any_element()
     }
 
     /// A doc a search found, opened with the find bar on what was searched.
@@ -258,59 +309,6 @@ impl LivtkApp {
         self.reader.finding = true;
         self.reader.find.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
-    }
-
-    /// The tree's search field, floating over the tree's top, outside the list's keys.
-    pub(super) fn docs_search_field(&self) -> Div {
-        div()
-            .debug_selector(|| "docs-search".into())
-            .absolute()
-            .top_0()
-            .left_0()
-            .w(px(TREE_W))
-            .h(px(SEARCH_H))
-            .px_2()
-            .pt_2()
-            .child(
-                div()
-                    .h_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(color(BORDER))
-                    .bg(color(CONTENT))
-                    .child(icon(Icon::Search, 14., TEXT_4))
-                    .child(div().flex_1().min_w_0().child(super::flush_input(
-                        Input::new(&self.reader.search).xsmall(),
-                        24.,
-                    ))),
-            )
-    }
-
-    /// The search field changed: the docs searched again; Enter opens the first found.
-    pub(super) fn on_docs_search(
-        &mut self,
-        _: &Entity<InputState>,
-        event: &InputEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            InputEvent::Change => {
-                let q = self.reader.search.read(cx).value().to_string();
-                self.model.search_docs(&q);
-                cx.notify();
-            }
-            InputEvent::PressEnter { .. } => {
-                if let Some(first) = self.model.docs.results.first().map(|f| f.path.clone()) {
-                    self.open_found(&first, window, cx);
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Each section's markdown, made or brought up to date for the open doc; a new doc starts
@@ -366,18 +364,11 @@ impl LivtkApp {
         }
     }
 
-    /// The reader, and its outline beside it when there is room.
+    /// The doc being read, in the list's place: a bar (the way back, where it is, what to do
+    /// with it), then the doc.
     fn reader(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let _ = window;
         let docs = &self.model.docs;
-        let room = self.content_width(window) - TREE_W;
-        let headings = docs
-            .page
-            .sections
-            .iter()
-            .filter(|s| s.heading.is_some())
-            .count();
-        let outline =
-            (room >= READING_W + OUTLINE_W + 96. && headings >= 2).then(|| self.outline(cx));
         let mut page = div()
             .id("doc-page")
             .debug_selector(|| "doc-page".into())
@@ -392,16 +383,14 @@ impl LivtkApp {
             .flex_col()
             .items_center()
             .pb(px(96.))
-            .child(self.doc_header(cx));
+            .child(self.doc_header());
         match &docs.text {
             Some(_) => {
                 let reading = self.model.reading;
                 for (i, (_, state)) in self.reader.sections.iter().enumerate() {
                     page = page.child(section(i, state, reading));
                 }
-                page = page
-                    .children(self.mentioned_in(cx))
-                    .child(self.doc_footer(cx));
+                page = page.child(self.doc_footer(cx));
             }
             None => {
                 if let Some(path) = &docs.open {
@@ -419,94 +408,309 @@ impl LivtkApp {
         } else {
             DOC_FADE
         };
-        let page = div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .child(page)
-            .with_animation(
-                SharedString::from(format!("doc-in-{}", docs.open.clone().unwrap_or_default())),
-                Animation::new(fade).with_easing(ease_out_cubic),
-                |el, t| el.opacity(0.35 + 0.65 * t),
-            );
+        let page = div().flex_1().min_h_0().flex().child(page).with_animation(
+            SharedString::from(format!("doc-in-{}", docs.open.clone().unwrap_or_default())),
+            Animation::new(fade).with_easing(ease_out_cubic),
+            |el, t| el.opacity(0.35 + 0.65 * t),
+        );
         div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .relative()
+            .debug_selector(|| "doc-reader".into())
+            .size_full()
             .flex()
+            .flex_col()
+            .child(self.reader_bar(cx))
             .child(page)
-            .children(outline)
     }
 
-    /// Above the doc: where it is, its title, when it last changed, and the tasks linked to it.
-    fn doc_header(&self, cx: &mut Context<Self>) -> Div {
+    /// The reader's bar: back and forward, where the doc is (Docs, a click away from the list),
+    /// Edit and Open in editor, and the way back to the list.
+    fn reader_bar(&self, cx: &mut Context<Self>) -> Div {
         let docs = &self.model.docs;
-        let Some(path) = docs.open.clone() else {
-            return measure();
-        };
-        // Docs › Guide › Setup: the folders under the docs' own, by name.
+        let path = docs.open.clone().unwrap_or_default();
         let under = path
             .strip_prefix(&format!("{}/", docs.dir))
             .unwrap_or(&path)
             .to_owned();
+        let title = self.doc_title();
         let mut crumbs = div()
             .debug_selector(|| "doc-crumbs".into())
+            .flex_1()
+            .min_w_0()
             .flex()
             .items_center()
-            .gap_1()
-            .text_xs()
+            .gap_2()
             .text_color(color(TEXT_4))
-            .child("Docs");
+            .child(
+                div()
+                    .id("doc-crumb-docs")
+                    .debug_selector(|| "doc-crumb-docs".into())
+                    .flex_none()
+                    .px_1()
+                    .rounded_lg()
+                    .hover(|h| h.text_color(color(TEXT_2)).bg(color(HOVER)))
+                    .child("Docs")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.leave_doc();
+                        cx.notify();
+                    })),
+            );
         let folders: Vec<&str> = under.split('/').collect();
         for folder in &folders[..folders.len().saturating_sub(1)] {
-            crumbs = crumbs.child("›").child(capitalised(folder));
+            crumbs = crumbs
+                .child(icon(Icon::CaretRight, 8., TEXT_4))
+                .child(div().flex_none().child(capitalised(folder)));
         }
-        let title = docs
-            .front
+        crumbs = crumbs.child(icon(Icon::CaretRight, 8., TEXT_4)).child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(color(TEXT_2))
+                .child(title),
+        );
+        let file = path.clone();
+        div()
+            .debug_selector(|| "doc-bar".into())
+            .h(px(46.))
+            .flex_none()
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(color(BORDER))
+            .child(bar_icon(
+                "doc-back",
+                Icon::ArrowLeft,
+                "Back · ⌘[",
+                !docs.back.is_empty(),
+                cx.listener(|this, _, _, cx| {
+                    this.model.doc_back();
+                    cx.notify();
+                }),
+            ))
+            .child(bar_icon(
+                "doc-forward",
+                Icon::ArrowRight,
+                "Forward · ⌘]",
+                !docs.forward.is_empty(),
+                cx.listener(|this, _, _, cx| {
+                    this.model.doc_forward();
+                    cx.notify();
+                }),
+            ))
+            .child(crumbs)
+            .child(header_button(
+                "doc-edit",
+                Icon::Edit,
+                "Edit",
+                cx.listener(|this, _, window, cx| this.doc_start_edit(window, cx)),
+            ))
+            .child(header_button(
+                "doc-open-editor",
+                Icon::ArrowUpRight,
+                "Open in editor",
+                cx.listener(move |this, _, _, cx| this.open_in_editor(&file, cx)),
+            ))
+            .child(bar_icon(
+                "doc-close",
+                Icon::Close,
+                "Back to the docs · Esc",
+                true,
+                cx.listener(|this, _, _, cx| {
+                    this.model.leave_doc();
+                    cx.notify();
+                }),
+            ))
+    }
+
+    /// The open doc's title: its frontmatter's, its first heading, else its name.
+    fn doc_title(&self) -> String {
+        let docs = &self.model.docs;
+        let path = docs.open.clone().unwrap_or_default();
+        docs.front
             .title
             .clone()
             .or_else(|| docs.page.title.clone())
             .or_else(|| docs.title_of(&path).map(str::to_owned))
-            .unwrap_or_else(|| path.clone());
-        let when = docs.modified.and_then(|t| {
-            let t = jiff::Timestamp::try_from(t).ok()?;
-            Some(format!("Edited {}", super::ago(&format!("{t:.3}"))))
-        });
-        let mut chips = div().flex().flex_wrap().items_center().gap_2();
-        for n in &docs.linked {
-            let key = n.key.clone();
-            let (open_key, unlink_key) = (key.clone(), key.clone());
-            let unlink_path = path.clone();
-            let id = format!("doc-link-{key}");
-            chips = chips.child(
+            .unwrap_or(path)
+    }
+
+    /// Above the doc, its title alone: the rest of what it is shows in the panel.
+    fn doc_header(&self) -> Div {
+        measure()
+            .debug_selector(|| "doc-header".into())
+            .pt(px(40.))
+            .pb(px(12.))
+            .child(
                 div()
-                    .id(SharedString::from(id.clone()))
-                    .debug_selector(move || id.clone())
-                    .group("doc-link")
-                    .h(px(26.))
-                    .max_w(px(280.))
-                    .pl_2()
-                    .pr_1()
+                    .debug_selector(|| "doc-title".into())
+                    .text_size(px(30.))
+                    .line_height(relative(1.2))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color(TEXT))
+                    .child(self.doc_title()),
+            )
+    }
+
+    /// The open doc's details in the panel, laid out as a task's: what it says of itself, the
+    /// tasks linked to it, what mentions it, and On this page.
+    pub(super) fn doc_panel(&self, width: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+        let docs = &self.model.docs;
+        let path = docs.open.clone().unwrap_or_default();
+        let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let edited = docs.modified.and_then(|t| {
+            let t = jiff::Timestamp::try_from(t).ok()?;
+            Some(super::ago(&format!("{t:.3}")))
+        });
+        let mut props = div().flex().flex_col().gap_2();
+        if let Some(status) = docs.front.status.clone() {
+            props = props.child(super::prop_row(
+                "Status",
+                div().child(
+                    div()
+                        .debug_selector(|| "doc-status".into())
+                        .px_2()
+                        .h(px(20.))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(color(BORDER_STRONG))
+                        .text_xs()
+                        .child(capitalised(&status)),
+                ),
+            ));
+        }
+        if !docs.front.tags.is_empty() {
+            props = props.child(super::prop_row(
+                "Tags",
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(docs.front.tags.iter().map(|t| {
+                        div()
+                            .px_2()
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(color(BORDER_STRONG))
+                            .text_xs()
+                            .text_color(color(TEXT_3))
+                            .child(format!("#{t}"))
+                    })),
+            ));
+        }
+        props = props
+            .children(edited.map(|e| super::prop_row("Edited", div().child(e))))
+            .child(super::prop_row(
+                "Path",
+                div().min_w_0().truncate().child(path.clone()),
+            ));
+        div()
+            .id("doc-panel")
+            .debug_selector(|| "doc-panel".into())
+            .w(px(width))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(46.))
+                    .flex_none()
+                    .px_4()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(color(BORDER_STRONG))
-                    .bg(color(SURFACE))
-                    .text_xs()
-                    .hover(|h| h.bg(color(HOVER)).border_color(color(BORDER_STRONG)))
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(color(BORDER))
+                    .child(icon(Icon::Article, 15., TEXT_4))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(color(TEXT_3))
+                            .child(name),
+                    )
+                    .child(div().flex_1())
+                    .child(bar_icon(
+                        "close-doc-panel",
+                        Icon::DockRight,
+                        "Close · ⌥⌘B",
+                        true,
+                        cx.listener(|this, _, _, cx| {
+                            this.model.docs.hide_panel = true;
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .id("doc-panel-scroll")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .p_5()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(props)
+                    .child(self.doc_tasks(&path, cx))
+                    .children(self.mentioned_in(cx))
+                    .children(self.outline(cx)),
+            )
+    }
+
+    /// The tasks linked to the doc, as the task panel lists its links: each a click away, an ×
+    /// taking the link away; Link a task adds one.
+    fn doc_tasks(&self, path: &str, cx: &mut Context<Self>) -> Div {
+        let mut out = div()
+            .debug_selector(|| "doc-tasks".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(label("Tasks"))
+                    .child(div().flex_1())
+                    .child(header_button(
+                        "doc-link-task",
+                        Icon::Link,
+                        "Link a task",
+                        cx.listener(|this, _, window, cx| {
+                            this.model.open_doc_node_picker();
+                            this.reset_palette_input(window, cx);
+                            cx.notify();
+                        }),
+                    )),
+            );
+        if self.model.docs.linked.is_empty() {
+            return out.child(
+                div().text_xs().text_color(color(TEXT_4)).child(
+                    "None yet: a linked task's doc is put in front of Claude when it starts.",
+                ),
+            );
+        }
+        for n in &self.model.docs.linked {
+            let key = n.key.clone();
+            let (open_key, unlink_key) = (key.clone(), key.clone());
+            let unlink_path = path.to_owned();
+            out = out.child(
+                link_row(format!("doc-link-{key}"))
                     .child(state_mark(n.kind, n.state))
                     .child(
                         div()
                             .flex_none()
-                            .text_color(color(TEXT_3))
+                            .text_color(color(TEXT_4))
                             .child(key.clone()),
                     )
                     .child(
                         div()
+                            .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_color(color(TEXT_2))
@@ -523,8 +727,6 @@ impl LivtkApp {
                             .items_center()
                             .justify_center()
                             .rounded_lg()
-                            .invisible()
-                            .group_hover("doc-link", |s| s.visible())
                             .hover(|h| h.bg(color(HOVER)))
                             .child(icon_hover(Icon::Unlink, 14., TEXT_4, "doc-unlink", TEXT))
                             .tooltip(|window, cx| {
@@ -543,106 +745,7 @@ impl LivtkApp {
                     })),
             );
         }
-        chips = chips.child(
-            div()
-                .id("doc-link-task")
-                .debug_selector(|| "doc-link-task".into())
-                .group("doc-link-task")
-                .h(px(24.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded_lg()
-                .text_xs()
-                .text_color(color(TEXT_3))
-                .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
-                .child(icon_hover(Icon::Link, 14., TEXT_3, "doc-link-task", TEXT))
-                .child("Link a task")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.model.open_doc_node_picker();
-                    this.reset_palette_input(window, cx);
-                    cx.notify();
-                })),
-        );
-        let file = path.clone();
-        let actions = div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(header_button(
-                "doc-edit",
-                Icon::Edit,
-                "Edit",
-                cx.listener(|this, _, window, cx| this.doc_start_edit(window, cx)),
-            ))
-            .child(header_button(
-                "doc-open-editor",
-                Icon::ArrowUpRight,
-                "Open in editor",
-                cx.listener(move |this, _, _, cx| this.open_in_editor(&file, cx)),
-            ));
-        measure()
-            .debug_selector(|| "doc-header".into())
-            .pt(px(40.))
-            .pb(px(20.))
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(div().flex_1().child(crumbs))
-                    .child(actions),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "doc-title".into())
-                    .text_size(px(30.))
-                    .line_height(relative(1.2))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(color(TEXT))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(color(TEXT_4))
-                    .when_some(docs.front.status.clone(), |d, status| {
-                        d.child(
-                            div()
-                                .debug_selector(|| "doc-status".into())
-                                .px_2()
-                                .h(px(20.))
-                                .flex()
-                                .items_center()
-                                .rounded_full()
-                                .bg(color(SELECTED))
-                                .text_color(color(TEXT_2))
-                                .child(capitalised(&status)),
-                        )
-                    })
-                    .children(docs.front.tags.iter().map(|t| {
-                        div()
-                            .px_2()
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .rounded_full()
-                            .bg(color(SURFACE))
-                            .border_1()
-                            .border_color(color(BORDER_STRONG))
-                            .text_color(color(TEXT_3))
-                            .child(format!("#{t}"))
-                    }))
-                    .when_some(when, |d, w| d.child(w).child("·"))
-                    .child(path.clone()),
-            )
-            .child(chips)
+        out
     }
 
     /// Mentioned in: the docs that link to this one, and the tasks that mention it without
@@ -652,37 +755,24 @@ impl LivtkApp {
         if docs.backlinks.is_empty() && docs.mentions.is_empty() {
             return None;
         }
-        let mut list = div().flex().flex_col().gap(px(2.));
+        let mut list = div()
+            .debug_selector(|| "doc-mentioned".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(label("Mentioned in"));
         for d in &docs.backlinks {
             let path = d.path.clone();
-            let id = format!("doc-backlink-{path}");
             list = list.child(
-                div()
-                    .id(SharedString::from(id.clone()))
-                    .debug_selector(move || id.clone())
-                    .h(px(30.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .text_sm()
-                    .hover(|h| h.bg(color(HOVER)))
-                    .child(icon(Icon::Docs, 13., TEXT_4))
-                    .child(
-                        div()
-                            .text_color(color(TEXT_2))
-                            .truncate()
-                            .child(d.title.clone()),
-                    )
+                link_row(format!("doc-backlink-{path}"))
+                    .child(icon(Icon::Article, 14., TEXT_4))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_xs()
-                            .text_color(color(TEXT_4))
-                            .child(d.path.clone()),
+                            .text_color(color(TEXT_2))
+                            .child(d.title.clone()),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.model.open_doc(&path);
@@ -692,24 +782,13 @@ impl LivtkApp {
         }
         for n in &docs.mentions {
             let key = n.key.clone();
-            let id = format!("doc-mention-{key}");
             list = list.child(
-                div()
-                    .id(SharedString::from(id.clone()))
-                    .debug_selector(move || id.clone())
-                    .h(px(30.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .text_sm()
-                    .hover(|h| h.bg(color(HOVER)))
+                link_row(format!("doc-mention-{key}"))
                     .child(state_mark(n.kind, n.state))
                     .child(
                         div()
                             .flex_none()
-                            .text_color(color(TEXT_3))
+                            .text_color(color(TEXT_4))
                             .child(key.clone()),
                     )
                     .child(
@@ -726,25 +805,10 @@ impl LivtkApp {
                     })),
             );
         }
-        Some(
-            measure()
-                .debug_selector(|| "doc-mentioned".into())
-                .mt(px(40.))
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(color(TEXT_4))
-                        .child("Mentioned in"),
-                )
-                .child(list),
-        )
+        Some(list)
     }
 
-    /// Under the doc: the docs before and after it, in the tree's order.
+    /// Under the doc: the docs before and after it, in the list's order.
     fn doc_footer(&self, cx: &mut Context<Self>) -> Div {
         let (prev, next) = self.model.doc_neighbours();
         let pair = |d: Option<&livtk_core::docs::Doc>| d.map(|d| (d.path.clone(), d.title.clone()));
@@ -798,35 +862,21 @@ impl LivtkApp {
             )
     }
 
-    /// On this page: the doc's headings, the one being read lit; a click goes there.
-    fn outline(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// On this page: the doc's headings, the one being read lit; a click goes there. Only for a
+    /// doc with headings to go between.
+    fn outline(&self, cx: &mut Context<Self>) -> Option<Div> {
         let page = &self.model.docs.page;
+        if page.sections.iter().filter(|s| s.heading.is_some()).count() < 2 {
+            return None;
+        }
         // The section at the top of the reader (the header is the scroll's first child).
         let reading = self.reader.scroll.top_item().saturating_sub(1);
         let mut list = div()
-            .id("doc-outline")
             .debug_selector(|| "doc-outline".into())
-            .w(px(OUTLINE_W))
-            .flex_none()
-            .h_full()
-            .overflow_y_scroll()
-            .pt(px(48.))
-            .pr_6()
             .flex()
             .flex_col()
             .gap(px(2.))
-            .child(
-                div()
-                    .pb_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(color(TEXT_4))
-                    .child(icon(Icon::Outline, 12., TEXT_4))
-                    .child("On this page"),
-            );
+            .child(label("On this page"));
         for (i, s) in page.sections.iter().enumerate() {
             let Some(h) = &s.heading else { continue };
             let lit = i == reading;
@@ -839,7 +889,6 @@ impl LivtkApp {
                     .pl(px(10. + f32::from(h.level.saturating_sub(2)) * 12.))
                     .border_l_2()
                     .border_color(color(if lit { ACCENT } else { BORDER }))
-                    .text_size(px(13.))
                     .text_color(color(if lit { TEXT } else { TEXT_3 }))
                     .hover(|s| s.text_color(color(TEXT_2)))
                     .truncate()
@@ -847,7 +896,7 @@ impl LivtkApp {
                     .on_click(cx.listener(move |this, _, _, cx| this.glide_to(i + 1, cx))),
             );
         }
-        list
+        Some(list)
     }
 
     /// The reader glides to put its `item`th child at its top; with less motion asked for, it
@@ -934,7 +983,8 @@ impl LivtkApp {
         div()
             .debug_selector(|| "doc-find".into())
             .absolute()
-            .top(px(12.))
+            // Under the reader's bar.
+            .top(px(46. + 10.))
             .right(px(16.))
             .w(px(320.))
             .h(px(36.))
@@ -986,7 +1036,8 @@ impl LivtkApp {
 
     /// ⌘F in the Docs view: the find bar, its field given the keys.
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.model.view != super::View::Docs || self.model.docs.text.is_none() {
+        let docs = &self.model.docs;
+        if self.model.view != super::View::Docs || !docs.reading || docs.text.is_none() {
             return;
         }
         self.reader.finding = true;
@@ -1536,9 +1587,59 @@ fn hash_of(s: &str) -> u64 {
     h.finish()
 }
 
-fn capitalised(s: &str) -> String {
-    let mut c = s.chars();
-    c.next()
-        .map(|f| f.to_uppercase().chain(c).collect())
-        .unwrap_or_default()
+/// A section's name, as the panel's are.
+fn label(text: &'static str) -> Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color(TEXT_4))
+        .child(text)
+}
+
+/// A row of the panel's lists, as the task panel's links are: a click opens what it names.
+fn link_row(id: String) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id.clone())
+        .h(px(28.))
+        .pl_2()
+        .pr_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .bg(color(CONTENT))
+        .border_1()
+        .border_color(color(BORDER))
+        .hover(|h| h.bg(color(HOVER)))
+}
+
+/// An icon button of a bar: brightening on hover, its name and keys in a tooltip; dim and
+/// still when there is nowhere to go.
+fn bar_icon(
+    id: &'static str,
+    glyph: Icon,
+    tip: &'static str,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .group(id)
+        .size(px(26.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+        })
+        .when(enabled, |d| {
+            d.hover(|h| h.bg(color(HOVER)))
+                .child(icon_hover(glyph, 16., TEXT_4, id, TEXT_2))
+                .on_click(on_click)
+        })
+        .when(!enabled, |d| d.child(icon(glyph, 16., BORDER_STRONG)))
 }

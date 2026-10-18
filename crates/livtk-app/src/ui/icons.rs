@@ -44,9 +44,11 @@ icons! {
     /// The project's docs.
     Docs => "book",
     Terminal => "terminal",
-    /// A project, and a shut folder in the docs' tree; an open one.
+    /// A project, and a shut folder in the docs' list; an open one.
     Project => "folder",
     FolderOpen => "folder-open",
+    /// A doc, in the docs' list.
+    Article => "article",
     /// A doc's outline, On this page.
     Outline => "list",
     /// Copying a code block.

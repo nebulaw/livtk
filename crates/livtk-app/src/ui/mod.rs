@@ -31,6 +31,7 @@ use livtk_core::event::{Event, Op};
 use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
+use crate::model::docs::DocRow;
 use crate::model::keys;
 use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, DocPick, FeedRow, GroupKey,
@@ -194,6 +195,8 @@ const RAIL_BELOW: f32 = 1000.;
 const CONTENT_FRAME: f32 = 10.;
 /// How much `+` and `-` zoom the graph.
 const ZOOM_STEP: f32 = 1.25;
+/// How far J and K scroll a doc being read.
+const READ_STEP: f32 = 64.;
 /// A list row's leading slot: a task's priority, or another kind's icon.
 const LEAD: f32 = 22.;
 /// The dock's height, and its gap from the content's bottom edge.
@@ -735,7 +738,6 @@ impl LivtkApp {
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
             cx.subscribe_in(&reader.find, window, Self::on_find),
-            cx.subscribe_in(&reader.search, window, Self::on_docs_search),
             // Focus can end up nowhere: the focused input was in a panel that closed, or an
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
@@ -1077,6 +1079,14 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) {
         match event {
+            InputEvent::Change if self.model.view == View::Docs => {
+                let text = state.read(cx).value().to_string();
+                if text != self.model.docs.query {
+                    self.model.search_docs(&text);
+                    self.reader.list.scroll_to_item(0);
+                    cx.notify();
+                }
+            }
             InputEvent::Change => {
                 let text = state.read(cx).value().to_string();
                 if text != self.model.display().filter {
@@ -1236,7 +1246,11 @@ impl LivtkApp {
 
     /// Show the current view's filter text in the filter field.
     fn sync_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let want = self.model.display().filter;
+        let want = if self.model.view == View::Docs {
+            self.model.docs.query.clone()
+        } else {
+            self.model.display().filter
+        };
         if self.filter.read(cx).value().as_ref() != want {
             self.filter
                 .update(cx, |s, cx| s.set_value(want.clone(), window, cx));
@@ -1340,6 +1354,8 @@ impl LivtkApp {
             if let Some(i) = at {
                 self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
             }
+        } else if self.model.view == View::Docs {
+            self.reader.list.scroll_to_item(self.model.docs.index);
         } else if self.model.on_board() {
             self.reveal_card();
         } else if let Some(i) = self.display_index() {
@@ -1379,6 +1395,17 @@ impl LivtkApp {
     /// `j` or `k`: move the selection `by` one, its highlight gliding there when the two rows
     /// are next to each other in a list (no band between them, not on the board or the graph).
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        // Reading a doc, J and K scroll it a few lines.
+        if self.model.view == View::Docs && self.model.docs.reading {
+            let scroll = &self.reader.scroll;
+            let o = scroll.offset();
+            let y = (o.y - px(by as f32 * READ_STEP))
+                .min(px(0.))
+                .max(-scroll.max_offset().y);
+            scroll.set_offset(point(o.x, y));
+            cx.notify();
+            return;
+        }
         let before = self.spot();
         self.model.select_by(by);
         let after = self.spot();
@@ -1412,7 +1439,12 @@ impl LivtkApp {
     /// The selection as a list shows it: the name its line goes by, and the line's place.
     fn spot(&self) -> Option<(String, usize)> {
         match self.model.view {
-            View::Graph | View::Docs | View::Terminal => None,
+            View::Graph | View::Terminal => None,
+            View::Docs if self.model.docs.reading => None,
+            View::Docs => {
+                let i = self.model.docs.index;
+                Some((self.model.docs.rows().get(i)?.path().to_owned(), i))
+            }
             View::Tasks if self.model.layout == Layout::Board => None,
             View::Activity => {
                 let i = self.model.activity_index;
@@ -1438,6 +1470,12 @@ impl LivtkApp {
     fn highlight(&self, name: &str, selected: bool) -> (bool, Option<(f32, f32, usize)>) {
         let current = match self.model.view {
             View::Activity => Some(format!("event-{}", self.model.activity_index)),
+            View::Docs => self
+                .model
+                .docs
+                .rows()
+                .get(self.model.docs.index)
+                .map(|r| r.path().to_owned()),
             _ => self.model.selected().map(|r| r.key.clone()),
         };
         let Some(g) = self
@@ -2257,7 +2295,11 @@ impl LivtkApp {
     /// ⌥⌘B and the top bar's button: the detail panel closed, or opened on what is selected,
     /// as Enter opens it.
     fn toggle_panel(&mut self, cx: &mut Context<Self>) {
-        if self.model.detail.is_some() {
+        let docs = &mut self.model.docs;
+        if self.model.view == View::Docs && docs.reading && self.model.detail.is_none() {
+            // Reading, the panel is the doc's.
+            docs.hide_panel = !docs.hide_panel;
+        } else if self.model.detail.is_some() {
             self.model.close_detail();
         } else {
             self.model.open_detail();
@@ -2686,7 +2728,7 @@ impl LivtkApp {
 
     fn filter_menu(&self, cx: &mut Context<Self>) -> Div {
         let d = self.model.display();
-        let mut panel = menu_panel(264.)
+        let panel = menu_panel(264.)
             .debug_selector(|| "filter-menu".into())
             .on_action(
                 cx.listener(|this, _: &input::Escape, window, cx| this.close_menu(window, cx)),
@@ -2705,9 +2747,12 @@ impl LivtkApp {
                             .min_w_0()
                             .child(Input::new(&self.filter).appearance(false).small()),
                     ),
-            )
-            .child(menu_divider())
-            .child(menu_heading("Priority"));
+            );
+        // The docs are searched by their words alone.
+        if self.model.view == View::Docs {
+            return panel;
+        }
+        let mut panel = panel.child(menu_divider()).child(menu_heading("Priority"));
         for p in 1..=4u8 {
             let on = d.priorities.contains(&p);
             panel = panel.child(
@@ -2793,6 +2838,23 @@ impl LivtkApp {
         self.panel_width.min(cap).max(PANEL_MIN.min(cap))
     }
 
+    /// Whether the panel is open: on a node, or on the doc being read.
+    fn panel_open(&self) -> bool {
+        self.model.detail.is_some() || self.doc_panel_open()
+    }
+
+    /// Whether the panel shows the doc being read: nothing else open in it, and not put away.
+    fn doc_panel_open(&self) -> bool {
+        let docs = &self.model.docs;
+        self.model.view == View::Docs
+            && docs.reading
+            && docs.open.is_some()
+            && !docs.hide_panel
+            && self.reader.editor.is_none()
+            && self.model.detail.is_none()
+            && self.detail_leaving.is_none()
+    }
+
     /// Whether the panel floats over the content: when beside it, it would leave the content
     /// narrower than it can be.
     fn panel_floats(&self, window: &Window) -> bool {
@@ -2804,7 +2866,7 @@ impl LivtkApp {
     /// is laid out right the first time: the window, less the sidebar, the content's inset and
     /// border, and the detail panel when it is open beside it.
     fn content_width(&self, window: &Window) -> f32 {
-        let panel = if self.model.detail.is_some() && !self.panel_floats(window) {
+        let panel = if self.panel_open() && !self.panel_floats(window) {
             self.panel_px(window)
         } else {
             0.
@@ -2882,7 +2944,8 @@ impl LivtkApp {
             groups.push(self.dock_zoom(cx));
         }
         let mut shaping = Vec::new();
-        if lists || view == View::Inbox {
+        let doc_list = view == View::Docs && !self.model.docs.reading;
+        if lists || view == View::Inbox || doc_list {
             shaping.push(self.dock_filter(wide, cx));
         }
         if lists {
@@ -3021,9 +3084,13 @@ impl LivtkApp {
 
     fn dock_filter(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let d = self.model.display();
-        let active = usize::from(!d.filter.trim().is_empty())
-            + usize::from(!d.priorities.is_empty())
-            + usize::from(!d.states.is_empty());
+        let active = if self.model.view == View::Docs {
+            usize::from(!self.model.docs.query.trim().is_empty())
+        } else {
+            usize::from(!d.filter.trim().is_empty())
+                + usize::from(!d.priorities.is_empty())
+                + usize::from(!d.states.is_empty())
+        };
         let label = match (wide, active) {
             (false, _) => None,
             (true, 0) => Some("Filter".to_owned()),
@@ -4782,6 +4849,18 @@ impl LivtkApp {
         let (d, closing) = match (&self.model.detail, &self.detail_leaving) {
             (Some(d), _) => (d.clone(), false),
             (None, Some(d)) => (d.clone(), true),
+            // A doc being read: its details, when nothing else is open in the panel.
+            (None, None) if self.doc_panel_open() => {
+                return Some(
+                    div()
+                        .debug_selector(|| "detail-panel".into())
+                        .flex_none()
+                        .h_full()
+                        .overflow_hidden()
+                        .child(self.doc_panel(width, cx))
+                        .into_any_element(),
+                );
+            }
             (None, None) => return None,
         };
         let panel = self.detail_panel(&d, width, cx);
@@ -5984,9 +6063,7 @@ impl Render for LivtkApp {
         // The panel's edge, while it is open (not while it slides away): in the gutter right of
         // the content box, or across the border of a panel floating over it.
         let mut panel_edge = self
-            .model
-            .detail
-            .is_some()
+            .panel_open()
             .then(|| self.edge(Edge::Panel, window, cx));
         let float_edge = if floats { panel_edge.take() } else { None };
         let detail = self.detail(panel_w, cx).map(|d| {
@@ -6072,7 +6149,17 @@ impl Render for LivtkApp {
             .track_focus(&self.nav)
             .on_action(cx.listener(|this, _: &Down, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &Up, _, cx| this.step(-1, cx)))
-            .on_action(cx.listener(|this, _: &Open, _, cx| {
+            .on_action(cx.listener(|this, _: &Open, window, cx| {
+                // A doc a search found opens with the find bar on what was searched.
+                let docs = &this.model.docs;
+                let searched =
+                    this.model.view == View::Docs && !docs.reading && !docs.query.trim().is_empty();
+                if searched
+                    && let Some(DocRow::Doc { path, .. }) = docs.rows().get(docs.index).cloned()
+                {
+                    this.open_found(&path, window, cx);
+                    return;
+                }
                 this.model.enter();
                 cx.notify();
             }))
@@ -6091,6 +6178,13 @@ impl Render for LivtkApp {
                     this.close_top(window, cx);
                 } else if this.reader.finding {
                     this.close_find(window, cx);
+                } else if this.model.view == View::Docs
+                    && this.model.docs.reading
+                    && this.model.detail.is_none()
+                {
+                    // Done reading: the list again.
+                    this.model.leave_doc();
+                    cx.notify();
                 } else if this.model.view == View::Activity
                     && this.model.detail.is_none()
                     && this.model.grid.pick.span.is_some()
@@ -6170,8 +6264,6 @@ impl Render for LivtkApp {
         // reaches the shell.
         let find_bar =
             (self.model.view == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
-        let docs_search = (self.model.view == View::Docs && !self.model.docs.tree.is_empty())
-            .then(|| self.docs_search_field());
         // Editing a doc: its editor in the list's place too, so typing is text.
         let editing = (self.model.view == View::Docs)
             .then(|| self.doc_editor(cx))
@@ -6377,8 +6469,7 @@ impl Render for LivtkApp {
                                             )
                                             // The docs' find bar, over the reader's top right,
                                             // outside the list's keys so typing in it is text.
-                                            .children(find_bar)
-                                            .children(docs_search),
+                                            .children(find_bar),
                                     ),
                             )
                             .children(bottom),

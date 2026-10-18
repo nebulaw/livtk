@@ -1,4 +1,4 @@
-//! The Docs view without a window: the tree and its keys, the doc open and remembered, links
+//! The Docs view without a window: the list and its keys, the doc open and remembered, links
 //! between docs and nodes from either end and through the palette, keys in docs made links,
 //! and docs read again when they change on disk.
 
@@ -59,38 +59,81 @@ fn paths(m: &Model) -> Vec<String> {
 }
 
 #[test]
-fn the_tree_opens_the_first_doc_and_the_keys_walk_it() {
+fn the_list_bands_folders_and_the_keys_walk_it() {
     let dir = project();
+    write(dir.path(), "docs/guide/deep/more.md", "# More\n");
     let mut m = open(dir.path());
+    // The docs at the top first, then each folder's band and its docs; a folder under another
+    // named by its path.
     assert_eq!(
         paths(&m),
         [
+            "docs/README.md",
             "docs/guide",
             "docs/guide/setup.md",
             "docs/guide/usage.md",
-            "docs/README.md"
+            "docs/guide/deep",
+            "docs/guide/deep/more.md",
         ]
     );
+    let rows = m.docs.rows();
+    assert!(matches!(
+        &rows[1],
+        DocRow::Band { name, count: 3, open: true, .. } if name == "Guide"
+    ));
+    assert!(matches!(&rows[4], DocRow::Band { name, .. } if name == "Guide / Deep"));
     assert_eq!(
         m.docs.open.as_deref(),
-        Some("docs/guide/setup.md"),
+        Some("docs/README.md"),
         "the first doc"
     );
-    assert_eq!(m.docs.text.as_deref(), Some("# Setup\n"));
-    // Enter on the folder shuts it; J then Enter opens the README.
-    m.enter();
-    assert!(matches!(
-        m.docs.rows()[0],
-        DocRow::Folder { open: false, .. }
-    ));
-    assert_eq!(paths(&m), ["docs/guide", "docs/README.md"]);
+    assert!(!m.docs.reading, "the list first");
+    // Enter on a band folds it, and every folder under it.
     m.select_by(1);
     m.enter();
-    assert_eq!(m.docs.open.as_deref(), Some("docs/README.md"));
-    // Opening a doc in a shut folder opens the folder, so the tree shows it.
+    assert_eq!(paths(&m), ["docs/README.md", "docs/guide"]);
+    assert!(!m.docs.reading);
+    m.enter();
+    // Enter on a doc opens it to read; Esc's leaving gives the list back, on it.
+    m.select_by(1);
+    m.enter();
+    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
+    assert!(m.docs.reading);
+    m.leave_doc();
+    assert!(!m.docs.reading);
+    assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/setup.md");
+    // Opening a doc in a folded folder unfolds it, so the list shows it.
+    m.toggle_doc_folder("docs/guide");
     m.open_doc("docs/guide/usage.md");
-    assert_eq!(paths(&m).len(), 4);
+    assert_eq!(paths(&m).len(), 6);
     assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/usage.md");
+}
+
+#[test]
+fn a_docs_row_knows_its_linked_tasks_and_a_search_lists_what_it_found() {
+    let dir = project();
+    write(
+        dir.path(),
+        "docs/guide/usage.md",
+        "# Usage\nRun the deploy script.\n",
+    );
+    let mut m = open(dir.path());
+    m.link_doc("LIV-1", "docs/guide/setup.md", true);
+    m.link_doc("LIV-2", "docs/guide/setup.md", true);
+    assert_eq!(
+        m.docs.marks.get("docs/guide/setup.md").map(Vec::len),
+        Some(2)
+    );
+    assert!(!m.docs.marks.contains_key("docs/README.md"));
+    assert!(m.docs.edited.contains_key("docs/README.md"));
+    m.search_docs("deploy");
+    let rows = m.docs.rows();
+    assert!(matches!(
+        &rows[..],
+        [DocRow::Doc { path, line: Some(l), .. }] if path == "docs/guide/usage.md" && l.contains("deploy")
+    ));
+    m.search_docs("");
+    assert_eq!(paths(&m).len(), 4, "every doc again");
 }
 
 #[test]
@@ -327,10 +370,10 @@ fn finding_in_the_text_is_case_blind() {
 }
 
 #[test]
-fn back_and_forward_walk_the_docs_opened_and_neighbours_follow_the_tree() {
+fn back_and_forward_walk_the_docs_opened_and_neighbours_follow_the_list() {
     let dir = project();
     let mut m = open(dir.path());
-    assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
+    m.open_doc("docs/guide/setup.md");
     m.open_doc("docs/guide/usage.md");
     m.open_doc("docs/README.md#start-here");
     assert_eq!(
@@ -346,7 +389,10 @@ fn back_and_forward_walk_the_docs_opened_and_neighbours_follow_the_tree() {
     assert_eq!(m.docs.open.as_deref(), Some("docs/guide/usage.md"));
     let (prev, next) = m.doc_neighbours();
     assert_eq!(prev.map(|d| d.path.as_str()), Some("docs/guide/setup.md"));
-    assert_eq!(next.map(|d| d.path.as_str()), Some("docs/README.md"));
+    assert_eq!(next.map(|d| d.path.as_str()), None, "the last in the list");
+    m.open_doc("docs/guide/setup.md");
+    let (prev, _) = m.doc_neighbours();
+    assert_eq!(prev.map(|d| d.path.as_str()), Some("docs/README.md"));
     m.open_doc("docs/README.md");
     assert!(
         m.docs.forward.is_empty(),

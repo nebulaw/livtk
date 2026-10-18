@@ -40,9 +40,126 @@ pub struct Docs {
     /// (without being linked to it).
     pub backlinks: Vec<livtk_core::docs::Doc>,
     pub mentions: Vec<Node>,
+    /// What the open doc says of itself in its frontmatter.
+    pub front: Front,
     /// A search across the docs, and what it found.
     pub query: String,
     pub results: Vec<livtk_core::docs::Found>,
+}
+
+/// A doc's frontmatter, the YAML block at its very top between `---` lines: its title, its
+/// status and its tags, the rest left aside.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Front {
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub tags: Vec<String>,
+}
+
+/// `text`'s frontmatter, and the text after it. Without one, nothing and the text as it is.
+pub fn front(text: &str) -> (Front, &str) {
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
+        return (Front::default(), text);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (Front::default(), text);
+    };
+    let block = &rest[..end];
+    let after = rest[end + 4..].trim_start_matches(['\r', '\n']);
+    let mut front = Front::default();
+    let mut lines = block.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = unquote(value.trim());
+        match key.trim() {
+            "title" if !value.is_empty() => front.title = Some(value.to_owned()),
+            "status" if !value.is_empty() => front.status = Some(value.to_owned()),
+            "tags" => {
+                if let Some(list) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+                    front.tags = list
+                        .split(',')
+                        .map(|t| unquote(t.trim()).to_owned())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                } else if !value.is_empty() {
+                    front.tags = value
+                        .split(',')
+                        .map(|t| unquote(t.trim()).to_owned())
+                        .collect();
+                } else {
+                    // A list, an item a line: `  - one`.
+                    while let Some(item) = lines.peek().and_then(|l| l.trim().strip_prefix("- ")) {
+                        front.tags.push(unquote(item.trim()).to_owned());
+                        lines.next();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (front, after)
+}
+
+fn unquote(s: &str) -> &str {
+    s.trim_matches(|c| c == '"' || c == '\'')
+}
+
+/// `text` with every image a doc shows from a path of its own (`![alt](img/a.png)`) made whole
+/// from `dir`, the doc's folder, so it loads wherever the app runs; web images stay as they are.
+pub fn local_images(text: &str, dir: &std::path::Path) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut fenced = false;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        let fence = t.starts_with("```") || t.starts_with("~~~");
+        if fence {
+            fenced = !fenced;
+        }
+        if fence || fenced {
+            out.push_str(line);
+        } else {
+            out.push_str(&images_in_line(line, dir));
+        }
+    }
+    out
+}
+
+fn images_in_line(text: &str, dir: &std::path::Path) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("![") {
+        let Some(close) = rest[at..].find("](").map(|i| at + i + 2) else {
+            break;
+        };
+        let Some(end) = rest[close..].find(')').map(|i| close + i) else {
+            break;
+        };
+        let dest = rest[close..end].trim();
+        let (file, title) = match dest.split_once(char::is_whitespace) {
+            Some((f, t)) => (f, Some(t)),
+            None => (dest, None),
+        };
+        out.push_str(&rest[..close]);
+        let local = !file.contains("://") && !file.starts_with('/') && !file.starts_with("data:");
+        if local && !file.is_empty() {
+            out.push_str(&dir.join(file.trim_matches(['<', '>'])).to_string_lossy());
+            if let Some(t) = title {
+                out.push(' ');
+                out.push_str(t);
+            }
+        } else {
+            out.push_str(dest);
+        }
+        out.push(')');
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A doc as the reader lays it out: its title (its first heading, when that is a level-one
@@ -286,10 +403,21 @@ impl Model {
             .as_ref()
             .and_then(|path| std::fs::metadata(p.ws.root().join(path)).ok())
             .and_then(|m| m.modified().ok());
-        self.docs.page = text
-            .as_deref()
-            .map(|t| page(&link_keys(t, &p.ws.config().prefix)))
-            .unwrap_or_default();
+        let (front, body) = text.as_deref().map(front).unwrap_or_default();
+        self.docs.front = front;
+        let folder = open
+            .as_ref()
+            .and_then(|path| {
+                p.ws.root()
+                    .join(path)
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+            })
+            .unwrap_or_else(|| p.ws.root().to_path_buf());
+        self.docs.page = page(&local_images(
+            &link_keys(body, &p.ws.config().prefix),
+            &folder,
+        ));
         self.docs.backlinks = open
             .as_ref()
             .map(|path| {
@@ -613,4 +741,52 @@ fn stamp(root: &std::path::Path, dir: &str, open: Option<&str>) -> u64 {
         meta.modified().ok().hash(&mut h);
     }
     h.finish()
+}
+
+/// A callout's kind, as GitHub's alerts name them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalloutKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl CalloutKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            CalloutKind::Note => "Note",
+            CalloutKind::Tip => "Tip",
+            CalloutKind::Important => "Important",
+            CalloutKind::Warning => "Warning",
+            CalloutKind::Caution => "Caution",
+        }
+    }
+}
+
+/// A callout read from a blockquote's markdown (`> [!NOTE] Optional title`, then its lines):
+/// its kind, its own title if it gives one, and its body. `None` for a plain quote.
+pub fn callout(quote: &str) -> Option<(CalloutKind, Option<String>, String)> {
+    let mut lines = quote.lines().map(|l| {
+        let l = l.trim_start();
+        let l = l.strip_prefix('>').unwrap_or(l);
+        l.strip_prefix(' ').unwrap_or(l)
+    });
+    let first = lines.next()?.trim();
+    let marker = first.strip_prefix("[!")?;
+    let (kind, after) = marker.split_once(']')?;
+    let kind = match kind.to_ascii_uppercase().as_str() {
+        "NOTE" => CalloutKind::Note,
+        "TIP" => CalloutKind::Tip,
+        "IMPORTANT" => CalloutKind::Important,
+        "WARNING" => CalloutKind::Warning,
+        "CAUTION" => CalloutKind::Caution,
+        _ => return None,
+    };
+    let title = Some(after.trim())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned);
+    let body: Vec<&str> = lines.collect();
+    Some((kind, title, body.join("\n").trim().to_owned()))
 }

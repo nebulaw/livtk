@@ -8,6 +8,7 @@
 
 mod activity_grid;
 pub mod contour_grid;
+pub mod diagram;
 mod docs;
 pub mod icons;
 pub mod menus;

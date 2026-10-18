@@ -9,14 +9,16 @@ use std::ops::Range;
 
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::text::{RangeHighlight, TextView, TextViewState, TextViewStyle};
+use gpui_component::text::{
+    MarkdownNode, RangeHighlight, TextView, TextViewState, TextViewStyle, markdown_ast,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
 use super::{FollowLink, LivtkApp, RevealInDoc, state_mark};
-use crate::model::docs::{DocRow, find_in};
+use crate::model::docs::{CalloutKind, DocRow, callout, find_in};
 
 /// The tree's width, a row's height and its indent per level.
 const TREE_W: f32 = 260.;
@@ -422,9 +424,10 @@ impl LivtkApp {
             crumbs = crumbs.child("›").child(capitalised(folder));
         }
         let title = docs
-            .page
+            .front
             .title
             .clone()
+            .or_else(|| docs.page.title.clone())
             .or_else(|| docs.title_of(&path).map(str::to_owned))
             .unwrap_or_else(|| path.clone());
         let when = docs.modified.and_then(|t| {
@@ -541,6 +544,32 @@ impl LivtkApp {
                     .gap_2()
                     .text_xs()
                     .text_color(color(TEXT_4))
+                    .when_some(docs.front.status.clone(), |d, status| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "doc-status".into())
+                                .px_2()
+                                .h(px(20.))
+                                .flex()
+                                .items_center()
+                                .rounded_full()
+                                .bg(color(SELECTED))
+                                .text_color(color(TEXT_2))
+                                .child(capitalised(&status)),
+                        )
+                    })
+                    .children(docs.front.tags.iter().map(|t| {
+                        div()
+                            .px_2()
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(color(BORDER))
+                            .text_color(color(TEXT_3))
+                            .child(format!("#{t}"))
+                    }))
                     .when_some(when, |d, w| d.child(w).child("·"))
                     .child(path.clone()),
             )
@@ -973,6 +1002,27 @@ fn section(i: usize, state: &Entity<TextViewState>) -> Div {
         .child(
             TextView::new(state)
                 .style(style)
+                // Callouts (`> [!NOTE]`) and mermaid diagrams: blocks of their own.
+                .markdown_block_parser(|node, cx| match node {
+                    markdown_ast::Node::Blockquote(_) => {
+                        let (kind, title, body) = callout(cx.node_source(node)?)?;
+                        Some(MarkdownNode::new("callout", (kind, title, body)))
+                    }
+                    markdown_ast::Node::Code(code) if code.lang.as_deref() == Some("mermaid") => {
+                        Some(MarkdownNode::new("mermaid", code.value.clone()))
+                    }
+                    _ => None,
+                })
+                .markdown_block_renderer("callout", |node, _, _| {
+                    node.data::<(CalloutKind, Option<String>, String)>()
+                        .map(|(kind, title, body)| callout_box(*kind, title.as_deref(), body))
+                        .unwrap_or_else(|| div().into_any_element())
+                })
+                .markdown_block_renderer("mermaid", |node, _, _| {
+                    node.data::<String>()
+                        .map(|source| super::diagram::mermaid(source, READING_W))
+                        .unwrap_or_else(|| div().into_any_element())
+                })
                 .on_link_click(|href, _, window, cx| {
                     window.dispatch_action(
                         Box::new(FollowLink {
@@ -1011,6 +1061,49 @@ fn section(i: usize, state: &Entity<TextViewState>) -> Div {
                         })
                 }),
         )
+}
+
+/// A callout, as GitHub draws them: a bar and an icon in its kind's colour, its title (its
+/// kind's name, unless it gives one), then its body as markdown.
+fn callout_box(kind: CalloutKind, title: Option<&str>, body: &str) -> AnyElement {
+    let (hue, glyph) = match kind {
+        CalloutKind::Note => (ACCENT, Icon::Info),
+        CalloutKind::Tip => (REVIEW, Icon::Claude),
+        CalloutKind::Important => (0xb46ce0, Icon::Message),
+        CalloutKind::Warning => (PROGRESS, Icon::Error),
+        CalloutKind::Caution => (RED, Icon::Bug),
+    };
+    div()
+        .debug_selector(move || format!("callout-{}", kind.name().to_lowercase()))
+        .w_full()
+        .pl_4()
+        .pr_3()
+        .py_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .rounded_md()
+        .border_l_2()
+        .border_color(color(hue))
+        .bg(with_alpha(hue, 0.06))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color(hue))
+                .child(icon(glyph, 14., hue))
+                .child(title.unwrap_or(kind.name()).to_owned()),
+        )
+        .when(!body.is_empty(), |d| {
+            d.child(TextView::markdown(
+                SharedString::from(format!("callout-{:x}", hash_of(body))),
+                body.to_owned(),
+            ))
+        })
+        .into_any_element()
 }
 
 /// A short hash of `s`, to tell code blocks apart.

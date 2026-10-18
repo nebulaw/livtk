@@ -5,7 +5,9 @@
 use std::fs;
 use std::path::Path;
 
-use livtk_app::model::docs::{DocRow, find_in, link_keys, page, slug};
+use livtk_app::model::docs::{
+    CalloutKind, DocRow, callout, find_in, front, link_keys, local_images, page, slug,
+};
 use livtk_app::model::{DocPick, Item, Model, Saved, View};
 use livtk_core::{Actor, Command, Kind, Workspace};
 
@@ -404,4 +406,61 @@ fn searching_the_docs_finds_by_title_and_text_and_the_palette_shows_the_line() {
             _ => None,
         });
     assert_eq!(line.as_deref(), Some("Run the deploy script."));
+}
+
+#[test]
+fn frontmatter_gives_a_title_a_status_and_tags() {
+    let (f, rest) = front(
+        "---\ntitle: \"The guide\"\nstatus: draft\ntags: [setup, 'ci']\nother: x\n---\n# Body\n",
+    );
+    assert_eq!(f.title.as_deref(), Some("The guide"));
+    assert_eq!(f.status.as_deref(), Some("draft"));
+    assert_eq!(f.tags, ["setup", "ci"]);
+    assert_eq!(rest, "# Body\n");
+    let (f, _) = front("---\ntags:\n  - one\n  - two\n---\n");
+    assert_eq!(f.tags, ["one", "two"], "a list, an item a line");
+    let (f, rest) = front("# No frontmatter\n---\n");
+    assert_eq!((f.title, rest), (None, "# No frontmatter\n---\n"));
+}
+
+#[test]
+fn local_images_load_from_the_docs_folder() {
+    let dir = Path::new("/p/docs/guide");
+    assert_eq!(
+        local_images(
+            "![a](img/a.png) ![w](https://x/w.png \"t\")\n```\n![c](c.png)\n```\n",
+            dir
+        ),
+        "![a](/p/docs/guide/img/a.png) ![w](https://x/w.png \"t\")\n```\n![c](c.png)\n```\n"
+    );
+}
+
+#[test]
+fn callouts_are_read_from_quotes() {
+    assert_eq!(
+        callout("> [!WARNING] Mind the gap\n> Step back.\n> Then go."),
+        Some((
+            CalloutKind::Warning,
+            Some("Mind the gap".into()),
+            "Step back.\nThen go.".into()
+        ))
+    );
+    assert_eq!(
+        callout("> [!note]\n> Lower case too."),
+        Some((CalloutKind::Note, None, "Lower case too.".into()))
+    );
+    assert_eq!(callout("> A plain quote."), None);
+    assert_eq!(callout("> [!SHRUG] Unknown."), None);
+}
+
+#[test]
+fn a_mermaid_diagram_draws_and_a_broken_one_says_why() {
+    let (w, h) =
+        livtk_app::ui::diagram::size("flowchart LR\n  A[Plan] --> B[Build] --> C[Ship]\n").unwrap();
+    assert!(w > h && h > 10., "wide, as left to right: {w}x{h}");
+    assert!(livtk_app::ui::diagram::size("not a diagram at all").is_err());
+    assert_eq!(
+        livtk_app::ui::diagram::size_of("<svg viewBox=\"0 0 120.5 40\" width=\"10\">"),
+        Some((120.5, 40.))
+    );
 }

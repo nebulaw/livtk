@@ -31,6 +31,8 @@ anyhow = "1.0.104"
 # The terminal's events to the window; already in the tree through GPUI.
 async-channel = "2.5.0"
 clap = { version = "4.6.7", features = ["derive"] }
+# Mermaid diagrams in docs, drawn to SVG in pure Rust; no CLI, no PNG.
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 jiff = "0.2.38"
 # The app's log file; already in the tree through GPUI, which logs through it.
 log = "0.4.34"

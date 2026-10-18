@@ -1977,6 +1977,25 @@ fn the_docs_search_finds_and_opens_with_the_find_bar(cx: &mut TestAppContext) {
     cx.update(|window, cx| assert!(app.read(cx).doc_find(window, cx).0, "the find bar, on it"));
 }
 
+/// A doc's callouts and diagrams are blocks of their own; its frontmatter shows in its header.
+#[gpui_kit::test]
+fn callouts_diagrams_and_frontmatter_show(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(
+        root.join("docs/a.md"),
+        "---\ntitle: Alpha\nstatus: draft\n---\n\n> [!NOTE]\n> Read me.\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
+    )
+    .unwrap();
+    let (_app, cx) = open_app(cx, root);
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    assert!(cx.debug_bounds("callout-note").is_some(), "the callout");
+    assert!(cx.debug_bounds("doc-status").is_some(), "the status");
+}
+
 #[gpui_kit::test]
 fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
     let dir = project();

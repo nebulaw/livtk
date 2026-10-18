@@ -154,9 +154,11 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = format!("doc-band-{path}");
+        let (own, moving) = self.highlight(&path, highlighted);
         div()
             .id(SharedString::from(id.clone()))
             .debug_selector(move || id.clone())
+            .relative()
             .w_full()
             .h(px(ROW))
             .flex_none()
@@ -164,7 +166,8 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
-            .bg(color(if highlighted { SELECTED } else { SURFACE }))
+            .bg(color(if own { SELECTED } else { SURFACE }))
+            .children(moving.map(|(from, to, epoch)| super::glide_highlight(from, to, epoch)))
             .border_b_1()
             .border_color(color(BORDER))
             .hover(|s| s.bg(color(HOVER)))
@@ -449,8 +452,8 @@ impl LivtkApp {
                     .rounded_lg()
                     .hover(|h| h.text_color(color(TEXT_2)).bg(color(HOVER)))
                     .child("Docs")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.leave_doc();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.leave_reading(window, cx);
                         cx.notify();
                     })),
             );
@@ -516,11 +519,20 @@ impl LivtkApp {
                 Icon::Close,
                 "Back to the docs · Esc",
                 true,
-                cx.listener(|this, _, _, cx| {
-                    this.model.leave_doc();
+                cx.listener(|this, _, window, cx| {
+                    this.leave_reading(window, cx);
                     cx.notify();
                 }),
             ))
+    }
+
+    /// Done reading: the find bar shut with it, the list again.
+    pub(super) fn leave_reading(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.reader.finding {
+            self.close_find(window, cx);
+        }
+        self.model.leave_doc();
+        cx.notify();
     }
 
     /// The open doc's title: its frontmatter's, its first heading, else its name.

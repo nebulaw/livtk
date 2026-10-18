@@ -137,6 +137,20 @@ fn a_docs_row_knows_its_linked_tasks_and_a_search_lists_what_it_found() {
 }
 
 #[test]
+fn the_doc_being_read_gone_from_disk_gives_the_list_back() {
+    let dir = project();
+    let mut m = open(dir.path());
+    m.open_doc("docs/guide/usage.md");
+    assert!(m.docs.reading);
+    fs::remove_file(dir.path().join("docs/guide/usage.md")).unwrap();
+    assert!(m.refresh_docs());
+    assert!(
+        !m.docs.reading,
+        "the list, not another doc read in its place"
+    );
+}
+
+#[test]
 fn the_doc_open_is_remembered_per_project() {
     let dir = project();
     let mut m = open(dir.path());

@@ -463,10 +463,13 @@ impl Model {
             return;
         };
         let tree = p.ws.docs();
-        // The doc remembered, while it is there; else the first.
-        let open = self
-            .docs_open
-            .get(&p.dir)
+        // The doc remembered, while it is there; else the first. The doc being read gone from
+        // disk, the reading is over: the list again, not another doc in its place.
+        let remembered = self.docs_open.get(&p.dir);
+        if remembered.is_none_or(|path| !p.ws.root().join(path).is_file()) {
+            self.docs.reading = false;
+        }
+        let open = remembered
             .filter(|path| p.ws.root().join(path).is_file())
             .cloned()
             .or_else(|| in_order(&tree).first().map(|d| d.path.clone()));

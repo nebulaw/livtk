@@ -2037,6 +2037,14 @@ fn the_docs_filter_searches_and_opens_with_the_find_bar(cx: &mut TestAppContext)
         assert!(a.model().docs.reading);
     });
     cx.update(|window, cx| assert!(app.read(cx).doc_find(window, cx).0, "the find bar, on it"));
+    // Back to the list by the bar's close: the find bar goes with the reading.
+    click_on(cx, "doc-close");
+    redraw(cx);
+    assert!(cx.debug_bounds("docs-list").is_some());
+    assert!(
+        cx.debug_bounds("doc-find").is_none(),
+        "no find bar over the list"
+    );
 }
 
 /// A doc's callouts and diagrams are blocks of their own; its frontmatter shows in its panel.

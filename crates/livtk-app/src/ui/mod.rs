@@ -1330,6 +1330,9 @@ impl LivtkApp {
         }
         let was_terminal = self.last_place.is_some_and(|(v, _)| v == View::Terminal);
         self.last_place = Some(place);
+        // However it was arrived at (a link, the palette, the sidebar), the filter shows this
+        // view's.
+        self.sync_filter(window, cx);
         if let Some(pane) = self.terminal_view(cx) {
             let focus = pane.read(cx).focus_handle().clone();
             focus.focus(window, cx);
@@ -2570,7 +2573,7 @@ impl LivtkApp {
                     .child(panel_toggle(
                         "toggle-right",
                         Icon::PanelRight,
-                        self.model.detail.is_some(),
+                        self.panel_open(),
                         format!("Detail panel · {}", keys::PANEL),
                         cx.listener(|this, _, _, cx| this.toggle_panel(cx)),
                     )),
@@ -6183,8 +6186,7 @@ impl Render for LivtkApp {
                     && this.model.detail.is_none()
                 {
                     // Done reading: the list again.
-                    this.model.leave_doc();
-                    cx.notify();
+                    this.leave_reading(window, cx);
                 } else if this.model.view == View::Activity
                     && this.model.detail.is_none()
                     && this.model.grid.pick.span.is_some()

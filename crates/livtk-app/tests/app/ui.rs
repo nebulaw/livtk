@@ -1795,19 +1795,26 @@ fn the_docs_list_opens_a_doc_to_read_and_follows_links(cx: &mut TestAppContext) 
     app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Docs));
     assert!(cx.debug_bounds("docs-list").is_some(), "the list");
     assert!(
-        cx.debug_bounds("doc-band-docs/guide").is_some(),
-        "a folder's band"
+        cx.debug_bounds("doc-folder-docs/guide").is_some(),
+        "a folder"
     );
     assert!(cx.debug_bounds("doc-reader").is_none(), "nothing read yet");
     assert!(cx.debug_bounds("doc-panel").is_none(), "nor its panel");
-    // J onto the band, Enter folds it; again unfolds; J onto setup, Enter reads it.
-    cx.simulate_keystrokes("j enter");
+    // J onto the folder, Left shuts it; the dock's Fold all opens all again once all are shut;
+    // Right steps into it; Enter reads setup.
+    cx.simulate_keystrokes("j left");
     redraw(cx);
     assert!(
         cx.debug_bounds("doc-row-docs/guide/setup.md").is_none(),
         "folded"
     );
-    cx.simulate_keystrokes("enter j enter");
+    click_on(cx, "dock-fold-docs");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("doc-row-docs/guide/setup.md").is_some(),
+        "unfolded"
+    );
+    cx.simulate_keystrokes("right enter");
     redraw(cx);
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().docs.open.as_deref(), Some("docs/guide/setup.md"));

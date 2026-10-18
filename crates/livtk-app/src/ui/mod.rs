@@ -2955,6 +2955,10 @@ impl LivtkApp {
             shaping.push(self.dock_choice(Menu::Grouping, wide, cx));
             shaping.push(self.dock_choice(Menu::Ordering, wide, cx));
         }
+        let docs = &self.model.docs;
+        if doc_list && docs.query.trim().is_empty() && !docs.tree.folders.is_empty() {
+            shaping.push(self.dock_fold_docs(cx));
+        }
         if lists {
             shaping.push(self.dock_view_options(wide, cx));
         } else if view == View::Graph {
@@ -3143,6 +3147,23 @@ impl LivtkApp {
             open || d.show_empty || d.show_dismissed,
         );
         self.dock_menu(Menu::View, button, cx)
+    }
+
+    /// The docs' folders all shut with a press, or all open again: lit while all are shut.
+    fn dock_fold_docs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let shut = self.model.docs_all_shut();
+        Self::dock_button(
+            "dock-fold-docs",
+            Icon::FoldAll,
+            None,
+            if shut { "Unfold all" } else { "Fold all" },
+            shut,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.model.fold_docs(!shut);
+            cx.notify();
+        }))
+        .into_any_element()
     }
 
     /// The graph's dismissed work: shown or hidden with a press, as it has nothing else to show.

@@ -49,6 +49,8 @@ icons! {
     FolderOpen => "folder-open",
     /// A doc, in the docs' list.
     Article => "article",
+    /// Every folder of the docs' list shut, or open again.
+    FoldAll => "chevrons-down-up",
     /// A doc's outline, On this page.
     Outline => "list",
     /// Copying a code block.

@@ -59,54 +59,114 @@ fn paths(m: &Model) -> Vec<String> {
 }
 
 #[test]
-fn the_list_bands_folders_and_the_keys_walk_it() {
+fn the_list_nests_folders_and_the_keys_walk_it() {
     let dir = project();
     write(dir.path(), "docs/guide/deep/more.md", "# More\n");
     let mut m = open(dir.path());
-    // The docs at the top first, then each folder's band and its docs; a folder under another
-    // named by its path.
+    // The docs at the top first, then each folder: its docs, then its folders, a level in.
+    let rows = m.docs.rows();
+    let shape: Vec<(&str, usize)> = rows.iter().map(|r| (r.path(), r.depth())).collect();
     assert_eq!(
-        paths(&m),
+        shape,
         [
-            "docs/README.md",
-            "docs/guide",
-            "docs/guide/setup.md",
-            "docs/guide/usage.md",
-            "docs/guide/deep",
-            "docs/guide/deep/more.md",
+            ("docs/README.md", 0),
+            ("docs/guide", 0),
+            ("docs/guide/setup.md", 1),
+            ("docs/guide/usage.md", 1),
+            ("docs/guide/deep", 1),
+            ("docs/guide/deep/more.md", 2),
         ]
     );
-    let rows = m.docs.rows();
     assert!(matches!(
         &rows[1],
-        DocRow::Band { name, count: 3, open: true, .. } if name == "Guide"
+        DocRow::Folder { name, count: 3, open: true, .. } if name == "Guide"
     ));
-    assert!(matches!(&rows[4], DocRow::Band { name, .. } if name == "Guide / Deep"));
+    assert!(matches!(&rows[4], DocRow::Folder { name, .. } if name == "Deep"));
     assert_eq!(
         m.docs.open.as_deref(),
         Some("docs/README.md"),
         "the first doc"
     );
     assert!(!m.docs.reading, "the list first");
-    // Enter on a band folds it, and every folder under it.
+    // Enter on a folder shuts it, and every folder under it.
     m.select_by(1);
     m.enter();
     assert_eq!(paths(&m), ["docs/README.md", "docs/guide"]);
     assert!(!m.docs.reading);
-    m.enter();
-    // Enter on a doc opens it to read; Esc's leaving gives the list back, on it.
-    m.select_by(1);
+    // Right opens a shut folder, then steps into it; Left goes back to it, then shuts it.
+    m.select_column_by(1);
+    assert_eq!(paths(&m).len(), 6);
+    assert_eq!(m.docs.index, 1);
+    m.select_column_by(1);
+    assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/setup.md");
+    m.select_by(3);
+    assert_eq!(
+        m.docs.rows()[m.docs.index].path(),
+        "docs/guide/deep/more.md"
+    );
+    m.select_column_by(-1);
+    assert_eq!(
+        m.docs.rows()[m.docs.index].path(),
+        "docs/guide/deep",
+        "its folder"
+    );
+    m.select_column_by(-1);
+    assert_eq!(paths(&m).len(), 5, "shut");
+    m.select_column_by(-1);
+    assert_eq!(
+        m.docs.rows()[m.docs.index].path(),
+        "docs/guide",
+        "and up again"
+    );
+    m.select_column_by(-1);
+    assert_eq!(paths(&m), ["docs/README.md", "docs/guide"]);
+    m.select_column_by(-1);
+    assert_eq!(m.docs.index, 1, "nowhere further out");
+    // Enter on a doc opens it to read; leaving gives the list back, on it, its folders opened.
+    m.select_column_by(1);
+    m.select_column_by(1);
     m.enter();
     assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
     assert!(m.docs.reading);
     m.leave_doc();
     assert!(!m.docs.reading);
     assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/setup.md");
-    // Opening a doc in a folded folder unfolds it, so the list shows it.
     m.toggle_doc_folder("docs/guide");
-    m.open_doc("docs/guide/usage.md");
-    assert_eq!(paths(&m).len(), 6);
-    assert_eq!(m.docs.rows()[m.docs.index].path(), "docs/guide/usage.md");
+    m.open_doc("docs/guide/deep/more.md");
+    assert_eq!(paths(&m).len(), 6, "opening a doc opens its folders");
+    assert_eq!(
+        m.docs.rows()[m.docs.index].path(),
+        "docs/guide/deep/more.md"
+    );
+}
+
+#[test]
+fn fold_all_shuts_every_folder_keeps_the_highlight_in_and_is_remembered() {
+    let dir = project();
+    write(dir.path(), "docs/guide/deep/more.md", "# More\n");
+    let mut m = open(dir.path());
+    m.leave_doc();
+    m.select_by(5);
+    assert_eq!(
+        m.docs.rows()[m.docs.index].path(),
+        "docs/guide/deep/more.md"
+    );
+    m.fold_docs(true);
+    assert!(m.docs_all_shut());
+    assert_eq!(paths(&m), ["docs/README.md", "docs/guide"]);
+    assert_eq!(m.docs.index, 1, "on the folder that holds it");
+    // Remembered for the project, across a restart.
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = Model::open(&[dir.path().to_path_buf()]);
+    back.set_models_dir(None);
+    back.restore(&Saved::load(&path));
+    back.set_view(View::Docs);
+    assert_eq!(paths(&back), ["docs/README.md", "docs/guide"]);
+    back.fold_docs(false);
+    assert!(!back.docs_all_shut());
+    assert_eq!(paths(&back).len(), 6);
 }
 
 #[test]

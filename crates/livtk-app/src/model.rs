@@ -430,6 +430,8 @@ pub struct Model {
     /// The Docs view, and the doc last open in each project.
     pub docs: docs::Docs,
     pub docs_open: HashMap<PathBuf, String>,
+    /// The docs' folders folded in each project, by the project's folder.
+    pub docs_shut: HashMap<PathBuf, HashSet<String>>,
     /// Projects with `[[on]]` hooks the human wrote to since the view last took them: their
     /// hooks are to be run, apart from the window.
     wrote: Vec<(PathBuf, Option<Uuid>)>,
@@ -518,6 +520,7 @@ impl Model {
             grid: grid::Grid::default(),
             docs: docs::Docs::default(),
             docs_open: HashMap::new(),
+            docs_shut: HashMap::new(),
             wrote: Vec::new(),
             told_no_notifications: false,
             reading: Reading::default(),
@@ -801,6 +804,15 @@ impl Model {
 
     /// `h` and `l` on the board: to the column `delta` along, as far down as it goes.
     pub fn select_column_by(&mut self, delta: isize) {
+        // In the docs' list, across is in and out of the folders.
+        if self.view == View::Docs {
+            if delta < 0 {
+                self.docs_left();
+            } else {
+                self.docs_right();
+            }
+            return;
+        }
         if !self.on_board() {
             return;
         }

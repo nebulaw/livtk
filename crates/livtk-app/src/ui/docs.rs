@@ -24,6 +24,9 @@ use crate::model::docs::{CalloutKind, DocRow, Saved, callout, capitalised, find_
 
 /// The marks of linked tasks a doc's row shows, before it counts the rest.
 const MARKS: usize = 4;
+/// How far each folder's lines sit in from it, and the slot for a folder's caret.
+const INDENT: f32 = 20.;
+const CARET_W: f32 = 12.;
 /// The doc's measure: about seventy characters a line at its regular size (Settings sets the
 /// size and the line's height).
 const READING_W: f32 = 720.;
@@ -101,8 +104,8 @@ impl LivtkApp {
         self.docs_list(cx).into_any_element()
     }
 
-    /// The docs as a list, as the tasks are: each folder a band (a click folds it), each doc a
-    /// row (a click opens it to read). A search in the filter lists what it found instead.
+    /// The docs as a list, as the tasks are, nested by folder: a folder's line opens or shuts
+    /// it, a doc's opens it to read. A search in the filter lists what it found instead.
     fn docs_list(&self, cx: &mut Context<Self>) -> Div {
         let docs = &self.model.docs;
         let rows = docs.rows();
@@ -124,15 +127,19 @@ impl LivtkApp {
         for (i, row) in rows.into_iter().enumerate() {
             let highlighted = i == docs.index;
             list = list.child(match row {
-                DocRow::Band {
+                DocRow::Folder {
                     path,
                     name,
+                    depth,
                     count,
                     open,
-                } => self.doc_band(i, path, name, count, open, highlighted, cx),
-                DocRow::Doc { path, title, line } => {
-                    self.doc_line(i, path, title, line, highlighted, cx)
-                }
+                } => self.doc_folder(i, path, name, depth, count, open, highlighted, cx),
+                DocRow::Doc {
+                    path,
+                    title,
+                    depth,
+                    line,
+                } => self.doc_line(i, path, title, depth, line, highlighted, cx),
             });
         }
         // Room at the end, under the dock.
@@ -141,20 +148,19 @@ impl LivtkApp {
             .child(list.children((0..super::DOCK_ROWS).map(|_| super::dock_room())))
     }
 
-    /// A folder's band, as a group's in the task list: its caret, its name and how many docs.
-    #[allow(clippy::too_many_arguments)]
-    fn doc_band(
-        &self,
-        i: usize,
-        path: String,
-        name: String,
-        count: usize,
-        open: bool,
-        highlighted: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = format!("doc-band-{path}");
-        let (own, moving) = self.highlight(&path, highlighted);
+    /// A line of the list at its depth: the list's row, indented, with a guide down from each
+    /// folder it is in, and the slot for a folder's caret, so icons line up at a depth.
+    fn nested_row(&self, id: String, path: &str, depth: usize, highlighted: bool) -> Stateful<Div> {
+        let (own, moving) = self.highlight(path, highlighted);
+        let guides = (0..depth).map(|k| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(16. + k as f32 * INDENT + CARET_W / 2.))
+                .w(px(1.))
+                .bg(color(BORDER))
+        });
         div()
             .id(SharedString::from(id.clone()))
             .debug_selector(move || id.clone())
@@ -162,40 +168,73 @@ impl LivtkApp {
             .w_full()
             .h(px(ROW))
             .flex_none()
-            .px_4()
+            .pr_4()
+            .pl(px(16. + depth as f32 * INDENT))
             .flex()
             .items_center()
             .gap_2()
-            .bg(color(if own { SELECTED } else { SURFACE }))
-            .children(moving.map(|(from, to, epoch)| super::glide_highlight(from, to, epoch)))
             .border_b_1()
-            .border_color(color(BORDER))
-            .hover(|s| s.bg(color(HOVER)))
-            .child(icon(
-                if open {
-                    Icon::CaretDown
-                } else {
-                    Icon::CaretRight
-                },
-                10.,
-                TEXT_4,
-            ))
+            .border_color(color(CONTENT))
+            .when(own, |d| d.bg(color(SELECTED)))
+            .when(!highlighted, |d| d.hover(|s| s.bg(color(HOVER))))
+            .children(moving.map(|(from, to, epoch)| super::glide_highlight(from, to, epoch)))
+            .children(guides)
+    }
+
+    /// A folder's line: its caret, its icon, its name and how many docs are under it. A click
+    /// opens or shuts it.
+    #[allow(clippy::too_many_arguments)]
+    fn doc_folder(
+        &self,
+        i: usize,
+        path: String,
+        name: String,
+        depth: usize,
+        count: usize,
+        open: bool,
+        highlighted: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.nested_row(format!("doc-folder-{path}"), &path, depth, highlighted)
+            .child(
+                div()
+                    .w(px(CARET_W))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .child(icon(
+                        if open {
+                            Icon::CaretDown
+                        } else {
+                            Icon::CaretRight
+                        },
+                        10.,
+                        TEXT_4,
+                    )),
+            )
             .child(icon(
                 if open {
                     Icon::FolderOpen
                 } else {
                     Icon::Project
                 },
-                14.,
+                15.,
                 TEXT_3,
             ))
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(color(TEXT))
                     .child(name),
             )
-            .child(div().text_color(color(TEXT_4)).child(format!("{count}")))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(color(TEXT_4))
+                    .child(format!("{count}")),
+            )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.model.docs.index = i;
                 this.model.toggle_doc_folder(&path);
@@ -204,59 +243,61 @@ impl LivtkApp {
             .into_any_element()
     }
 
-    /// A doc's row: its title (and the line a search found it by), the states of the tasks
-    /// linked to it, when it last changed.
+    /// A doc's line: its title (with, found by a search, its folder and the line it was found
+    /// by), the states of the tasks linked to it, when it last changed.
+    #[allow(clippy::too_many_arguments)]
     fn doc_line(
         &self,
         i: usize,
         path: String,
         title: String,
+        depth: usize,
         line: Option<String>,
         highlighted: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let docs = &self.model.docs;
-        let (own, moving) = self.highlight(&path, highlighted);
         let marks = docs.marks.get(&path).cloned().unwrap_or_default();
         let more = marks.len().saturating_sub(MARKS);
         let edited = docs.edited.get(&path).and_then(|t| {
             let t = jiff::Timestamp::try_from(*t).ok()?;
             Some(super::ago(&format!("{t:.3}")))
         });
-        let id = format!("doc-row-{path}");
         let searched = !docs.query.trim().is_empty();
-        div()
-            .id(SharedString::from(id.clone()))
-            .debug_selector(move || id.clone())
-            .relative()
-            .w_full()
-            .h(px(ROW))
-            .flex_none()
-            .px_4()
-            .flex()
-            .items_center()
-            .gap_3()
-            .border_b_1()
-            .border_color(color(CONTENT))
-            .when(own, |d| d.bg(color(SELECTED)))
-            .when(!highlighted, |d| d.hover(|s| s.bg(color(HOVER))))
-            .children(moving.map(|(from, to, epoch)| super::glide_highlight(from, to, epoch)))
+        // Found by a search: the folder it is in, under the docs' own.
+        let folder = searched
+            .then(|| {
+                let under = path
+                    .strip_prefix(&format!("{}/", docs.dir))
+                    .unwrap_or(&path);
+                under.rsplit_once('/').map(|(f, _)| f.to_owned())
+            })
+            .flatten();
+        self.nested_row(format!("doc-row-{path}"), &path, depth, highlighted)
+            .child(div().w(px(CARET_W)).flex_none())
             .child(icon(Icon::Article, 15., TEXT_4))
             .child(
                 div()
                     .flex_none()
-                    .max_w(relative(0.6))
+                    .max_w(relative(0.5))
                     .truncate()
                     .text_color(color(TEXT))
                     .child(title),
             )
+            .children(folder.map(|f| {
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child(f)
+            }))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_xs()
-                    .text_color(color(TEXT_4))
+                    .text_color(color(TEXT_3))
                     .children(line),
             )
             .child(

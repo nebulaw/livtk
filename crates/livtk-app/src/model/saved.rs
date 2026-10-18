@@ -22,6 +22,8 @@ pub struct Saved {
     pub recent: Vec<PathBuf>,
     /// The doc last open in each project, by the project's folder.
     pub docs_open: BTreeMap<String, String>,
+    /// The docs' folders folded in each project, by the project's folder.
+    pub docs_shut: BTreeMap<String, Vec<String>>,
     pub view: Option<String>,
     /// "list" or "board".
     pub layout: Option<String>,
@@ -175,6 +177,16 @@ impl Model {
                 .iter()
                 .map(|(dir, path)| (dir.to_string_lossy().into_owned(), path.clone()))
                 .collect(),
+            docs_shut: self
+                .docs_shut
+                .iter()
+                .filter(|(_, shut)| !shut.is_empty())
+                .map(|(dir, shut)| {
+                    let mut shut: Vec<String> = shut.iter().cloned().collect();
+                    shut.sort();
+                    (dir.to_string_lossy().into_owned(), shut)
+                })
+                .collect(),
             view: Some(view_name(self.view)),
             layout: Some(
                 match self.layout {
@@ -261,6 +273,11 @@ impl Model {
             .docs_open
             .iter()
             .map(|(dir, path)| (PathBuf::from(dir), path.clone()))
+            .collect();
+        self.docs_shut = saved
+            .docs_shut
+            .iter()
+            .map(|(dir, shut)| (PathBuf::from(dir), shut.iter().cloned().collect()))
             .collect();
         if let Some(dir) = &saved.project
             && let Some(i) = self.projects.iter().position(|p| &p.dir == dir)

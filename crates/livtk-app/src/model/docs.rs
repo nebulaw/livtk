@@ -1,4 +1,4 @@
-//! The Docs view: the project's docs as a list (folders as bands, open and shut), the doc open,
+//! The Docs view: the project's docs as a list nested by folder (open and shut), the doc open,
 //! read from disk, and the nodes linked to it. Read again whenever the view loads, so what changed on disk
 //! shows. Links between nodes and docs go through the log (`Command::DocLink`).
 
@@ -18,7 +18,7 @@ pub struct Docs {
     pub text: Option<String>,
     /// The nodes linked to the open doc.
     pub linked: Vec<Node>,
-    /// Folders shut, by path.
+    /// Folders shut, by path: the project's, as `Model::docs_shut` keeps them.
     pub shut: HashSet<String>,
     /// The list's highlighted line.
     pub index: usize,
@@ -339,19 +339,21 @@ pub fn find_in(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
-/// A line of the docs' list as shown: a folder's band (open or shut, with how many docs are
-/// under it), or a doc (with the line a search found it by).
+/// A line of the docs' list as shown, at its depth in the folders: a folder (open or shut, with
+/// how many docs are under it), or a doc (with the line a search found it by).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocRow {
-    Band {
+    Folder {
         path: String,
         name: String,
+        depth: usize,
         count: usize,
         open: bool,
     },
     Doc {
         path: String,
         title: String,
+        depth: usize,
         line: Option<String>,
     },
 }
@@ -359,14 +361,20 @@ pub enum DocRow {
 impl DocRow {
     pub fn path(&self) -> &str {
         match self {
-            DocRow::Band { path, .. } | DocRow::Doc { path, .. } => path,
+            DocRow::Folder { path, .. } | DocRow::Doc { path, .. } => path,
+        }
+    }
+
+    pub fn depth(&self) -> usize {
+        match self {
+            DocRow::Folder { depth, .. } | DocRow::Doc { depth, .. } => *depth,
         }
     }
 }
 
 impl Docs {
-    /// The list's lines as shown: what a search found, else the docs at the top, then each
-    /// folder's band and its docs, a shut folder's left out with every folder under it.
+    /// The list's lines as shown: what a search found, flat; else the docs at the top, then
+    /// each folder with its docs and its folders under it, a shut one's left out.
     pub fn rows(&self) -> Vec<DocRow> {
         if !self.query.trim().is_empty() {
             return self
@@ -375,39 +383,58 @@ impl Docs {
                 .map(|f| DocRow::Doc {
                     path: f.path.clone(),
                     title: f.title.clone(),
+                    depth: 0,
                     line: f.lines.first().cloned(),
                 })
                 .collect();
         }
-        let mut out: Vec<DocRow> = self.tree.docs.iter().map(doc_row).collect();
-        for f in &self.tree.folders {
-            self.push_band(f, "", &mut out);
-        }
+        let mut out = Vec::new();
+        self.push_rows(&self.tree, 0, &mut out);
         out
     }
 
-    fn push_band(&self, folder: &Folder, above: &str, out: &mut Vec<DocRow>) {
-        let name = if above.is_empty() {
-            capitalised(&folder.name)
-        } else {
-            format!("{above} / {}", capitalised(&folder.name))
-        };
-        let open = !self.shut.contains(&folder.path);
-        // A folder of folders alone needs no band of its own: theirs name it.
-        if !folder.docs.is_empty() {
-            out.push(DocRow::Band {
-                path: folder.path.clone(),
-                name: name.clone(),
-                count: folder.all().len(),
+    fn push_rows(&self, folder: &Folder, depth: usize, out: &mut Vec<DocRow>) {
+        out.extend(folder.docs.iter().map(|d| DocRow::Doc {
+            path: d.path.clone(),
+            title: d.title.clone(),
+            depth,
+            line: None,
+        }));
+        for f in &folder.folders {
+            let open = !self.shut.contains(&f.path);
+            out.push(DocRow::Folder {
+                path: f.path.clone(),
+                name: capitalised(&f.name),
+                depth,
+                count: f.all().len(),
                 open,
             });
-        }
-        if open {
-            out.extend(folder.docs.iter().map(doc_row));
-            for f in &folder.folders {
-                self.push_band(f, &name, out);
+            if open {
+                self.push_rows(f, depth + 1, out);
             }
         }
+    }
+
+    /// The row of the folder the row at `i` is in, if it is in one.
+    pub fn parent_row(&self, rows: &[DocRow], i: usize) -> Option<usize> {
+        let depth = rows.get(i)?.depth();
+        let up = depth.checked_sub(1)?;
+        rows[..i]
+            .iter()
+            .rposition(|r| matches!(r, DocRow::Folder { .. }) && r.depth() == up)
+    }
+
+    /// Every folder, by path.
+    fn folders(&self) -> Vec<String> {
+        fn walk(f: &Folder, out: &mut Vec<String>) {
+            for sub in &f.folders {
+                out.push(sub.path.clone());
+                walk(sub, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.tree, &mut out);
+        out
     }
 
     /// Every doc in the list's order, shut folders' too: the way previous and next go.
@@ -438,14 +465,6 @@ fn in_order(folder: &Folder) -> Vec<&livtk_core::docs::Doc> {
     out
 }
 
-fn doc_row(d: &livtk_core::docs::Doc) -> DocRow {
-    DocRow::Doc {
-        path: d.path.clone(),
-        title: d.title.clone(),
-        line: None,
-    }
-}
-
 /// `name` with its first letter a capital: a folder named as a heading would be.
 pub fn capitalised(name: &str) -> String {
     let mut c = name.chars();
@@ -463,6 +482,7 @@ impl Model {
             return;
         };
         let tree = p.ws.docs();
+        self.docs.shut = self.docs_shut.get(&p.dir).cloned().unwrap_or_default();
         // The doc remembered, while it is there; else the first. The doc being read gone from
         // disk, the reading is over: the list again, not another doc in its place.
         let remembered = self.docs_open.get(&p.dir);
@@ -632,6 +652,7 @@ impl Model {
             self.docs.shut.remove(parent);
             at = parent;
         }
+        self.keep_shut();
         if self.view == View::Docs {
             self.load_docs();
         } else {
@@ -752,18 +773,103 @@ impl Model {
         }
     }
 
-    /// Enter on the list: a doc opens to read, a folder's band opens or shuts.
+    /// Enter on the list: a doc opens to read, a folder opens or shuts.
     pub(super) fn docs_enter(&mut self) {
         match self.docs.rows().get(self.docs.index).cloned() {
             Some(DocRow::Doc { path, .. }) => self.open_doc(&path),
-            Some(DocRow::Band { path, .. }) => self.toggle_doc_folder(&path),
+            Some(DocRow::Folder { path, .. }) => self.toggle_doc_folder(&path),
             None => {}
         }
     }
 
+    /// Open or shut a folder; the highlight, inside it, goes to it.
     pub fn toggle_doc_folder(&mut self, path: &str) {
+        let at = self.doc_at();
         if !self.docs.shut.remove(path) {
             self.docs.shut.insert(path.to_owned());
+        }
+        self.after_folding(at);
+    }
+
+    /// Left: an open folder shuts; else to the folder it is in.
+    pub(super) fn docs_left(&mut self) {
+        let rows = self.docs.rows();
+        match rows.get(self.docs.index) {
+            Some(DocRow::Folder {
+                path, open: true, ..
+            }) => self.toggle_doc_folder(&path.clone()),
+            Some(_) => {
+                if let Some(i) = self.docs.parent_row(&rows, self.docs.index) {
+                    self.docs.index = i;
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Right: a shut folder opens; an open one is stepped into.
+    pub(super) fn docs_right(&mut self) {
+        let rows = self.docs.rows();
+        match rows.get(self.docs.index) {
+            Some(DocRow::Folder {
+                path, open: false, ..
+            }) => self.toggle_doc_folder(&path.clone()),
+            Some(DocRow::Folder { depth, .. })
+                if rows
+                    .get(self.docs.index + 1)
+                    .is_some_and(|r| r.depth() > *depth) =>
+            {
+                self.docs.index += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Every folder shut, or every one open.
+    pub fn fold_docs(&mut self, shut: bool) {
+        let at = self.doc_at();
+        self.docs.shut = if shut {
+            self.docs.folders().into_iter().collect()
+        } else {
+            HashSet::new()
+        };
+        self.after_folding(at);
+    }
+
+    /// Whether every folder is shut (what Fold all would change).
+    pub fn docs_all_shut(&self) -> bool {
+        let folders = self.docs.folders();
+        !folders.is_empty() && folders.iter().all(|f| self.docs.shut.contains(f))
+    }
+
+    /// The path the highlight is on.
+    fn doc_at(&self) -> Option<String> {
+        self.docs
+            .rows()
+            .get(self.docs.index)
+            .map(|r| r.path().to_owned())
+    }
+
+    /// Folders opened or shut: kept for the project, and the highlight on the line it was on,
+    /// else on the shut folder that now holds it.
+    fn after_folding(&mut self, at: Option<String>) {
+        self.keep_shut();
+        let rows = self.docs.rows();
+        let Some(at) = at else {
+            self.docs.index = self.docs.index.min(rows.len().saturating_sub(1));
+            return;
+        };
+        let found = rows.iter().position(|r| r.path() == at).or_else(|| {
+            rows.iter()
+                .rposition(|r| at.starts_with(&format!("{}/", r.path())))
+        });
+        self.docs.index = found.unwrap_or(0);
+    }
+
+    /// The folds kept for the project, so they come back with it.
+    fn keep_shut(&mut self) {
+        if let Some(p) = self.projects.get(self.current) {
+            self.docs_shut.insert(p.dir.clone(), self.docs.shut.clone());
         }
     }
 

@@ -10,7 +10,7 @@ use crate::model::{Actor, Kind, Priority, Rel, State};
 /// The newest format version this livtk reads. Each event carries the version its operation
 /// needs, so adding an operation never changes the bytes of older events, and an older livtk
 /// skips the new operation with a clear "update livtk" warning.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -24,7 +24,7 @@ pub struct Event {
     pub op: Op,
 }
 
-/// Six operations cover every kind of node.
+/// Seven operations cover every kind of node and its links: to other nodes, and to docs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum Op {
@@ -39,6 +39,11 @@ pub enum Op {
     EdgeAdd { data: EdgeData },
     #[serde(rename = "edge.remove")]
     EdgeRemove { data: EdgeData },
+    /// A node linked to a doc: a file in the project, by its path from the project's folder.
+    #[serde(rename = "doc.link")]
+    DocLink { node: Uuid, data: DocData },
+    #[serde(rename = "doc.unlink")]
+    DocUnlink { node: Uuid, data: DocData },
 }
 
 impl Op {
@@ -49,17 +54,20 @@ impl Op {
             Op::NodeNote { .. } => "node.note",
             Op::EdgeAdd { .. } => "edge.add",
             Op::EdgeRemove { .. } => "edge.remove",
+            Op::DocLink { .. } => "doc.link",
+            Op::DocUnlink { .. } => "doc.unlink",
         }
     }
 
     /// The format version a reader needs to understand this operation: 1 for tasks, 2 for
-    /// notes, 3 for lessons, decisions and findings and the states they use.
+    /// notes, 3 for lessons, decisions and findings and the states they use, 4 for docs' links.
     pub fn min_version(&self) -> u32 {
         let task_state = |s: State| Kind::Task.states().contains(&s);
         match self {
             Op::NodeCreate { data, .. } if data.kind != Kind::Task => 3,
             Op::NodeSet { data, .. } if data.state.is_some_and(|s| !task_state(s)) => 3,
             Op::NodeNote { .. } => 2,
+            Op::DocLink { .. } | Op::DocUnlink { .. } => 4,
             _ => 1,
         }
     }
@@ -67,9 +75,11 @@ impl Op {
     /// The node an event is about, and for edges the node on the other end.
     pub const fn subjects(&self) -> (Uuid, Option<Uuid>) {
         match self {
-            Op::NodeCreate { node, .. } | Op::NodeSet { node, .. } | Op::NodeNote { node, .. } => {
-                (*node, None)
-            }
+            Op::NodeCreate { node, .. }
+            | Op::NodeSet { node, .. }
+            | Op::NodeNote { node, .. }
+            | Op::DocLink { node, .. }
+            | Op::DocUnlink { node, .. } => (*node, None),
             Op::EdgeAdd { data } | Op::EdgeRemove { data } => (data.src, Some(data.dst)),
         }
     }
@@ -117,6 +127,12 @@ impl NodePatch {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteData {
     pub text: String,
+}
+
+/// A doc, by its path from the project's folder, `/` between its parts: `docs/guide/setup.md`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocData {
+    pub path: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

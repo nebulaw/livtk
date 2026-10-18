@@ -7,6 +7,7 @@
 
 mod activity;
 mod applog;
+mod docs;
 mod flow;
 mod graph;
 mod launch;

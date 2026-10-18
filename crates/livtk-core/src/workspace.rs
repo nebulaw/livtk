@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::event::{EdgeData, Event, NodeData, NodePatch, NoteData, Op};
+use crate::event::{DocData, EdgeData, Event, NodeData, NodePatch, NoteData, Op};
 use crate::log::{self, Log, Mark};
 use crate::model::{
     Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
@@ -48,6 +48,9 @@ pub struct Config {
     /// Commands run on signals (`[[on]]`): see `on`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on: Vec<crate::on::On>,
+    /// The folder the project's docs are in, from its folder: `docs` unless given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 /// Moves this project keeps for the human, beyond the built-in ones (acknowledging, and
@@ -233,6 +236,15 @@ pub enum Command {
         rel: Rel,
         dst: String,
     },
+    /// Link a node to the doc at `path` (from the project's folder). Any number each way.
+    DocLink {
+        node: String,
+        path: String,
+    },
+    DocUnlink {
+        node: String,
+        path: String,
+    },
     /// Add a note to a node's history. Changes no state.
     Note {
         node: String,
@@ -339,6 +351,7 @@ impl Workspace {
             memory: Memory::default(),
             gates: Gates::default(),
             on: Vec::new(),
+            docs: None,
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -398,6 +411,64 @@ impl Workspace {
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// The project's own folder, which holds `.livtk`.
+    pub fn root(&self) -> &Path {
+        self.dir.parent().unwrap_or(&self.dir)
+    }
+
+    /// The folder the project's docs are in, from its folder.
+    pub fn docs_dir(&self) -> String {
+        self.config
+            .docs
+            .as_deref()
+            .and_then(|d| crate::docs::normalize(Path::new(""), d))
+            .unwrap_or_else(|| crate::docs::DEFAULT_DIR.to_owned())
+    }
+
+    /// The project's docs, as a tree.
+    pub fn docs(&self) -> crate::docs::Folder {
+        crate::docs::tree(self.root(), &self.docs_dir())
+    }
+
+    /// The docs a node is linked to, by path; each with its title, `None` once it is gone.
+    pub fn docs_of(&self, node: &str) -> Result<Vec<(String, Option<String>)>> {
+        let n = self.node(node)?;
+        Ok(self
+            .store
+            .docs_of(n.id)?
+            .into_iter()
+            .map(|path| {
+                let file = self.root().join(&path);
+                let title = file.is_file().then(|| {
+                    std::fs::read_to_string(&file)
+                        .ok()
+                        .and_then(|t| crate::docs::title_of(&t))
+                        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_owned())
+                });
+                (path, title)
+            })
+            .collect())
+    }
+
+    /// The nodes linked to the doc at `path`, by key.
+    pub fn doc_nodes(&self, path: &str) -> Result<Vec<Node>> {
+        let path = crate::docs::normalize(self.root(), path)
+            .ok_or_else(|| Error::Invalid(format!("{path} is outside the project")))?;
+        let mut nodes = Vec::new();
+        for id in self.store.doc_nodes(&path)? {
+            if let Some(n) = self.store.node(id)? {
+                nodes.push(n);
+            }
+        }
+        nodes.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(nodes)
+    }
+
+    /// Every doc some node is linked to, with how many nodes.
+    pub fn linked_docs(&self) -> Result<Vec<(String, usize)>> {
+        self.store.linked_docs()
     }
 
     /// Whether only a human may move a `kind` from `from` to `to` here: a built-in gate, or one
@@ -1125,6 +1196,35 @@ impl Workspace {
                         dst: d.id,
                         rel,
                     },
+                }])
+            }
+            Command::DocLink { node, path } => {
+                let n = self.node(&node)?;
+                let path = crate::docs::normalize(self.root(), &path)
+                    .ok_or_else(|| Error::Invalid(format!("{path} is outside the project")))?;
+                if !self.root().join(&path).is_file() {
+                    return Err(Error::Invalid(format!("there is no doc at {path}")));
+                }
+                // Linked already: the same link, made again.
+                if self.store.docs_of(n.id)?.contains(&path) {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![Op::DocLink {
+                    node: n.id,
+                    data: DocData { path },
+                }])
+            }
+            Command::DocUnlink { node, path } => {
+                let n = self.node(&node)?;
+                let path = crate::docs::normalize(self.root(), &path)
+                    .ok_or_else(|| Error::Invalid(format!("{path} is outside the project")))?;
+                // A doc gone keeps its links, to be taken away.
+                if !self.store.docs_of(n.id)?.contains(&path) {
+                    return Err(Error::Invalid(format!("{} is not linked to {path}", n.key)));
+                }
+                Ok(vec![Op::DocUnlink {
+                    node: n.id,
+                    data: DocData { path },
                 }])
             }
             Command::Note { node, text } => {

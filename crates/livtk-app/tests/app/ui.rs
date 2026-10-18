@@ -453,6 +453,7 @@ fn palette_keys(
                     .map(|i| match i {
                         livtk_app::model::Item::Action(a) => a.label.clone(),
                         livtk_app::model::Item::Node(n) => n.key.clone(),
+                        livtk_app::model::Item::Doc(d) => d.path.clone(),
                     })
                     .collect()
             })
@@ -1769,6 +1770,65 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
     redraw(cx);
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().view, View::Terminal, "the list's keys work again");
+    });
+}
+
+/// G then O opens the docs: the tree at the left, a doc open at the right. A click in the tree
+/// opens a doc; a link followed opens another doc, or a node in the panel, whose Docs group
+/// lists what it is linked to.
+#[gpui_kit::test]
+fn the_docs_view_shows_the_tree_and_follows_links(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("docs/guide")).unwrap();
+    std::fs::write(
+        root.join("docs/README.md"),
+        "# Start\nSee [setup](guide/setup.md).\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("docs/guide/setup.md"), "# Setup\n").unwrap();
+    let (app, cx) = open_app(cx, root);
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g o");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Docs));
+    assert!(cx.debug_bounds("docs-tree").is_some(), "the tree");
+    assert!(cx.debug_bounds("doc-text").is_some(), "a doc open");
+    click_on(cx, "doc-row-docs/README.md");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/README.md"))
+    });
+    cx.dispatch_action(livtk_app::ui::FollowLink {
+        href: "guide/setup.md".into(),
+    });
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().docs.open.as_deref(),
+            Some("docs/guide/setup.md"),
+            "a link to a doc"
+        )
+    });
+    app.update(cx, |a, _| {
+        a.model_mut().link_doc("LIV-1", "docs/guide/setup.md", true)
+    });
+    cx.dispatch_action(livtk_app::ui::FollowLink {
+        href: "livtk:LIV-1".into(),
+    });
+    settle(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().detail.as_ref().map(|d| d.node.key.as_str()),
+            Some("LIV-1")
+        )
+    });
+    assert!(
+        cx.debug_bounds("detail-docs").is_some(),
+        "the panel lists its docs"
+    );
+    click_on(cx, "detail-doc-docs/guide/setup.md");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().docs.open.as_deref(), Some("docs/guide/setup.md"))
     });
 }
 

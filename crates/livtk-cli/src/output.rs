@@ -128,12 +128,18 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     let (relates, related_by) = ws.related(key, Rel::Relates)?;
     // Relating has no direction worth showing: both ends list the other.
     let related: Vec<_> = relates.into_iter().chain(related_by).collect();
+    let docs = ws.docs_of(key)?;
     if json {
+        let docs: Vec<_> = docs
+            .iter()
+            .map(|(p, t)| json!({"path": p, "title": t, "missing": t.is_none()}))
+            .collect();
         return print_json(&json!({
             "node": node, "links": links, "history": history,
             "supersedes": replaces, "superseded_by": replaced_by,
             "learned_from": learned_from, "taught": taught,
             "part_of": part_of, "sub_tasks": parts, "related": related,
+            "docs": docs,
         }));
     }
     println!("{}  {}", node.key, node.title);
@@ -164,6 +170,12 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     ] {
         for b in briefs {
             println!("{label:>11}  {} ({}) {}", b.key, b.state, b.title);
+        }
+    }
+    for (path, title) in &docs {
+        match title {
+            Some(t) => println!("{:>11}  {path}  {t}", "doc"),
+            None => println!("{:>11}  {path}  (missing)", "doc"),
         }
     }
     if !node.body.is_empty() {
@@ -336,6 +348,99 @@ pub fn link_changed(
     Ok(())
 }
 
+pub fn doc_changed(
+    ws: &Workspace,
+    key: &str,
+    path: &str,
+    add: bool,
+    events: &[Event],
+    json: bool,
+) -> Result<()> {
+    if json {
+        return print_json(&events);
+    }
+    let k = ws.node(key)?.key;
+    let path = livtk_core::docs::normalize(ws.root(), path).unwrap_or_else(|| path.to_owned());
+    let what = match (add, events.is_empty()) {
+        (true, false) => "linked",
+        (true, true) => "already linked",
+        (false, _) => "unlinked",
+    };
+    println!("{k} {path}: {what}");
+    Ok(())
+}
+
+/// Every doc in the tree, with how many nodes link to it; then links to docs no longer there.
+pub fn docs(ws: &Workspace, json: bool) -> Result<()> {
+    let tree = ws.docs();
+    let counts: std::collections::HashMap<String, usize> = ws.linked_docs()?.into_iter().collect();
+    let docs = tree.all();
+    let missing: Vec<_> = counts
+        .iter()
+        .filter(|(p, _)| !docs.iter().any(|d| &&d.path == p))
+        .collect();
+    if json {
+        let list: Vec<_> = docs
+            .iter()
+            .map(|d| {
+                json!({"path": d.path, "title": d.title,
+                "links": counts.get(&d.path).copied().unwrap_or(0)})
+            })
+            .collect();
+        let gone: Vec<_> = missing
+            .iter()
+            .map(|(p, n)| json!({"path": p, "links": n}))
+            .collect();
+        return print_json(&json!({"dir": tree.path, "docs": list, "missing": gone}));
+    }
+    if docs.is_empty() {
+        println!("no docs in {}/", tree.path);
+    }
+    for d in &docs {
+        let n = counts.get(&d.path).copied().unwrap_or(0);
+        let links = if n == 0 {
+            String::new()
+        } else {
+            format!("  ({n} linked)")
+        };
+        println!("{}  {}{links}", d.path, d.title);
+    }
+    for (p, n) in missing {
+        println!("{p}  (missing; {n} linked)");
+    }
+    Ok(())
+}
+
+/// A node's docs, or a doc's nodes: a path (with `/` or `.md`) is a doc, else a key.
+pub fn doc_links(ws: &Workspace, of: &str, json: bool) -> Result<()> {
+    let is_path = of.contains('/') || livtk_core::docs::is_doc(of);
+    if is_path {
+        let nodes = ws.doc_nodes(of)?;
+        if json {
+            return print_json(&nodes);
+        }
+        for n in nodes {
+            println!("{}  ({}) {}", n.key, n.state, n.title);
+        }
+    } else {
+        let docs = ws.docs_of(of)?;
+        if json {
+            let list: Vec<_> = docs
+                .iter()
+                .map(|(p, t)| json!({"path": p, "title": t, "missing": t.is_none()}))
+                .collect();
+            return print_json(&list);
+        }
+        for (p, t) in docs {
+            match t {
+                Some(t) => println!("{p}  {t}"),
+                None => println!("{p}  (missing)"),
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn noted(key: &str, events: &[Event], json: bool) -> Result<()> {
     if json {
         return print_json(&events);
@@ -447,5 +552,7 @@ fn describe(ws: &Workspace, e: &Event) -> String {
             let dst = key_of(ws, data.dst).unwrap_or_else(|| "?".into());
             format!("{what}: {src} {} {dst}", data.rel)
         }
+        Op::DocLink { data, .. } => format!("linked doc {}", data.path),
+        Op::DocUnlink { data, .. } => format!("unlinked doc {}", data.path),
     }
 }

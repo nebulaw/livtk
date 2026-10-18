@@ -8,6 +8,7 @@
 
 mod activity_grid;
 pub mod contour_grid;
+mod docs;
 pub mod icons;
 pub mod menus;
 pub mod state_flow;
@@ -31,13 +32,21 @@ use uuid::Uuid;
 
 use crate::model::keys;
 use crate::model::{
-    Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, FeedRow, GroupKey, Grouping,
-    Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Mark, Model, Ordering,
-    Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as, describe,
-    drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with, visible_runs,
+    Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, DocPick, FeedRow, GroupKey,
+    Grouping, Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Mark, Model,
+    Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as,
+    describe, drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with,
+    visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
+
+/// A link in a doc clicked, to follow: another doc, a node (`livtk:KEY`), a web page.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
+#[action(namespace = livtk, no_json)]
+pub struct FollowLink {
+    pub href: String,
+}
 
 actions!(
     livtk,
@@ -63,6 +72,7 @@ actions!(
         GoFindings,
         GoGraph,
         GoTerminal,
+        GoDocs,
         ZoomIn,
         ZoomOut,
         ZoomFit,
@@ -269,6 +279,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Navigate", &["G", "then", "D"], "Decisions"),
     ("Navigate", &["G", "then", "F"], "Findings"),
     ("Navigate", &["G", "then", "R"], "Graph"),
+    ("Navigate", &["G", "then", "O"], "Docs"),
     ("Navigate", &["G", "then", "X"], "Terminal"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
@@ -445,6 +456,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("g f", GoFindings, nav),
         KeyBinding::new("g r", GoGraph, nav),
         KeyBinding::new("g x", GoTerminal, nav),
+        KeyBinding::new("g o", GoDocs, nav),
         KeyBinding::new("+", ZoomIn, nav),
         KeyBinding::new("=", ZoomIn, nav),
         KeyBinding::new("-", ZoomOut, nav),
@@ -739,7 +751,7 @@ impl LivtkApp {
                     // Whatever below tells the human something (a tick, a write that failed),
                     // or lets a notice go, shows now: a notice is drawn only when painted.
                     let noticed = told(&app.model);
-                    let changed = app.model.tick();
+                    let changed = app.model.tick() | app.model.refresh_docs();
                     // A hidden window draws nothing, and the Dock's count must still be right.
                     app.sync_menus(cx);
                     let arrived = app.model.take_arrivals();
@@ -1211,6 +1223,22 @@ impl LivtkApp {
             .is_some_and(|pane| pane.read(cx).focus_handle().is_focused(window))
     }
 
+    /// A link in a doc, followed: a node's key opens it in the panel, another doc opens here, a
+    /// web page in the browser.
+    fn follow_link(&mut self, href: &str, cx: &mut Context<Self>) {
+        if let Some(key) = href.strip_prefix("livtk:") {
+            self.model.show_node(key);
+        } else {
+            let from = self.model.docs.open.clone().unwrap_or_default();
+            match livtk_core::docs::resolve(&from, href) {
+                Some(livtk_core::docs::Target::Doc { path, .. }) => self.model.open_doc(&path),
+                Some(livtk_core::docs::Target::Web(url)) => cx.open_url(&url),
+                Some(livtk_core::docs::Target::Anchor(_)) | None => {}
+            }
+        }
+        cx.notify();
+    }
+
     /// The open project's terminal, once it has one.
     fn current_terminal(&self) -> Option<&Entity<terminal::TerminalPane>> {
         self.terminals.get(&self.model.project()?.dir)
@@ -1334,7 +1362,7 @@ impl LivtkApp {
     /// The selection as a list shows it: the name its line goes by, and the line's place.
     fn spot(&self) -> Option<(String, usize)> {
         match self.model.view {
-            View::Graph => None,
+            View::Graph | View::Docs | View::Terminal => None,
             View::Tasks if self.model.layout == Layout::Board => None,
             View::Activity => {
                 let i = self.model.activity_index;
@@ -3433,6 +3461,21 @@ impl LivtkApp {
                         })),
                 );
             }
+            let panel = panel.child(menu_divider()).child(
+                option_row("link-choice-doc".into())
+                    .debug_selector(|| "link-choice-doc".into())
+                    .child(icon(Icon::Docs, 14., TEXT_3))
+                    .child("A doc…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_menu(window, cx);
+                        this.help = false;
+                        this.model.open_doc_picker();
+                        if this.model.palette.is_some() {
+                            this.reset_palette_input(window, cx);
+                        }
+                        cx.notify();
+                    })),
+            );
             d.child(self.popover(Menu::AddLink, true, 28., panel, cx))
         })
     }
@@ -3503,6 +3546,97 @@ impl LivtkApp {
         out
     }
 
+    /// The node's docs, as a link group: each by its title (its path struck when it is gone), a
+    /// click opening it in the Docs view, its × taking the link away.
+    fn doc_group(
+        &self,
+        key: &str,
+        docs: &[(String, Option<String>)],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut out = div()
+            .debug_selector(|| "detail-docs".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_xs().text_color(color(TEXT_4)).child("Docs"));
+        for (path, title) in docs {
+            let gone = title.is_none();
+            let (open, unlink_path, node) = (path.clone(), path.clone(), key.to_owned());
+            let unlink = format!("unlink-doc-{path}");
+            let row = format!("detail-doc-{path}");
+            out = out.child(
+                div()
+                    .id(SharedString::from(row.clone()))
+                    .debug_selector(move || row.clone())
+                    .h(px(28.))
+                    .pl_2()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(color(CONTENT))
+                    .border_1()
+                    .border_color(color(BORDER))
+                    .when(!gone, |d| d.hover(|h| h.bg(color(HOVER))))
+                    .child(icon(Icon::Docs, 13., TEXT_4))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(color(if gone { TEXT_4 } else { TEXT_2 }))
+                            .when(gone, |d| d.line_through())
+                            .child(title.clone().unwrap_or_else(|| path.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .max_w(px(160.))
+                            .truncate()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child(if gone {
+                                "missing".to_owned()
+                            } else {
+                                path.clone()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(unlink.clone()))
+                            .debug_selector(move || unlink.clone())
+                            .group("unlink")
+                            .size(px(20.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .hover(|s| s.bg(color(HOVER)))
+                            .child(icon_hover(Icon::Unlink, 14., TEXT_4, "unlink", TEXT))
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Remove the link")
+                                    .build(window, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.model.link_doc(&node, &unlink_path, false);
+                                cx.notify();
+                            })),
+                    )
+                    .when(!gone, |d| {
+                        d.on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.open_doc(&open);
+                            cx.notify();
+                        }))
+                    }),
+            );
+        }
+        out
+    }
+
     /// The new task's priority, chosen from a menu as in Linear's issue composer.
     fn priority_menu(&self, cx: &mut Context<Self>) -> Div {
         let current = self.form.as_ref().map_or(3, |f| f.priority);
@@ -3539,6 +3673,7 @@ impl LivtkApp {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
+            (View::Docs, _) => self.docs_view(cx),
             // Drawn in the list's place, outside its keys: `terminal_view`.
             (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
@@ -4627,6 +4762,9 @@ impl LivtkApp {
         for g in &d.link_groups {
             links = links.child(self.link_group(g, cx));
         }
+        if !d.docs.is_empty() {
+            links = links.child(self.doc_group(&n.key, &d.docs, cx));
+        }
         // The panel's content: its width less its padding either side.
         let flow = self.state_flow(n.id, n.kind, n.state, width - 40., cx);
 
@@ -4897,7 +5035,7 @@ impl LivtkApp {
             .flex_col();
         let mut section = None;
         for (i, item) in p.items.iter().enumerate() {
-            let s = if p.link.is_some() {
+            let s = if p.link.is_some() || p.doc_pick.is_some() {
                 "Link to"
             } else {
                 section_of(item, &p.query)
@@ -4928,9 +5066,11 @@ impl LivtkApp {
             );
         }
         // What the actions apply to; when picking a link's other end, the link so far.
-        let context = match &p.link {
-            Some(pick) => Some(format!("{} · {}", pick.key, pick.choice.label)),
-            None => self.model.acted_on().map(|r| r.key),
+        let context = match (&p.link, &p.doc_pick) {
+            (Some(pick), _) => Some(format!("{} · {}", pick.key, pick.choice.label)),
+            (_, Some(DocPick::ForNode(key))) => Some(format!("{key} · Doc")),
+            (_, Some(DocPick::ForDoc(path))) => Some(path.clone()),
+            _ => self.model.acted_on().map(|r| r.key),
         };
         div()
             .debug_selector(|| "palette".into())
@@ -5095,6 +5235,24 @@ impl LivtkApp {
                         .text_xs()
                         .text_color(color(TEXT_4))
                         .child(title_case(n.kind.as_str())),
+                ),
+            PaletteItem::Doc(d) => row
+                .child(icon(Icon::Docs, 16., TEXT_3))
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(280.))
+                        .truncate()
+                        .child(d.title.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child(d.path.clone()),
                 ),
         }
     }
@@ -5851,6 +6009,10 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
             .on_action(cx.listener(|this, _: &GoGraph, w, cx| this.go(View::Graph, w, cx)))
             .on_action(cx.listener(|this, _: &GoTerminal, w, cx| this.go(View::Terminal, w, cx)))
+            .on_action(cx.listener(|this, _: &GoDocs, w, cx| this.go(View::Docs, w, cx)))
+            .on_action(
+                cx.listener(|this, link: &FollowLink, _, cx| this.follow_link(&link.href, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
                 if cfg!(target_os = "macos") {
                     cx.hide();
@@ -6337,6 +6499,7 @@ fn view_icon(view: View) -> Icon {
         View::Findings => Icon::Findings,
         View::Graph => Icon::Graph,
         View::Terminal => Icon::Terminal,
+        View::Docs => Icon::Docs,
     }
 }
 
@@ -6480,6 +6643,7 @@ fn section_of(item: &PaletteItem, query: &str) -> &'static str {
         PaletteItem::Action(_) => "Actions",
         PaletteItem::Node(_) if query.trim().is_empty() => "Updated lately",
         PaletteItem::Node(_) => "Results",
+        PaletteItem::Doc(_) => "Docs",
     }
 }
 
@@ -6747,6 +6911,8 @@ fn event_line(e: &Event, key: &str) -> Div {
         Op::NodeNote { data, .. } => data.text.clone(),
         Op::EdgeAdd { data } => format!("linked: {}", data.rel),
         Op::EdgeRemove { data } => format!("unlinked: {}", data.rel),
+        Op::DocLink { data, .. } => format!("linked the doc {}", data.path),
+        Op::DocUnlink { data, .. } => format!("unlinked the doc {}", data.path),
     };
     let human = e.by == "human";
     let note = matches!(e.op, Op::NodeNote { .. });

@@ -17,7 +17,7 @@ use crate::log::Mark;
 use crate::model::{Key, Kind, Rel, State};
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE events (
@@ -54,6 +54,14 @@ CREATE TABLE edges (
     PRIMARY KEY (src, rel, dst)
 ) WITHOUT ROWID;
 CREATE INDEX edges_dst ON edges (dst, rel);
+
+-- Nodes linked to docs: files in the project, by their path from its folder.
+CREATE TABLE doc_links (
+    node TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (node, path)
+) WITHOUT ROWID;
+CREATE INDEX doc_links_path ON doc_links (path);
 
 CREATE TABLE counters (
     prefix TEXT PRIMARY KEY,
@@ -509,6 +517,41 @@ impl Store {
         Ok(rows)
     }
 
+    /// The docs `node` is linked to, by path.
+    pub fn docs_of(&self, node: Uuid) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path FROM doc_links WHERE node = ?1 ORDER BY path")?;
+        let rows = stmt
+            .query_map([node.to_string()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The nodes linked to the doc at `path`.
+    pub fn doc_nodes(&self, path: &str) -> Result<Vec<Uuid>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT node FROM doc_links WHERE path = ?1 ORDER BY node")?;
+        let rows: Vec<String> = stmt
+            .query_map([path], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.iter().map(|s| parse_uuid(s)).collect()
+    }
+
+    /// Every path some node is linked to, with how many nodes.
+    pub fn linked_docs(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path, count(*) FROM doc_links GROUP BY path ORDER BY path")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as usize))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     /// Every link, as (source, relation, destination).
     pub fn edges(&self) -> Result<Vec<(Uuid, Rel, Uuid)>> {
         let mut stmt = self
@@ -784,7 +827,32 @@ fn apply_one(tx: &Transaction<'_>, e: &Event) -> Result<Option<String>> {
                 ])?;
             Ok(None)
         }
+        Op::DocLink { node, data } => {
+            if !exists(tx, *node)? {
+                return Ok(Some(format!(
+                    "event {}: doc link from unknown node {node}, skipped",
+                    e.id
+                )));
+            }
+            tx.prepare_cached("INSERT OR IGNORE INTO doc_links (node, path) VALUES (?1, ?2)")?
+                .execute(params![node.to_string(), data.path])?;
+            touch(tx, *node, &e.at)?;
+            Ok(None)
+        }
+        Op::DocUnlink { node, data } => {
+            tx.prepare_cached("DELETE FROM doc_links WHERE node = ?1 AND path = ?2")?
+                .execute(params![node.to_string(), data.path])?;
+            touch(tx, *node, &e.at)?;
+            Ok(None)
+        }
     }
+}
+
+/// A node's last change is now `at`.
+fn touch(tx: &Transaction<'_>, node: Uuid, at: &str) -> Result<()> {
+    tx.prepare_cached("UPDATE nodes SET updated = ?2 WHERE id = ?1")?
+        .execute(params![node.to_string(), at])?;
+    Ok(())
 }
 
 fn create(tx: &Transaction<'_>, e: &Event, node: Uuid, data: &NodeData) -> Result<Option<String>> {

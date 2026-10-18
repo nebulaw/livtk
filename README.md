@@ -76,16 +76,23 @@ livtk start 1                       # refused while a dependency is open
 livtk move 1 review
 livtk done 1
 livtk note 1 "winit panics on resize; trying the drm path"
-livtk show 1                        # links, body, notes, history
+livtk show 1                        # links, docs, body, notes, history
 livtk log                           # every event in the project
+livtk doc list                      # the docs (markdown under docs/), with their links
+livtk doc link 1 docs/guide.md      # link a node to a doc; any number each way
+livtk doc links 1                   # a node's docs; `livtk doc links docs/guide.md`, a doc's nodes
 ```
+
+Docs are the project's markdown files, under `docs/` (or the folder `docs = "..."` in
+`.livtk/config.toml` names); linked to nodes through the log, by their path.
 
 Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 
 ### Signals
 
 Agents and tools hear what happens as signals, one JSON object per line, derived from the log:
-`node.created`, `node.moved`, `node.edited`, `node.noted`, `link.added`, `link.removed`, and the
+`node.created`, `node.moved`, `node.edited`, `node.noted`, `link.added`, `link.removed`,
+`doc.linked`, `doc.unlinked`, and the
 ones worth waking for: `decision.needed` (something waits for you), `decision.made` (you
 acknowledged, ratified, accepted, rejected or retired) and `work.unblocked` (the last thing a task
 waited for is done). Each names its event; keep the last one you saw and read on from it:

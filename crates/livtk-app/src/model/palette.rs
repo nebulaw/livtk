@@ -22,6 +22,24 @@ pub struct Palette {
     pub selected: usize,
     /// Picking the other end of a link instead of running commands.
     pub link: Option<LinkPick>,
+    /// Picking a doc to link a node to, or a node to link a doc to.
+    pub doc_pick: Option<DocPick>,
+}
+
+/// A link between a node and a doc waiting for its other end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocPick {
+    /// A doc for the node keyed so.
+    ForNode(String),
+    /// A node for the doc at this path.
+    ForDoc(String),
+}
+
+/// A doc the palette found: its path and title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocItem {
+    pub path: String,
+    pub title: String,
 }
 
 /// A link waiting for its other end: from (or to) `node`, by `choice`.
@@ -51,6 +69,7 @@ impl LinkPick {
 pub enum Item {
     Action(Action),
     Node(Found),
+    Doc(DocItem),
 }
 
 /// Something to do, with the shortcut that does it outside the palette.
@@ -164,6 +183,63 @@ impl Model {
         self.palette_query("");
     }
 
+    /// Pick a doc for the node acted on to link to.
+    pub fn open_doc_picker(&mut self) {
+        let Some(row) = self.acted_on() else { return };
+        self.palette = Some(Palette {
+            doc_pick: Some(DocPick::ForNode(row.key)),
+            ..Palette::default()
+        });
+        self.palette_query("");
+    }
+
+    /// Pick a node to link the open doc to.
+    pub fn open_doc_node_picker(&mut self) {
+        let Some(path) = self.docs.open.clone() else {
+            return;
+        };
+        if let Some(p) = self.projects.get_mut(self.current)
+            && let Err(e) = p.ws.prepare_search()
+        {
+            self.warn(e.to_string());
+        }
+        self.palette = Some(Palette {
+            doc_pick: Some(DocPick::ForDoc(path)),
+            ..Palette::default()
+        });
+        self.palette_query("");
+    }
+
+    /// The project's docs `query` finds, by title or path: every doc for an empty query.
+    fn find_docs(&self, query: &str) -> Vec<DocItem> {
+        let Some(p) = self.projects.get(self.current) else {
+            return Vec::new();
+        };
+        let tree = p.ws.docs();
+        let mut scored: Vec<(i32, DocItem)> = tree
+            .all()
+            .into_iter()
+            .filter_map(|d| {
+                let score = if query.trim().is_empty() {
+                    Some(0)
+                } else {
+                    fuzzy(query, &d.title).or_else(|| fuzzy(query, &d.path))
+                };
+                score.map(|s| {
+                    (
+                        s,
+                        DocItem {
+                            path: d.path.clone(),
+                            title: d.title.clone(),
+                        },
+                    )
+                })
+            })
+            .collect();
+        scored.sort_by_key(|(s, _)| -s);
+        scored.into_iter().map(|(_, d)| d).collect()
+    }
+
     pub fn close_palette(&mut self) {
         self.palette = None;
     }
@@ -172,7 +248,45 @@ impl Model {
     /// selected node's actions, then the nodes updated last.
     pub fn palette_query(&mut self, query: &str) {
         let pick = self.palette.as_ref().and_then(|p| p.link.clone());
-        let items = if let Some(pick) = pick {
+        let doc_pick = self.palette.as_ref().and_then(|p| p.doc_pick.clone());
+        let items = if let Some(doc_pick) = doc_pick {
+            let ws = self.projects.get(self.current).map(|p| &p.ws);
+            match doc_pick {
+                // A doc for a node: those it is not linked to yet.
+                DocPick::ForNode(key) => {
+                    let linked: Vec<String> = ws
+                        .and_then(|w| w.docs_of(&key).ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(p, _)| p)
+                        .collect();
+                    self.find_docs(query)
+                        .into_iter()
+                        .filter(|d| !linked.contains(&d.path))
+                        .map(Item::Doc)
+                        .collect()
+                }
+                // A node for a doc: those not linked to it yet.
+                DocPick::ForDoc(path) => {
+                    let linked: Vec<Uuid> = ws
+                        .and_then(|w| w.doc_nodes(&path).ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|n| n.id)
+                        .collect();
+                    let found = if query.trim().is_empty() {
+                        self.recent()
+                    } else {
+                        self.find(query)
+                    };
+                    found
+                        .into_iter()
+                        .filter(|f| !linked.contains(&f.id))
+                        .map(Item::Node)
+                        .collect()
+                }
+            }
+        } else if let Some(pick) = pick {
             // Picking a link's other end: only nodes it can join.
             let found = if query.trim().is_empty() {
                 self.recent()
@@ -202,6 +316,12 @@ impl Model {
                 .map(|(_, a)| Item::Action(a))
                 .collect();
             items.extend(self.find(query).into_iter().map(Item::Node));
+            items.extend(
+                self.find_docs(query)
+                    .into_iter()
+                    .take(ACTIONS)
+                    .map(Item::Doc),
+            );
             items
         };
         if let Some(p) = &mut self.palette {
@@ -240,12 +360,20 @@ impl Model {
     pub fn palette_run_at(&mut self, index: usize) -> Option<Ask> {
         let p = self.palette.take()?;
         let item = p.items.into_iter().nth(index)?;
-        match (p.link, item) {
-            (Some(pick), Item::Node(other)) => {
+        match (p.link, p.doc_pick, item) {
+            (Some(pick), _, Item::Node(other)) => {
                 self.link(pick.node, pick.choice, other.id);
                 None
             }
-            (_, item) => self.run_item(item),
+            (_, Some(DocPick::ForNode(key)), Item::Doc(d)) => {
+                self.link_doc(&key, &d.path, true);
+                None
+            }
+            (_, Some(DocPick::ForDoc(path)), Item::Node(n)) => {
+                self.link_doc(&n.key, &path, true);
+                None
+            }
+            (_, _, item) => self.run_item(item),
         }
     }
 
@@ -253,6 +381,10 @@ impl Model {
         match item {
             Item::Node(found) => {
                 self.reveal(&found);
+                None
+            }
+            Item::Doc(d) => {
+                self.open_doc(&d.path);
                 None
             }
             Item::Action(a) => match a.run {
@@ -451,6 +583,7 @@ impl Model {
             (View::Lessons, "G L"),
             (View::Decisions, "G D"),
             (View::Findings, "G F"),
+            (View::Docs, "G O"),
             (View::Graph, "G R"),
             (View::Terminal, "G X"),
         ] {

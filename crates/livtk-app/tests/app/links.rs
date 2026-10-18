@@ -250,6 +250,7 @@ fn the_palette_picks_a_links_other_end_from_what_can_join() {
             .map(|i| match i {
                 Item::Node(n) => n.key.clone(),
                 Item::Action(a) => a.label.clone(),
+                Item::Doc(d) => d.path.clone(),
             })
             .collect()
     };

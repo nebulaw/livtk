@@ -73,6 +73,7 @@ fn labels(m: &Model) -> Vec<String> {
         .map(|i| match i {
             Item::Action(a) => a.label.clone(),
             Item::Node(n) => n.key.clone(),
+            Item::Doc(d) => d.path.clone(),
         })
         .collect()
 }
@@ -267,7 +268,7 @@ fn the_palette_turns_empty_groups_on_and_off_in_the_lists_alone() {
     );
     let shortcut = match &m.palette.as_ref().unwrap().items[0] {
         Item::Action(a) => a.shortcut,
-        Item::Node(_) => None,
+        Item::Node(_) | Item::Doc(_) => None,
     };
     assert_eq!(
         shortcut,

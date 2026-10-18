@@ -26,6 +26,8 @@ pub const NAMES: &[&str] = &[
     "node.noted",
     "link.added",
     "link.removed",
+    "doc.linked",
+    "doc.unlinked",
     "decision.needed",
     "decision.made",
     "work.unblocked",
@@ -56,6 +58,7 @@ pub enum Detail {
     Edited { fields: Vec<&'static str> },
     Noted { text: String },
     Link { rel: Rel, other: String },
+    Doc { path: String },
 }
 
 /// The `by` of whatever a hook does through livtk: a hook never hears it (see `on`).
@@ -243,6 +246,20 @@ impl Signals {
                     out.extend(self.unblocked_one(data.src).map(|(id, k, kind)| {
                         signal("work.unblocked", id, &k, kind, Detail::None {})
                     }));
+                }
+            }
+            Op::DocLink { node, data } | Op::DocUnlink { node, data } => {
+                if let Some((key, kind, _)) = self.nodes.get(node) {
+                    let linked = matches!(e.op, Op::DocLink { .. });
+                    out.push(signal(
+                        if linked { "doc.linked" } else { "doc.unlinked" },
+                        *node,
+                        key,
+                        *kind,
+                        Detail::Doc {
+                            path: data.path.clone(),
+                        },
+                    ));
                 }
             }
         }

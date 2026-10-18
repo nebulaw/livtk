@@ -176,6 +176,12 @@ enum Cmd {
         rel: LinkRel,
         other: String,
     },
+    /// The project's docs (the markdown files under docs/, or the folder config.toml names),
+    /// and the links between them and nodes: any number each way.
+    Doc {
+        #[command(subcommand)]
+        action: DocAction,
+    },
     /// Add a note to a task's history: what was tried, what failed, what was learned.
     Note {
         key: String,
@@ -232,6 +238,18 @@ enum EmbedAction {
     },
     /// Whether the model is installed and loads.
     Status,
+}
+
+#[derive(Subcommand)]
+enum DocAction {
+    /// Every doc, with how many nodes link to it.
+    List,
+    /// Link KEY to the doc at PATH (from the project's folder: docs/guide.md).
+    Link { key: String, path: String },
+    /// Take the link between KEY and PATH away.
+    Unlink { key: String, path: String },
+    /// A node's docs (given its key), or a doc's nodes (given its path).
+    Links { of: String },
 }
 
 #[derive(Subcommand)]
@@ -519,6 +537,30 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             let events = ws.execute(cmd, by)?;
             output::linked(ws, &src, &dst, add, &events, json)
         }
+        Cmd::Doc { action } => match action {
+            DocAction::List => output::docs(ws, json),
+            DocAction::Link { key, path } => {
+                let events = ws.execute(
+                    Command::DocLink {
+                        node: key.clone(),
+                        path: path.clone(),
+                    },
+                    by,
+                )?;
+                output::doc_changed(ws, &key, &path, true, &events, json)
+            }
+            DocAction::Unlink { key, path } => {
+                let events = ws.execute(
+                    Command::DocUnlink {
+                        node: key.clone(),
+                        path: path.clone(),
+                    },
+                    by,
+                )?;
+                output::doc_changed(ws, &key, &path, false, &events, json)
+            }
+            DocAction::Links { of } => output::doc_links(ws, &of, json),
+        },
         Cmd::Link { key, rel, other } => link(ws, key, rel, other, true, by, json),
         Cmd::Unlink { key, rel, other } => link(ws, key, rel, other, false, by, json),
         Cmd::Note { key, text } => {

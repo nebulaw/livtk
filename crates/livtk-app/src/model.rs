@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 mod activity;
 pub mod contour;
+pub mod docs;
 mod flow;
 mod graph;
 pub mod grid;
@@ -27,7 +28,7 @@ pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, FIT_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,
 };
-pub use palette::{Action, Ask, Found, Item, LinkPick, Palette, Run, fuzzy};
+pub use palette::{Action, Ask, DocItem, DocPick, Found, Item, LinkPick, Palette, Run, fuzzy};
 pub use saved::{Saved, SavedView, SavedWindow};
 pub use toasts::{Act, Button, Level, Mark, Toast, Toasts};
 
@@ -45,16 +46,19 @@ pub enum View {
     Graph,
     /// A shell in the project's folder.
     Terminal,
+    /// The project's docs: its markdown files.
+    Docs,
 }
 
 impl View {
-    pub const ALL: [View; 8] = [
+    pub const ALL: [View; 9] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
         View::Lessons,
         View::Decisions,
         View::Findings,
+        View::Docs,
         View::Graph,
         View::Terminal,
     ];
@@ -69,6 +73,7 @@ impl View {
             View::Findings => "Findings",
             View::Graph => "Graph",
             View::Terminal => "Terminal",
+            View::Docs => "Docs",
         }
     }
 
@@ -83,7 +88,7 @@ impl View {
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
-            View::Inbox | View::Activity | View::Graph | View::Terminal => None,
+            View::Inbox | View::Activity | View::Graph | View::Terminal | View::Docs => None,
             View::Tasks => Some(Kind::Task),
             View::Lessons => Some(Kind::Lesson),
             View::Decisions => Some(Kind::Decision),
@@ -300,6 +305,8 @@ pub struct Detail {
     pub link_groups: Vec<LinkGroup>,
     pub history: Vec<Event>,
     pub choices: Vec<Choice>,
+    /// The docs it is linked to, by path, each with its title (`None` once it is gone).
+    pub docs: Vec<(String, Option<String>)>,
 }
 
 /// Links of one relation and direction, as the detail panel lists them.
@@ -371,6 +378,9 @@ pub struct Model {
     toasts: Toasts,
     /// The activity grid above the feed.
     pub grid: grid::Grid,
+    /// The Docs view, and the doc last open in each project.
+    pub docs: docs::Docs,
+    pub docs_open: HashMap<PathBuf, String>,
     /// Projects with `[[on]]` hooks the human wrote to since the view last took them: their
     /// hooks are to be run, apart from the window.
     wrote: Vec<(PathBuf, Option<Uuid>)>,
@@ -455,6 +465,8 @@ impl Model {
             leaving: Vec::new(),
             toasts: Toasts::default(),
             grid: grid::Grid::default(),
+            docs: docs::Docs::default(),
+            docs_open: HashMap::new(),
             wrote: Vec::new(),
             told_no_notifications: false,
             catch_ups: Vec::new(),
@@ -646,6 +658,10 @@ impl Model {
     /// Move the selection by `delta`, stopping at the ends: in a list through its group bands
     /// and their rows; on the board down a column and on into the next (up into the previous).
     pub fn select_by(&mut self, delta: isize) {
+        if self.view == View::Docs {
+            self.docs_select_by(delta);
+            return;
+        }
         if self.view == View::Activity {
             self.activity_select_by(delta);
             return;
@@ -755,6 +771,10 @@ impl Model {
 
     /// Enter: fold or unfold the band the selection rests on; else open the selected node.
     pub fn enter(&mut self) {
+        if self.view == View::Docs {
+            self.docs_enter();
+            return;
+        }
         match self.band {
             Some(k) => self.toggle_collapsed(k),
             None => self.open_detail(),
@@ -1608,6 +1628,9 @@ impl Model {
 
     fn reload(&mut self) {
         self.load_grid();
+        if self.view == View::Docs {
+            self.load_docs();
+        }
         if self.view == View::Activity {
             self.load_activity();
         }
@@ -1750,6 +1773,7 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         choices: choices_with(node.kind, node.state, ws.gates()),
         links,
         history: ws.history(Some(&key))?,
+        docs: ws.docs_of(&key)?,
         replaces,
         replaced_by,
         learned_from,

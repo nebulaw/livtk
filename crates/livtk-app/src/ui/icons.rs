@@ -41,6 +41,8 @@ icons! {
     Decisions => "route",
     Findings => "medical-flask",
     Graph => "circuit-board",
+    /// The project's docs, and a doc in the tree.
+    Docs => "book-content",
     Terminal => "terminal",
     Project => "folder",
     OpenProject => "folder-plus",

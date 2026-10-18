@@ -20,6 +20,8 @@ pub struct Saved {
     /// The open project's directory, and the projects' in the order they were last opened.
     pub project: Option<PathBuf>,
     pub recent: Vec<PathBuf>,
+    /// The doc last open in each project, by the project's folder.
+    pub docs_open: BTreeMap<String, String>,
     pub view: Option<String>,
     /// "list" or "board".
     pub layout: Option<String>,
@@ -165,6 +167,11 @@ impl Model {
         Saved {
             project: self.project().map(|p| p.dir.clone()),
             recent: self.recent.clone(),
+            docs_open: self
+                .docs_open
+                .iter()
+                .map(|(dir, path)| (dir.to_string_lossy().into_owned(), path.clone()))
+                .collect(),
             view: Some(view_name(self.view)),
             layout: Some(
                 match self.layout {
@@ -238,6 +245,11 @@ impl Model {
             }
         }
         self.recent = saved.recent.clone();
+        self.docs_open = saved
+            .docs_open
+            .iter()
+            .map(|(dir, path)| (PathBuf::from(dir), path.clone()))
+            .collect();
         if let Some(dir) = &saved.project
             && let Some(i) = self.projects.iter().position(|p| &p.dir == dir)
         {

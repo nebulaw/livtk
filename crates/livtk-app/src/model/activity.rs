@@ -263,6 +263,8 @@ pub fn describe(a: &Activity) -> String {
                 .map_or("a removed node", |b| b.key.as_str());
             format!("{verb}: {} {other}", data.rel.as_str().replace('_', " "))
         }
+        Op::DocLink { data, .. } => format!("linked the doc {}", data.path),
+        Op::DocUnlink { data, .. } => format!("unlinked the doc {}", data.path),
     }
 }
 

@@ -35,7 +35,8 @@ acknowledging, then to stop.
    (or `--after OTHER` when creating). When a goal is too big for one task, keep it as a parent
    task and create its parts as sub-tasks with `--parent KEY`; each part is planned and
    acknowledged on its own. `livtk link KEY relates OTHER` notes a connection that is not an
-   order.
+   order. A task a doc describes or that changes a doc: `livtk doc link KEY docs/PATH.md`
+   (`livtk doc list` shows the docs).
 5. **Move each task to planned:** `livtk move KEY planned`.
 6. **Stop and ask.** Show the human the plan (`livtk list`, plus anything they need to judge it)
    and ask them to acknowledge with `livtk ack KEY` or in the app. You cannot acknowledge, and you

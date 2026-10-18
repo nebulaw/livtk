@@ -888,7 +888,7 @@ fn a_note_goes_to_the_node_open_in_the_panel_even_when_the_selection_moved() {
     m.palette_query("add a note");
     let context = match &m.palette.as_ref().unwrap().items[0] {
         livtk_app::model::Item::Action(a) => a.context.clone(),
-        livtk_app::model::Item::Node(_) => None,
+        livtk_app::model::Item::Node(_) | livtk_app::model::Item::Doc(_) => None,
     };
     assert_eq!(context.as_deref(), Some(second.as_str()));
     m.close_palette();

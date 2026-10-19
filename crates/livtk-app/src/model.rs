@@ -795,6 +795,7 @@ impl Model {
         if let Some(id) = self.solo.take() {
             self.panes.retain(|p| p.id != id);
             self.at = self.pane_index(self.split_focus).unwrap_or(0);
+            self.pane_gone(id);
         }
     }
 
@@ -837,6 +838,7 @@ impl Model {
             return;
         }
         self.panes.retain(|p| p.id != id);
+        self.pane_gone(id);
         if self.split_focus == id {
             self.split_focus = neighbour;
         }
@@ -845,6 +847,7 @@ impl Model {
         // No split left under a view shown alone: that view is the one view.
         if let (Some(solo), Split::Pane(left)) = (self.solo, self.split.clone()) {
             self.panes.retain(|p| p.id != left);
+            self.pane_gone(left);
             self.split = Split::Pane(solo);
             self.solo = None;
             self.at = self.pane_index(solo).unwrap_or(0);
@@ -917,6 +920,7 @@ impl Model {
         if self.split.remove(id) {
             self.panes.retain(|p| p.id != id);
             self.at = self.pane_index(next).unwrap_or(0);
+            self.pane_gone(id);
         }
     }
 
@@ -1129,9 +1133,7 @@ impl Model {
         if self.pane().rows.iter().any(|r| r.id == id) {
             self.pane_mut().band = None;
             self.pane_mut().selected = Some(id);
-            if self.detail.is_some() {
-                self.open_detail();
-            }
+            self.follow_detail();
         }
     }
 
@@ -1266,9 +1268,7 @@ impl Model {
     fn select_card(&mut self, id: Uuid) {
         self.pane_mut().band = None;
         self.pane_mut().selected = Some(id);
-        if self.detail.is_some() {
-            self.open_detail();
-        }
+        self.follow_detail();
     }
 
     /// Enter: fold or unfold the band the selection rests on; else open the selected node.
@@ -1327,14 +1327,32 @@ impl Model {
         };
         match load_detail(&project.ws, id) {
             Ok(d) => {
-                // A detail opened afresh opens in this pane; one followed (the selection moved
-                // with it open) stays where it is shown.
-                if self.detail.is_none() {
-                    self.detail_pane = Some(self.pane().id);
-                }
+                // A detail opens in the pane it is opened from: a full page shows there.
+                self.detail_pane = Some(self.pane().id);
                 self.detail = Some(d);
             }
             Err(e) => self.warn(e.to_string()),
+        }
+    }
+
+    /// The selection moved with a detail open: the detail follows it, unless it is a full page
+    /// in another pane (whose list is not this one).
+    fn follow_detail(&mut self) {
+        let here = self.pane().id;
+        if self.detail.is_some()
+            && (self.detail_mode != DetailMode::Full || self.detail_pane == Some(here))
+        {
+            self.open_detail();
+        }
+    }
+
+    /// Pane `id` is gone: a detail shown as a full page there goes with it.
+    fn pane_gone(&mut self, id: u64) {
+        if self.detail_pane == Some(id) {
+            self.detail_pane = None;
+            if self.detail_mode == DetailMode::Full {
+                self.detail = None;
+            }
         }
     }
 
@@ -1534,9 +1552,7 @@ impl Model {
                         let id = self.pane().rows[i.min(self.pane().rows.len() - 1)].id;
                         self.pane_mut().selected = Some(id);
                     }
-                    if self.detail.is_some() {
-                        self.open_detail();
-                    }
+                    self.follow_detail();
                 }
             }
             Err(e) => {
@@ -2088,9 +2104,7 @@ impl Model {
         // The card dragged is what the human acts on next: the panel follows it too, even
         // when its group is folded in the list (the board shows it all the same).
         self.pane_mut().selected = Some(id);
-        if self.detail.is_some() {
-            self.open_detail();
-        }
+        self.follow_detail();
         let node = id.to_string();
         let cmd = match target {
             GroupKey::State(s) if s == r.state => return,

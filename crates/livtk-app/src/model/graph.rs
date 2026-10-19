@@ -597,9 +597,7 @@ impl Model {
         if i < self.graph.nodes.len() {
             self.graph.selected = Some(i);
             self.graph.reveal(i);
-            if self.detail.is_some() {
-                self.open_detail();
-            }
+            self.follow_detail();
         }
     }
 

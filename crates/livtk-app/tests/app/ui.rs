@@ -3877,7 +3877,9 @@ fn probe_note_esc_full(cx: &mut TestAppContext) {
     resize(cx, 1600., 1000.);
     cx.simulate_keystrokes("g t c");
     settle(cx);
-    app.update(cx, |a, _| a.model_mut().detail_mode = livtk_app::model::DetailMode::Full);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
     redraw(cx);
     assert!(cx.debug_bounds("full-page").is_some());
     cx.simulate_keystrokes("h i");
@@ -3895,7 +3897,9 @@ fn probe_stale_menu(cx: &mut TestAppContext) {
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1600., 1000.);
-    app.update(cx, |a, _| a.model_mut().detail_mode = livtk_app::model::DetailMode::Full);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
     cx.simulate_keystrokes("g t enter");
     settle(cx);
     click_on(cx, "detail-mode");
@@ -3905,6 +3909,8 @@ fn probe_stale_menu(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("j enter");
     settle(cx);
     let menu = cx.debug_bounds("detail-mode-menu").is_some();
-    let sel = app.read_with(cx, |a, _| a.model().detail.as_ref().map(|d| d.node.key.clone()));
+    let sel = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().map(|d| d.node.key.clone())
+    });
     eprintln!("PROBE6 reopened detail={sel:?} menu_still_open={menu}");
 }

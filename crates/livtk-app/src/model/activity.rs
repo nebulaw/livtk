@@ -135,9 +135,7 @@ impl Model {
                 .activity_index
                 .saturating_add_signed(delta)
                 .min(self.activity.len() - 1);
-            if self.detail.is_some() {
-                self.open_detail();
-            }
+            self.follow_detail();
         }
     }
 
@@ -145,9 +143,7 @@ impl Model {
     pub fn activity_select(&mut self, index: usize) {
         if index < self.activity.len() {
             self.activity_index = index;
-            if self.detail.is_some() {
-                self.open_detail();
-            }
+            self.follow_detail();
         }
     }
 

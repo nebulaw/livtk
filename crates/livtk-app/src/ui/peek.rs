@@ -188,9 +188,14 @@ impl LivtkApp {
                 .when(focused, |el| {
                     el.key_context(DETAIL)
                         .track_focus(&self.nav)
-                        .on_action(cx.listener(|this, _: &Close, _, cx| {
-                            this.model.close_detail();
-                            cx.notify();
+                        // Esc shuts a menu opened from the page before the page itself.
+                        .on_action(cx.listener(|this, _: &Close, window, cx| {
+                            if this.menu.is_some() {
+                                this.escape(window, cx);
+                            } else {
+                                this.model.close_detail();
+                                cx.notify();
+                            }
                         }))
                 })
                 .child(page)

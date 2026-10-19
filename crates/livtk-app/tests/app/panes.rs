@@ -252,3 +252,28 @@ fn unsplitting_a_pane_keeps_the_focus_and_a_view_alone_where_they_are() {
     assert!(m.split_views().is_empty(), "one pane: no split to group");
     assert_eq!(m.panes().len(), 1);
 }
+
+#[test]
+fn a_full_page_goes_with_its_pane_and_another_panes_list_does_not_lead_it() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+    let mut m = open(dir.path());
+    m.detail_mode = livtk_app::model::DetailMode::Full;
+    m.set_view(View::Tasks);
+    m.split_pane(Axis::Row);
+    m.set_view(View::Findings);
+    // A full page in the tasks' pane.
+    m.focus_next_pane(-1);
+    m.open_detail();
+    let page = m.detail.as_ref().map(|d| d.node.key.clone());
+    assert!(page.is_some());
+    // Moving in the findings' list leaves the page as it is.
+    m.focus_next_pane(1);
+    m.select_by(1);
+    assert_eq!(m.detail.as_ref().map(|d| d.node.key.clone()), page);
+    // Its pane closed, the page goes with it: nothing hidden left to act on.
+    let tasks = m.split.ids()[0];
+    m.unsplit(tasks);
+    assert!(m.detail.is_none(), "no detail left open unseen");
+    assert_eq!(m.detail_pane, None);
+}

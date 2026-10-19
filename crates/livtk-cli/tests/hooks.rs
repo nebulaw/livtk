@@ -681,6 +681,9 @@ fn an_unknown_hook_or_section_stops_livtk_with_its_name() {
         "[hooks]\ndisable = [\"sesion-start\"]\n",
         "[session_start]\ninclude = [\"taks\"]\n",
         "[hooks]\ndisable = [\"pre-tool-use\"]\n",
+        // A misspelt table or key is no less a typo.
+        "[\"session-start\"]\ninclude = [\"tasks\"]\n",
+        "[session_start]\n\"includes\" = [\"tasks\"]\n",
     ] {
         let dir = project();
         with_config(dir.path(), toml);
@@ -693,5 +696,19 @@ fn an_unknown_hook_or_section_stops_livtk_with_its_name() {
         let err = String::from_utf8_lossy(&out.stderr);
         let name = toml.split('"').nth(1).unwrap();
         assert!(err.contains(name), "{toml}: {err}");
+    }
+}
+
+#[test]
+fn a_config_livtk_cannot_read_is_told_to_claude_not_silenced() {
+    let dir = project();
+    with_config(dir.path(), "[session_start]\ninclude = [\"gatez\"]\n");
+    for event in ["session-start", "user-prompt-submit", "subagent-start"] {
+        let said = answer(event, &json!({ "cwd": dir.path(), "prompt": "go on" }))
+            .unwrap_or_else(|| panic!("{event} says something"));
+        let text = said["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("gatez"), "{event}: {text}");
     }
 }

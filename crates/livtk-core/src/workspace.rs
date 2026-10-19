@@ -33,8 +33,10 @@ const CONFIG_VERSION: u32 = 1;
 const TITLE_MAX: usize = 200;
 const NOTE_MAX: usize = 20_000;
 
-/// `.livtk/config.toml`, committed with the project.
+/// `.livtk/config.toml`, committed with the project. A name it does not know (a misspelt table
+/// or key) is an error, so nothing is switched off or on by a typo.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
     /// Key prefix for new nodes, as in `LIV-12`.
@@ -75,7 +77,7 @@ pub const PROMPT_SECTIONS: [&str; 2] = ["memory", "nudge"];
 /// The sections of what a hook says that a project keeps: all of them unless `include` names
 /// some.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Sections {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
@@ -114,7 +116,7 @@ impl Config {
 /// deciding what binds). The file is in the repository, where Claude could change it, so it can
 /// only add gates: an edit to it can make Claude stricter, never freer.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Gates {
     /// Each `kind: from -> to`, or `kind: -> to` for a move into `to` from anywhere.
     pub human: Vec<String>,
@@ -189,7 +191,7 @@ fn names(states: &[State]) -> String {
 
 /// Memory settings. Every field is optional.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Memory {
     /// The model2vec model in the models directory; `none` turns ranking by meaning off.
     pub model: String,
@@ -220,7 +222,7 @@ impl Config {
 /// formatting and build checks belong to the project's own hooks. The old fields are still read,
 /// for one release, only to say so; they do nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Hooks {
     /// The hooks this project switches off, because it covers them itself: any of `HOOK_NAMES`.
     #[serde(skip_serializing_if = "Vec::is_empty")]

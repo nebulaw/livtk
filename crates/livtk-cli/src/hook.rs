@@ -85,8 +85,27 @@ pub fn run(event: &str) -> ExitCode {
 
 // ---- events -----------------------------------------------------------------------------------
 
+/// The project the hook runs in. Outside one, the hook says nothing; a project whose config
+/// livtk cannot read says so, so a typo never silences livtk without a word.
+fn open(input: &Value, event: &str) -> Result<Workspace, Option<Value>> {
+    match Workspace::open(&cwd(input)) {
+        Ok(ws) => Ok(ws),
+        Err(e @ livtk_core::Error::Config { .. }) => Err(Some(context(
+            event,
+            format!(
+                "livtk cannot read this project's config, so it tells you nothing else here: {e}. \
+                 Tell the developer; only they edit .livtk/.\n"
+            ),
+        ))),
+        Err(_) => Err(None),
+    }
+}
+
 fn session_start(input: &Value) -> Option<Value> {
-    let mut ws = Workspace::open(&cwd(input)).ok()?;
+    let mut ws = match open(input, "SessionStart") {
+        Ok(ws) => ws,
+        Err(said) => return said,
+    };
     if !ws.config().hook_on("session-start") {
         return None;
     }
@@ -103,7 +122,10 @@ fn user_prompt_submit(input: &Value) -> Option<Value> {
     if prompt.trim().is_empty() {
         return None;
     }
-    let mut ws = Workspace::open(&cwd(input)).ok()?;
+    let mut ws = match open(input, "UserPromptSubmit") {
+        Ok(ws) => ws,
+        Err(said) => return said,
+    };
     if !ws.config().hook_on("user-prompt-submit") {
         return None;
     }
@@ -161,7 +183,10 @@ fn reads_as_correction(prompt: &str) -> bool {
 }
 
 fn subagent_start(input: &Value) -> Option<Value> {
-    let ws = Workspace::open(&cwd(input)).ok()?;
+    let ws = match open(input, "SubagentStart") {
+        Ok(ws) => ws,
+        Err(said) => return said,
+    };
     if !ws.config().hook_on("subagent-start") {
         return None;
     }

@@ -3461,7 +3461,7 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
     click_on(cx, "view-Docs");
     redraw(cx);
     assert!(cx.debug_bounds("terminal").is_none(), "the docs alone");
-    // The split's views sit grouped at the sidebar's top, not in their usual place.
+    // The split's views sit grouped in the sidebar, not in their usual place.
     assert!(cx.debug_bounds("sidebar-split").is_some());
     assert!(cx.debug_bounds("view-Terminal").is_none());
     click_on(cx, "split-Terminal");

@@ -24,7 +24,7 @@ impl LivtkApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let split = self.model.split.clone();
+        let split = self.model.shown_split();
         let mut focused = Some(focused);
         self.split_element(&split, &mut Vec::new(), &mut focused, window, cx)
     }
@@ -211,7 +211,7 @@ impl LivtkApp {
             return div().into_any_element();
         };
         let is_focused = i == self.model.focused();
-        let several = self.model.panes().len() > 1;
+        let several = self.model.shown_split().ids().len() > 1;
         let inner = if is_focused {
             focused.take().unwrap_or_else(|| div().into_any_element())
         } else {
@@ -397,7 +397,7 @@ impl LivtkApp {
 
     /// The focused pane's width, as drawn last; before that, `fallback`.
     pub(super) fn focused_width(&self, fallback: f32) -> f32 {
-        if self.model.panes().len() < 2 {
+        if self.model.shown_split().ids().len() < 2 {
             return fallback;
         }
         let id = self.model.panes()[self.model.focused()].id;

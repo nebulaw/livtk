@@ -219,13 +219,19 @@ impl Model {
                 panes: self
                     .panes
                     .iter()
+                    // A view shown alone over the split is not part of it.
+                    .filter(|p| self.split.ids().contains(&p.id))
                     .map(|p| SavedPane {
                         id: p.id,
                         view: (!p.placeholder).then(|| view_name(p.view)),
                         board: p.layout == Layout::Board,
                     })
                     .collect(),
-                focused: self.pane().id,
+                focused: if self.solo() {
+                    self.split_focus
+                } else {
+                    self.pane().id
+                },
             }),
             views,
             told_no_notifications: self.told_no_notifications,
@@ -373,6 +379,7 @@ impl Model {
             .unwrap_or(0);
         self.panes = panes;
         self.split = saved.split.clone();
+        self.solo = None;
         if let Some(i) = self
             .panes
             .iter()

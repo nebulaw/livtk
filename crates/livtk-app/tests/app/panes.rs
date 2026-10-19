@@ -176,3 +176,52 @@ fn the_panes_come_back_after_a_restart_as_they_were_left() {
     ids.dedup();
     assert_eq!(ids.len(), 4);
 }
+
+#[test]
+fn a_view_in_none_of_the_splits_panes_shows_alone_and_the_split_comes_back() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+    let mut m = open(dir.path());
+    m.set_view(View::Terminal);
+    m.split_pane(Axis::Row);
+    m.set_view(View::Tasks);
+    let split = m.split.clone();
+    // The docs are in neither pane: shown alone, the split kept as it was.
+    m.set_view(View::Docs);
+    assert!(m.solo());
+    assert_eq!(m.view(), View::Docs);
+    assert_eq!(m.shown_split().ids().len(), 1);
+    assert_eq!(m.split, split, "the split untouched");
+    assert_eq!(views(&m), [Some(View::Terminal), Some(View::Tasks)]);
+    // Another view not in it replaces the one alone; one in it brings the split back, on it.
+    m.set_view(View::Findings);
+    assert!(m.solo());
+    assert_eq!(m.view(), View::Findings);
+    m.set_view(View::Terminal);
+    assert!(!m.solo());
+    assert_eq!(m.view(), View::Terminal);
+    assert_eq!(m.shown_split(), split);
+    // The next pane's key, or closing, from a view alone: the split again, where it was left.
+    m.set_view(View::Graph);
+    m.focus_next_pane(1);
+    assert!(!m.solo());
+    assert_eq!(m.view(), View::Terminal);
+    m.set_view(View::Graph);
+    m.close_pane();
+    assert!(!m.solo());
+    assert_eq!(m.panes().len(), 2);
+    // Splitting a view shown alone takes it into the split, beside where it was left.
+    m.set_view(View::Docs);
+    m.split_pane(Axis::Row);
+    assert!(!m.solo());
+    assert_eq!(
+        views(&m),
+        [Some(View::Terminal), Some(View::Docs), Some(View::Tasks)]
+    );
+    assert_eq!(m.view(), View::Docs);
+    // A placeholder still takes the view asked for.
+    m.split_pane(Axis::Column);
+    m.set_view(View::Lessons);
+    assert!(!m.solo());
+    assert_eq!(m.view(), View::Lessons);
+}

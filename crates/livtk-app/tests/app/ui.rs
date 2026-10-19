@@ -3457,6 +3457,16 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
     cx.simulate_keystrokes("secondary-alt-]");
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
+    // The docs, in neither pane, show alone; the terminal brings the split back.
+    click_on(cx, "view-Docs");
+    redraw(cx);
+    assert!(cx.debug_bounds("terminal").is_none(), "the docs alone");
+    click_on(cx, "view-Terminal");
+    redraw(cx);
+    assert!(cx.debug_bounds("terminal").is_some(), "the split again");
+    app.read_with(cx, |a, _| assert!(!a.model().solo()));
+    cx.simulate_keystrokes("secondary-alt-]");
+    redraw(cx);
     cx.simulate_keystrokes("secondary-alt-w");
     redraw(cx);
     app.read_with(cx, |a, _| {

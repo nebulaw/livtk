@@ -416,6 +416,10 @@ pub struct Model {
     /// How the panes are laid out, by their ids; and the id the next pane takes.
     pub split: Split,
     next_pane: u64,
+    /// A view shown alone over the split, as it is in none of its panes: its pane, out of the
+    /// split; and the split's pane to come back to.
+    solo: Option<u64>,
+    split_focus: u64,
     pub detail: Option<Detail>,
     /// Rows that changed under the app's feet (Claude, the CLI, a git pull), and when it noticed.
     pub flashed: HashMap<Uuid, Instant>,
@@ -637,6 +641,8 @@ impl Model {
             at: 0,
             split: Split::Pane(0),
             next_pane: 1,
+            solo: None,
+            split_focus: 0,
             detail: None,
             flashed: HashMap::new(),
             toasts: Toasts::default(),
@@ -736,15 +742,45 @@ impl Model {
         was
     }
 
-    /// Give pane `i` the keys, the sidebar and the dock.
+    /// Give pane `i` the keys, the sidebar and the dock; one of the split's, the split back.
     pub fn focus_pane(&mut self, i: usize) {
-        if i < self.panes.len() {
-            self.at = i;
+        let Some(id) = self.panes.get(i).map(|p| p.id) else {
+            return;
+        };
+        if Some(id) != self.solo {
+            self.leave_solo();
         }
+        self.at = self.pane_index(id).unwrap_or(0);
+    }
+
+    /// The view shown alone put away: the split again, on the pane it was left on.
+    fn leave_solo(&mut self) {
+        if let Some(id) = self.solo.take() {
+            self.panes.retain(|p| p.id != id);
+            self.at = self.pane_index(self.split_focus).unwrap_or(0);
+        }
+    }
+
+    /// What the middle shows: the split, or the view shown alone over it.
+    pub fn shown_split(&self) -> Split {
+        match self.solo {
+            Some(id) => Split::Pane(id),
+            None => self.split.clone(),
+        }
+    }
+
+    /// Whether a view shows alone over the split.
+    pub fn solo(&self) -> bool {
+        self.solo.is_some()
     }
 
     /// The pane `delta` along from the focused one, in reading order, round the ends.
     pub fn focus_next_pane(&mut self, delta: isize) {
+        // From a view shown alone, back to the split.
+        if self.solo.is_some() {
+            self.leave_solo();
+            return;
+        }
         let order = self.split.ids();
         let id = self.pane().id;
         let Some(here) = order.iter().position(|p| *p == id) else {
@@ -759,6 +795,13 @@ impl Model {
 
     /// Split the focused pane along `axis`: a placeholder beside it (after it), focused.
     pub fn split_pane(&mut self, axis: Axis) {
+        // A view shown alone joins the split, beside the pane it was left on.
+        if let Some(solo) = self.solo {
+            if self.split.split(self.split_focus, axis, solo) {
+                self.solo = None;
+            }
+            return;
+        }
         let id = self.next_pane;
         if self.split.split(self.pane().id, axis, id) {
             self.next_pane += 1;
@@ -772,6 +815,11 @@ impl Model {
     /// Close the focused pane, unless it is the last; the one before it (else after) is
     /// focused.
     pub fn close_pane(&mut self) {
+        // A view shown alone closes back to the split.
+        if self.solo.is_some() {
+            self.leave_solo();
+            return;
+        }
         if self.panes.len() < 2 {
             return;
         }
@@ -903,13 +951,35 @@ impl Model {
     /// Show `view` in the focused pane; shown in another pane already, that pane is focused
     /// instead, as each view shows in one pane at most.
     pub fn set_view(&mut self, view: View) {
-        if let Some(i) = self
+        // In a pane of the split: that pane, the split back if a view was shown alone over it.
+        let ids = self.split.ids();
+        if let Some(id) = self
             .panes
             .iter()
-            .position(|p| !p.placeholder && p.view == view)
-            && i != self.at
+            .find(|p| !p.placeholder && p.view == view && ids.contains(&p.id))
+            .map(|p| p.id)
         {
-            self.at = i;
+            self.leave_solo();
+            self.at = self.pane_index(id).unwrap_or(0);
+            return;
+        }
+        // In none of a split's panes, and asked for from one that shows a view: it shows alone
+        // over the split, which is kept to come back to. (A placeholder takes it in.)
+        if ids.len() > 1 && self.solo.is_none() && !self.pane().placeholder {
+            self.split_focus = self.pane().id;
+            let id = self.next_pane;
+            self.next_pane += 1;
+            self.panes.push(Pane::new(id, view));
+            self.solo = Some(id);
+            self.at = self.panes.len() - 1;
+            self.detail = None;
+            if view == View::Activity {
+                self.enter_activity();
+            }
+            if view == View::Graph {
+                self.enter_graph();
+            }
+            self.reload();
             return;
         }
         if view != self.pane().view || self.pane().placeholder {

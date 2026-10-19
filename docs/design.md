@@ -10,15 +10,29 @@ with their chats, terminals and the rest. When that comes, it changes here first
 
 - **Left: where to go.** The sidebar: projects, the views, the tools. Navigation only, in
   sidebar rows (32px, rounded, 15px text). Nothing else uses the sidebar's look.
-- **Middle: the thing itself, edge to edge.** One surface fills the content box: a list, the
+- **Middle: the thing itself, edge to edge.** One surface fills each content box: a list, the
   board, the graph, the terminal, a doc being read. No second sidebar, no columns nested inside
-  it, no floating fields of its own.
-- **Right: what is open.** The panel shows the one thing chosen in the middle: a task, a doc. Its
-  properties, its links, its history. Metadata lives here, not in the middle.
+  it, no floating fields of its own. The middle can be split into panes (below).
+- **Right: what is open.** The panel shows the one thing chosen in the focused pane: a task, a
+  doc. Its properties, its links, its history. Metadata lives here, not in the middle.
 
 The flow is always the same: a list in the middle → open one → its details in the panel. A
 thing that wants the whole middle (the terminal, a doc being read, a doc being edited) takes the
 list's place, behind a header bar, and Esc gives the list back.
+
+## Panes
+
+- The middle splits into panes, side by side or stacked, each a view in its own content box,
+  a gutter between them that drags. Each view shows in one pane at most.
+- One pane is focused: the keys, the sidebar and the dock are its, and its box's border is the
+  stronger one. A press in another pane focuses it.
+- A split starts with a placeholder: the views to put in it, and a way to close it.
+- The sidebar picks a view the split has: its pane is focused. A view the split does not have
+  shows alone over it, and the split comes back when one of its views is picked (or with the
+  next pane's key, or closing the view alone). Splitting a view shown alone takes it into the
+  split.
+- The terminal is one view holding several terminals, as VS Code does: a list beside it once
+  there are two, a click shows one, its × kills it.
 
 ## Parts
 

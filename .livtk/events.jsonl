@@ -790,3 +790,4 @@
 {"v":2,"id":"01a153e4-80dc-71d9-be63-2234f66c6f63","at":"2026-10-19T11:20:46.556Z","by":"claude","op":"node.note","node":"01a15389-c456-74c9-8e42-0288512fd093","data":{"text":"The split's group sits under the inbox and the feed, above Views (the developer's call, 2026-10-19)."}}
 {"v":1,"id":"01a153e5-30fd-7166-b21d-b7b14fe70a01","at":"2026-10-19T11:21:31.645Z","by":"human","op":"node.set","node":"01a14956-4e5c-7716-abea-1fae879653bc","data":{"state":"planned"}}
 {"v":2,"id":"01a153e6-fe19-7624-ba89-f18efd49e105","at":"2026-10-19T11:23:29.689Z","by":"claude","op":"node.note","node":"01a15389-c456-74c9-8e42-0288512fd093","data":{"text":"The split's group back at the sidebar's top (the developer's call, 2026-10-19)."}}
+{"v":1,"id":"01a153e7-5a13-77e8-b067-9611495d7530","at":"2026-10-19T11:23:53.235Z","by":"human","op":"node.set","node":"01a14956-4e5c-7716-abea-1fae879653bc","data":{"state":"backlog"}}

@@ -826,7 +826,7 @@ impl LivtkApp {
                     }
                     app.run_catch_ups(cx);
                     app.run_hooks(cx);
-                    let busy = !app.model.flashed.is_empty() || !app.model.leaving.is_empty();
+                    let busy = !app.model.flashed.is_empty() || !app.model.leaving().is_empty();
                     let now = Instant::now();
                     app.model.settle(now, FLASH.max(FADE) + POLL);
                     if app.model.age_notices(now, NOTICE_FADE) {
@@ -1079,7 +1079,7 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) {
         match event {
-            InputEvent::Change if self.model.view == View::Docs => {
+            InputEvent::Change if self.model.view() == View::Docs => {
                 let text = state.read(cx).value().to_string();
                 if text != self.model.docs.query {
                     self.model.search_docs(&text);
@@ -1246,7 +1246,7 @@ impl LivtkApp {
 
     /// Show the current view's filter text in the filter field.
     fn sync_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let want = if self.model.view == View::Docs {
+        let want = if self.model.view() == View::Docs {
             self.model.docs.query.clone()
         } else {
             self.model.display().filter
@@ -1262,7 +1262,7 @@ impl LivtkApp {
     fn focus_main(&self, window: &mut Window, cx: &mut App) {
         match self
             .current_terminal()
-            .filter(|_| self.model.view == View::Terminal)
+            .filter(|_| self.model.view() == View::Terminal)
         {
             Some(pane) => pane.read(cx).focus_handle().clone().focus(window, cx),
             None => self.nav.focus(window, cx),
@@ -1310,7 +1310,7 @@ impl LivtkApp {
 
     /// In the Terminal view, the open project's terminal, made the first time.
     fn terminal_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<terminal::TerminalPane>> {
-        if self.model.view != View::Terminal {
+        if self.model.view() != View::Terminal {
             return None;
         }
         let dir = self.model.project()?.dir.clone();
@@ -1324,7 +1324,7 @@ impl LivtkApp {
     /// Arriving at a terminal (by any way: a key, the sidebar, the palette, another project)
     /// gives it the keys; leaving one gives them back to the list.
     fn focus_on_arrival(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let place = (self.model.view, self.model.current);
+        let place = (self.model.view(), self.model.current);
         if self.last_place == Some(place) {
             return;
         }
@@ -1348,7 +1348,7 @@ impl LivtkApp {
     }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
-        if self.model.view == View::Activity {
+        if self.model.view() == View::Activity {
             let at = self
                 .model
                 .feed()
@@ -1357,7 +1357,7 @@ impl LivtkApp {
             if let Some(i) = at {
                 self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
             }
-        } else if self.model.view == View::Docs {
+        } else if self.model.view() == View::Docs {
             self.reader.list.scroll_to_item(self.model.docs.index);
         } else if self.model.on_board() {
             self.reveal_card();
@@ -1399,7 +1399,7 @@ impl LivtkApp {
     /// are next to each other in a list (no band between them, not on the board or the graph).
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
         // Reading a doc, J and K scroll it a few lines.
-        if self.model.view == View::Docs && self.model.docs.reading {
+        if self.model.view() == View::Docs && self.model.docs.reading {
             let scroll = &self.reader.scroll;
             let o = scroll.offset();
             let y = (o.y - px(by as f32 * READ_STEP))
@@ -1441,14 +1441,14 @@ impl LivtkApp {
 
     /// The selection as a list shows it: the name its line goes by, and the line's place.
     fn spot(&self) -> Option<(String, usize)> {
-        match self.model.view {
+        match self.model.view() {
             View::Graph | View::Terminal => None,
             View::Docs if self.model.docs.reading => None,
             View::Docs => {
                 let i = self.model.docs.index;
                 Some((self.model.docs.rows().get(i)?.path().to_owned(), i))
             }
-            View::Tasks if self.model.layout == Layout::Board => None,
+            View::Tasks if self.model.layout() == Layout::Board => None,
             View::Activity => {
                 let i = self.model.activity_index;
                 let at = self
@@ -1460,7 +1460,7 @@ impl LivtkApp {
             }
             View::Inbox => {
                 let i = self.model.selected_index()?;
-                Some((self.model.rows.get(i)?.key.clone(), i))
+                Some((self.model.rows().get(i)?.key.clone(), i))
             }
             _ => Some((self.model.selected()?.key.clone(), self.display_index()?)),
         }
@@ -1471,7 +1471,7 @@ impl LivtkApp {
     /// drawn by the upper of its two lines, under the lower one's text: lines paint top to
     /// bottom, so from the lower one it would cover the text above.
     fn highlight(&self, name: &str, selected: bool) -> (bool, Option<(f32, f32, usize)>) {
-        let current = match self.model.view {
+        let current = match self.model.view() {
             View::Activity => Some(format!("event-{}", self.model.activity_index)),
             View::Docs => self
                 .model
@@ -1956,8 +1956,8 @@ impl LivtkApp {
 
     /// The list as rows of the virtualised list: a band before each group, then its rows.
     fn items(&self) -> Vec<Item> {
-        let mut items = Vec::with_capacity(self.model.rows.len() + self.model.groups.len());
-        for (gi, g) in self.model.groups.iter().enumerate() {
+        let mut items = Vec::with_capacity(self.model.rows().len() + self.model.groups().len());
+        for (gi, g) in self.model.groups().iter().enumerate() {
             if g.key != GroupKey::All {
                 items.push(Item::Band(gi));
             }
@@ -1968,7 +1968,7 @@ impl LivtkApp {
 
     fn display_index(&self) -> Option<usize> {
         if let Some(band) = self.model.band() {
-            let gi = self.model.groups.iter().position(|g| g.key == band)?;
+            let gi = self.model.groups().iter().position(|g| g.key == band)?;
             return self
                 .items()
                 .iter()
@@ -2020,7 +2020,7 @@ impl LivtkApp {
                     SharedString::from(format!("view-{}", view.title())),
                     view_icon(view),
                     view.title(),
-                    view == self.model.view,
+                    view == self.model.view(),
                     count,
                 )
                 .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
@@ -2298,8 +2298,9 @@ impl LivtkApp {
     /// ⌥⌘B and the top bar's button: the detail panel closed, or opened on what is selected,
     /// as Enter opens it.
     fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+        let reading_doc = self.model.view() == View::Docs && self.model.detail.is_none();
         let docs = &mut self.model.docs;
-        if self.model.view == View::Docs && docs.reading && self.model.detail.is_none() {
+        if reading_doc && docs.reading {
             // Reading, the panel is the doc's.
             docs.hide_panel = !docs.hide_panel;
         } else if self.model.detail.is_some() {
@@ -2342,7 +2343,7 @@ impl LivtkApp {
                 rail_button(
                     SharedString::from(format!("rail-{}", view.title())),
                     view_icon(view),
-                    view == self.model.view,
+                    view == self.model.view(),
                     new,
                     view.title().into(),
                 )
@@ -2752,7 +2753,7 @@ impl LivtkApp {
                     ),
             );
         // The docs are searched by their words alone.
-        if self.model.view == View::Docs {
+        if self.model.view() == View::Docs {
             return panel;
         }
         let mut panel = panel.child(menu_divider()).child(menu_heading("Priority"));
@@ -2771,7 +2772,7 @@ impl LivtkApp {
         }
         // The states of the view's kind, in its own order, as its groups are; the inbox mixes
         // kinds and has none. Dismissed states only while dismissed work is shown.
-        if let Some(kind) = self.model.view.kind() {
+        if let Some(kind) = self.model.view().kind() {
             let states: Vec<State> = kind
                 .states()
                 .iter()
@@ -2849,7 +2850,7 @@ impl LivtkApp {
     /// Whether the panel shows the doc being read: nothing else open in it, and not put away.
     fn doc_panel_open(&self) -> bool {
         let docs = &self.model.docs;
-        self.model.view == View::Docs
+        self.model.view() == View::Docs
             && docs.reading
             && docs.open.is_some()
             && !docs.hide_panel
@@ -2933,7 +2934,7 @@ impl LivtkApp {
     /// zoom; none in a view with nothing for it. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
     fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
-        let view = self.model.view;
+        let view = self.model.view();
         let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
             view,
@@ -3091,7 +3092,7 @@ impl LivtkApp {
 
     fn dock_filter(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let d = self.model.display();
-        let active = if self.model.view == View::Docs {
+        let active = if self.model.view() == View::Docs {
             usize::from(!self.model.docs.query.trim().is_empty())
         } else {
             usize::from(!d.filter.trim().is_empty())
@@ -3214,7 +3215,7 @@ impl LivtkApp {
     fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
         let current = self.model.display().grouping;
         // A board needs columns: as in Linear, it is never ungrouped.
-        let board = self.model.view == View::Tasks && self.model.layout == Layout::Board;
+        let board = self.model.view() == View::Tasks && self.model.layout() == Layout::Board;
         let mut panel = menu_panel(180.).debug_selector(|| "grouping-menu".into());
         for &(id, label, g) in GROUPINGS {
             if board && g == Grouping::None {
@@ -3239,12 +3240,12 @@ impl LivtkApp {
     fn view_menu(&self, cx: &mut Context<Self>) -> Div {
         let d = self.model.display();
         let mut panel = menu_panel(232.).debug_selector(|| "view-menu".into());
-        if self.model.view == View::Tasks {
+        if self.model.view() == View::Tasks {
             for (id, glyph, label, layout) in [
                 ("view-layout-list", Icon::List, "List", Layout::List),
                 ("view-layout-board", Icon::Board, "Board", Layout::Board),
             ] {
-                let on = self.model.layout == layout;
+                let on = self.model.layout() == layout;
                 panel = panel.child(
                     option_row(id.into())
                         .debug_selector(move || id.into())
@@ -3284,7 +3285,7 @@ impl LivtkApp {
                 Model::toggle_dismissed,
                 cx,
             ))
-            .when(self.model.view == View::Tasks, |menu| {
+            .when(self.model.view() == View::Tasks, |menu| {
                 menu.child(view_option(
                     "view-nest",
                     "Nest sub-tasks",
@@ -3827,7 +3828,7 @@ impl LivtkApp {
             ))
             .into_any_element();
         }
-        match (self.model.view, self.model.layout) {
+        match (self.model.view(), self.model.layout()) {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
@@ -3854,7 +3855,7 @@ impl LivtkApp {
     // ---- rendering: the graph -------------------------------------------------------------------
 
     fn zoom_graph(&mut self, factor: f32, cx: &mut Context<Self>) {
-        if self.model.view == View::Graph {
+        if self.model.view() == View::Graph {
             self.model.graph_zoom(factor, None);
             cx.notify();
         }
@@ -4320,7 +4321,7 @@ impl LivtkApp {
 
     /// The inbox: a short list, so rows can fade and collapse when the human acts on them.
     fn inbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.model.rows.is_empty() && self.model.leaving.is_empty() {
+        if self.model.rows().is_empty() && self.model.leaving().is_empty() {
             return div()
                 .size_full()
                 .child(empty(
@@ -4330,9 +4331,13 @@ impl LivtkApp {
                 ))
                 .into_any_element();
         }
-        let mut shown: Vec<(Summary, Option<Instant>)> =
-            self.model.rows.iter().map(|r| (r.clone(), None)).collect();
-        for (r, at, when) in &self.model.leaving {
+        let mut shown: Vec<(Summary, Option<Instant>)> = self
+            .model
+            .rows()
+            .iter()
+            .map(|r| (r.clone(), None))
+            .collect();
+        for (r, at, when) in self.model.leaving() {
             let i = (*at).min(shown.len());
             shown.insert(i, (r.clone(), Some(*when)));
         }
@@ -4373,7 +4378,7 @@ impl LivtkApp {
                 }),
             ));
         }
-        (self.model.view == View::Tasks).then(|| {
+        (self.model.view() == View::Tasks).then(|| {
             empty_action(
                 "empty-new-task",
                 "New task",
@@ -4384,13 +4389,13 @@ impl LivtkApp {
 
     /// Tasks, lessons, decisions or findings: a virtualised list in solid group bands.
     fn list(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.model.rows.is_empty() && self.model.groups.is_empty() {
-            let what = self.model.view.title().to_lowercase();
+        if self.model.rows().is_empty() && self.model.groups().is_empty() {
+            let what = self.model.view().title().to_lowercase();
             return div()
                 .size_full()
                 .child(
                     empty(
-                        view_icon(self.model.view),
+                        view_icon(self.model.view()),
                         &format!("No {what} here"),
                         "Clear the filter, press S D to show dismissed work, or N for a new task.",
                     )
@@ -4411,7 +4416,7 @@ impl LivtkApp {
                     match items.get(i) {
                         Some(Item::Band(gi)) => out.push(this.band(*gi, cx)),
                         Some(Item::Row(ri)) => {
-                            let r = this.model.rows[*ri].clone();
+                            let r = this.model.rows()[*ri].clone();
                             let sel = Some(r.id) == selected;
                             out.push(this.row(&r, sel, None, false, cx));
                         }
@@ -4429,7 +4434,7 @@ impl LivtkApp {
     /// A group's solid header band: its mark, name and count. Click to collapse; drop a row on
     /// it to move the row into the group.
     fn band(&self, gi: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(g) = self.model.groups.get(gi).cloned() else {
+        let Some(g) = self.model.groups().get(gi).cloned() else {
             return div().into_any_element();
         };
         let (mark, label) = group_label(g.key, g.kind.unwrap_or(Kind::Task));
@@ -4494,7 +4499,7 @@ impl LivtkApp {
 
     /// A parent's sub-tasks: how many are done, of how many.
     fn sub_task_count(&self, id: Uuid) -> Option<Div> {
-        let &(done, total) = self.model.progress.get(&id)?;
+        let &(done, total) = self.model.progress().get(&id)?;
         Some(
             div()
                 .flex_none()
@@ -4554,7 +4559,7 @@ impl LivtkApp {
                     .child(r.key.clone()),
             )
             .child(self.state_button(Menu::RowState(id), id, r.kind, r.state, false, cx))
-            .children(self.model.depth.get(&id).map(|&d| {
+            .children(self.model.depth().get(&id).map(|&d| {
                 // Under its parent: indented by its depth, led by the turn.
                 div().flex_none().pl(px((d - 1) as f32 * 16.)).child(icon(
                     Icon::SubTask,
@@ -5357,7 +5362,7 @@ impl LivtkApp {
             Run::Priority(p) => return slot.child(priority_mark(*p)),
             Run::Go(view) => view_icon(*view),
             Run::Project(_) => Icon::Project,
-            Run::ToggleLayout if self.model.layout == Layout::List => Icon::Board,
+            Run::ToggleLayout if self.model.layout() == Layout::List => Icon::Board,
             Run::ToggleLayout => Icon::List,
             Run::Group(_) => Icon::Grouping,
             Run::Order(_) => Icon::Ordering,
@@ -5545,8 +5550,8 @@ impl LivtkApp {
         let state = menus::MenuState {
             projects: m.projects.iter().map(|p| p.name.clone()).collect(),
             current: m.current,
-            view: View::ALL.iter().position(|v| *v == m.view).unwrap_or(0),
-            board: m.layout == Layout::Board,
+            view: View::ALL.iter().position(|v| *v == m.view()).unwrap_or(0),
+            board: m.layout() == Layout::Board,
             show_empty: d.show_empty,
             show_dismissed: d.show_dismissed,
             inbox: m.projects.iter().map(|p| p.inbox).sum(),
@@ -6176,8 +6181,9 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &Open, window, cx| {
                 // A doc a search found opens with the find bar on what was searched.
                 let docs = &this.model.docs;
-                let searched =
-                    this.model.view == View::Docs && !docs.reading && !docs.query.trim().is_empty();
+                let searched = this.model.view() == View::Docs
+                    && !docs.reading
+                    && !docs.query.trim().is_empty();
                 if searched
                     && let Some(DocRow::Doc { path, .. }) = docs.rows().get(docs.index).cloned()
                 {
@@ -6202,13 +6208,13 @@ impl Render for LivtkApp {
                     this.close_top(window, cx);
                 } else if this.reader.finding {
                     this.close_find(window, cx);
-                } else if this.model.view == View::Docs
+                } else if this.model.view() == View::Docs
                     && this.model.docs.reading
                     && this.model.detail.is_none()
                 {
                     // Done reading: the list again.
                     this.leave_reading(window, cx);
-                } else if this.model.view == View::Activity
+                } else if this.model.view() == View::Activity
                     && this.model.detail.is_none()
                     && this.model.grid.pick.span.is_some()
                 {
@@ -6245,7 +6251,7 @@ impl Render for LivtkApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| {
-                if this.model.view == View::Tasks {
+                if this.model.view() == View::Tasks {
                     this.model.toggle_layout();
                     cx.notify();
                 }
@@ -6261,7 +6267,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_graph(ZOOM_STEP, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_graph(1. / ZOOM_STEP, cx)))
             .on_action(cx.listener(|this, _: &ZoomFit, _, cx| {
-                if this.model.view == View::Graph {
+                if this.model.view() == View::Graph {
                     this.model.graph_fit();
                     cx.notify();
                 }
@@ -6286,9 +6292,9 @@ impl Render for LivtkApp {
         // The terminal takes the list's place, outside the list's keys, so every plain key
         // reaches the shell.
         let find_bar =
-            (self.model.view == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
+            (self.model.view() == View::Docs && self.reader.finding).then(|| self.find_bar(cx));
         // Editing a doc: its editor in the list's place too, so typing is text.
-        let editing = (self.model.view == View::Docs)
+        let editing = (self.model.view() == View::Docs)
             .then(|| self.doc_editor(cx))
             .flatten();
         let main = match (self.terminal_view(cx), editing) {
@@ -6426,13 +6432,13 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &FindInDoc, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &SaveDoc, _, cx| this.doc_save(false, cx)))
             .on_action(cx.listener(|this, _: &DocBack, _, cx| {
-                if this.model.view == View::Docs {
+                if this.model.view() == View::Docs {
                     this.model.doc_back();
                     cx.notify();
                 }
             }))
             .on_action(cx.listener(|this, _: &DocForward, _, cx| {
-                if this.model.view == View::Docs {
+                if this.model.view() == View::Docs {
                     this.model.doc_forward();
                     cx.notify();
                 }

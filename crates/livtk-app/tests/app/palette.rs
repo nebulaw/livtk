@@ -197,7 +197,7 @@ fn choosing_a_node_goes_to_it_wherever_it_hides() {
     m.open_palette();
     m.palette_query("cargo");
     m.palette_run();
-    assert_eq!(m.view, View::Lessons);
+    assert_eq!(m.view(), View::Lessons);
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LES-1"));
     assert_eq!(
         m.detail.as_ref().map(|d| d.node.key.as_str()),
@@ -226,7 +226,7 @@ fn a_node_waiting_in_the_inbox_opens_there() {
     m.open_palette();
     m.palette_query("second");
     m.palette_run();
-    assert_eq!(m.view, View::Inbox, "it is already in view");
+    assert_eq!(m.view(), View::Inbox, "it is already in view");
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-2"));
 }
 

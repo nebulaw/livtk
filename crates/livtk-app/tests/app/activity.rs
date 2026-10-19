@@ -127,7 +127,7 @@ fn the_feed_shows_every_event_newest_first_under_its_day() {
             FeedRow::Event(2)
         ]
     );
-    assert!(m.rows.is_empty(), "the feed lists events, not rows");
+    assert!(m.rows().is_empty(), "the feed lists events, not rows");
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn enter_opens_the_node_in_place_and_its_actions_act_on_it() {
     let mut m = app(dir.path());
     m.set_view(View::Activity);
     m.open_detail();
-    assert_eq!(m.view, View::Activity, "the feed stays");
+    assert_eq!(m.view(), View::Activity, "the feed stays");
     assert_eq!(m.detail.as_ref().unwrap().node.key, "LIV-1");
 
     m.decide();
@@ -251,7 +251,7 @@ fn the_palette_goes_to_the_feed_and_acts_on_the_node_open_there() {
     m.open_palette();
     m.palette_query("go to activ");
     m.palette_run();
-    assert_eq!(m.view, View::Activity);
+    assert_eq!(m.view(), View::Activity);
     m.open_detail();
     m.open_palette();
     m.palette_query("acknowledge");

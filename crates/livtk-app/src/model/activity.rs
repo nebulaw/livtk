@@ -25,7 +25,7 @@ impl Model {
         self.activity.clear();
         self.activity_index = 0;
         self.activity_more = false;
-        if self.view == View::Activity
+        if self.pane().view == View::Activity
             && let Some(p) = self.projects.get(self.current)
         {
             self.activity_seen_before = p.ws.activity_seen().unwrap_or(None);
@@ -124,7 +124,7 @@ impl Model {
     fn reload_feed(&mut self) {
         self.activity.clear();
         self.activity_index = 0;
-        if self.view == View::Activity {
+        if self.pane().view == View::Activity {
             self.load_activity();
         }
     }

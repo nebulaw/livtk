@@ -574,7 +574,7 @@ impl Model {
         };
         if let Some(was) = self.docs.open.clone()
             && was != path
-            && self.view == View::Docs
+            && self.pane().view == View::Docs
         {
             self.docs.back.push(was);
             self.docs.forward.clear();
@@ -656,7 +656,7 @@ impl Model {
             at = parent;
         }
         self.keep_shut();
-        if self.view == View::Docs {
+        if self.pane().view == View::Docs {
             self.load_docs();
         } else {
             self.set_view(View::Docs);
@@ -669,7 +669,7 @@ impl Model {
     /// In the Docs view, read the docs again if a file under them changed, came or went: by
     /// their sizes and times alone, so looking costs no reading. Whether it did.
     pub fn refresh_docs(&mut self) -> bool {
-        if self.view != View::Docs {
+        if self.pane().view != View::Docs {
             return false;
         }
         let Some(p) = self.projects.get(self.current) else {
@@ -890,7 +890,7 @@ impl Model {
             }
         };
         self.run(cmd, None);
-        if self.view == View::Docs {
+        if self.pane().view == View::Docs {
             self.load_docs();
         }
     }
@@ -1003,7 +1003,7 @@ impl Model {
             self.warn(format!("{key} is not a node of this project"));
             return;
         };
-        self.selected = Some(id);
+        self.pane_mut().selected = Some(id);
         self.open_detail();
     }
 }

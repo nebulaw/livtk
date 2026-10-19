@@ -66,9 +66,9 @@ fn how_each_view_was_shown_comes_back_after_a_restart() {
     let mut again = open(&[a.path(), b.path()]);
     again.restore(&back);
     assert_eq!(again.current, 1, "the same project");
-    assert_eq!(again.view, View::Lessons, "the same view");
+    assert_eq!(again.view(), View::Lessons, "the same view");
     assert_eq!(again.display().ordering, Ordering::Updated);
-    assert_eq!(again.layout, Layout::Board);
+    assert_eq!(again.layout(), Layout::Board);
     assert!(
         !again.display().show_dismissed && !again.display().show_empty,
         "each view has its own: the lessons were never changed"
@@ -117,7 +117,7 @@ fn what_no_longer_applies_is_passed_over() {
     let mut m = open(&[a.path()]);
     m.restore(&saved);
     assert_eq!(m.current, 0, "the project that is there");
-    assert_eq!(m.view, View::Inbox, "the view stays");
+    assert_eq!(m.view(), View::Inbox, "the view stays");
     m.set_view(View::Tasks);
     let d = m.display();
     assert_eq!(d.priorities, [2], "a priority that cannot be is dropped");

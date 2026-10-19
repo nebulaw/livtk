@@ -15,6 +15,7 @@ mod links;
 mod markdown;
 mod model;
 mod palette;
+mod panes;
 mod saved;
 mod style;
 mod terminal;

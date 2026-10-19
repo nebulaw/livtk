@@ -50,7 +50,7 @@ fn planned(ws: &mut Workspace, title: &str) -> String {
 }
 
 fn keys(m: &Model) -> Vec<String> {
-    m.rows.iter().map(|r| r.key.clone()).collect()
+    m.rows().iter().map(|r| r.key.clone()).collect()
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn the_inbox_shows_what_waits_and_one_key_decides_it() {
     drop(ws);
 
     let mut m = Model::open(&[dir.path().to_path_buf()]);
-    assert_eq!(m.view, View::Inbox);
+    assert_eq!(m.view(), View::Inbox);
     assert_eq!(keys(&m), [a.clone(), b.clone(), l.clone()]);
     assert_eq!(m.projects[0].inbox, 3);
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some(a.as_str()));
@@ -75,7 +75,7 @@ fn the_inbox_shows_what_waits_and_one_key_decides_it() {
         [b.clone(), l.clone()],
         "acknowledged work leaves the inbox"
     );
-    assert_eq!(m.leaving.len(), 1, "and fades out");
+    assert_eq!(m.leaving().len(), 1, "and fades out");
     assert_eq!(
         m.selected().map(|r| r.key.as_str()),
         Some(b.as_str()),
@@ -202,9 +202,12 @@ fn changes_from_elsewhere_arrive_on_the_next_tick_and_flash() {
     let b = planned(&mut claude, "new from Claude");
     assert!(m.tick());
     assert_eq!(keys(&m), [a.clone(), b.clone()]);
-    assert!(m.flashed.contains_key(&m.rows[1].id), "the new row flashes");
     assert!(
-        !m.flashed.contains_key(&m.rows[0].id),
+        m.flashed.contains_key(&m.rows()[1].id),
+        "the new row flashes"
+    );
+    assert!(
+        !m.flashed.contains_key(&m.rows()[0].id),
         "the old one does not"
     );
     assert_eq!(
@@ -225,7 +228,7 @@ fn changes_from_elsewhere_arrive_on_the_next_tick_and_flash() {
         .unwrap();
     assert!(m.tick());
     assert!(
-        m.flashed.contains_key(&m.rows[0].id),
+        m.flashed.contains_key(&m.rows()[0].id),
         "an edited row flashes too"
     );
     m.settle(
@@ -346,7 +349,7 @@ fn a_new_task_from_the_app_lands_in_tasks_selected() {
     project(dir.path());
     let mut m = Model::open(&[dir.path().to_path_buf()]);
     assert!(m.create_task("Draw the first window", "", Some(2)));
-    assert_eq!(m.view, View::Tasks);
+    assert_eq!(m.view(), View::Tasks);
     let sel = m.selected().unwrap();
     assert_eq!(
         (sel.title.as_str(), sel.priority),
@@ -393,7 +396,7 @@ fn a_refusal_becomes_a_notice_not_a_crash() {
     let mut m = Model::open(&[dir.path().to_path_buf()]);
     m.decide();
     m.set_view(View::Tasks);
-    let row = m.rows.iter().find(|r| r.key == "LIV-2").unwrap().id;
+    let row = m.rows().iter().find(|r| r.key == "LIV-2").unwrap().id;
     m.select(row);
     let start = choices(Kind::Task, State::Acked)
         .into_iter()
@@ -760,7 +763,7 @@ fn what_claude_puts_in_the_inbox_arrives_once_and_the_humans_own_does_not() {
     m.tick();
     let a = m.take_arrivals().pop().unwrap();
     m.open_arrival(&a);
-    assert_eq!(m.view, View::Inbox);
+    assert_eq!(m.view(), View::Inbox);
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some(k2.as_str()));
     assert!(m.detail.is_some());
 }
@@ -925,12 +928,12 @@ fn views_layouts_projects_and_a_bad_folder() {
     m.set_view(View::Lessons);
     assert_eq!(keys(&m), ["LES-1"]);
     m.select_project(1);
-    assert_eq!(m.view, View::Lessons);
-    assert!(m.rows.is_empty());
+    assert_eq!(m.view(), View::Lessons);
+    assert!(m.rows().is_empty());
     m.set_view(View::Tasks);
     assert_eq!(keys(&m), ["OTH-1"]);
     m.toggle_layout();
-    assert_eq!(m.layout, Layout::Board);
+    assert_eq!(m.layout(), Layout::Board);
     // Every column, empty ones included: their order is the point here.
     m.toggle_empty();
     let cols: Vec<(GroupKey, usize)> = m.columns().into_iter().map(|(s, r)| (s, r.len())).collect();
@@ -989,20 +992,20 @@ fn mixed() -> (tempfile::TempDir, Model) {
 
 /// The list's bands: each group's key and how many rows it holds.
 fn bands(m: &Model) -> Vec<(GroupKey, usize)> {
-    m.groups.iter().map(|g| (g.key, g.count)).collect()
+    m.groups().iter().map(|g| (g.key, g.count)).collect()
 }
 
 /// Every group's rows are where it says, and of its group.
 fn groups_hold_their_rows(m: &Model) {
-    for g in &m.groups {
-        let rows = &m.rows[g.start..g.start + g.shown];
+    for g in m.groups() {
+        let rows = &m.rows()[g.start..g.start + g.shown];
         if let GroupKey::State(s) = g.key {
             assert!(rows.iter().all(|r| r.state == s), "{g:?}");
         }
     }
     assert_eq!(
-        m.groups.iter().map(|g| g.shown).sum::<usize>(),
-        m.rows.len()
+        m.groups().iter().map(|g| g.shown).sum::<usize>(),
+        m.rows().len()
     );
 }
 
@@ -1042,7 +1045,7 @@ fn empty_groups_list_every_state_in_order_and_dismissed_ones_only_when_shown() {
         ],
         "every state of the kind in its own order, empty ones with 0; dismissed left out"
     );
-    assert_eq!(m.rows.len(), 4, "the same rows");
+    assert_eq!(m.rows().len(), 4, "the same rows");
     groups_hold_their_rows(&m);
 
     m.toggle_dismissed();
@@ -1059,7 +1062,7 @@ fn empty_groups_list_every_state_in_order_and_dismissed_ones_only_when_shown() {
         !d.show_empty && !d.show_dismissed,
         "each view has its own options"
     );
-    assert!(m.groups.is_empty(), "so no lesson's group shows");
+    assert!(m.groups().is_empty(), "so no lesson's group shows");
     m.toggle_empty();
     assert_eq!(
         bands(&m),
@@ -1084,7 +1087,7 @@ fn empty_groups_by_priority_stay_through_a_filter_and_collapse() {
     );
     m.toggle_collapsed(P(1));
     m.set_filter("");
-    let urgent = &m.groups[0];
+    let urgent = &m.groups()[0];
     assert_eq!(
         (urgent.key, urgent.count, urgent.shown, urgent.collapsed),
         (P(1), 1, 0, true),
@@ -1173,15 +1176,15 @@ fn the_filter_narrows_by_state_with_priority_and_text_and_shapes_groups_and_colu
         [State::Backlog, State::Planned],
         "in the kind's order"
     );
-    assert_eq!(m.rows.len(), 4);
+    assert_eq!(m.rows().len(), 4);
     m.toggle_priority(1);
     assert_eq!(keys(&m), ["LIV-1"], "with priorities too");
     m.set_filter("nothing");
-    assert!(m.rows.is_empty(), "and with text");
+    assert!(m.rows().is_empty(), "and with text");
     m.clear_filters();
     let d = m.display();
     assert!(d.filter.is_empty() && d.priorities.is_empty() && d.states.is_empty());
-    assert_eq!(m.rows.len(), 4, "clear brings everything back");
+    assert_eq!(m.rows().len(), 4, "clear brings everything back");
 
     m.toggle_state(State::Planned);
     m.toggle_empty();
@@ -1213,13 +1216,13 @@ fn hiding_dismissed_work_unchecks_a_dismissed_state() {
         [State::Planned],
         "a hidden state would filter for rows that are not there"
     );
-    assert_eq!(m.rows.len(), 2);
+    assert_eq!(m.rows().len(), 2);
 }
 
 #[test]
 fn groups_follow_state_order_and_rows_follow_priority() {
     let (_dir, m) = mixed();
-    let groups: Vec<(GroupKey, usize)> = m.groups.iter().map(|g| (g.key, g.count)).collect();
+    let groups: Vec<(GroupKey, usize)> = m.groups().iter().map(|g| (g.key, g.count)).collect();
     assert_eq!(
         groups,
         [
@@ -1257,7 +1260,7 @@ fn a_filter_narrows_by_title_or_key_and_priority_chips_combine() {
 fn grouping_and_ordering_change_the_arrangement() {
     let (_dir, mut m) = mixed();
     m.set_grouping(Grouping::Priority);
-    let groups: Vec<GroupKey> = m.groups.iter().map(|g| g.key).collect();
+    let groups: Vec<GroupKey> = m.groups().iter().map(|g| g.key).collect();
     assert_eq!(
         groups,
         [
@@ -1269,7 +1272,7 @@ fn grouping_and_ordering_change_the_arrangement() {
     );
     m.set_grouping(Grouping::None);
     m.set_ordering(Ordering::Created);
-    assert_eq!(m.groups.len(), 1);
+    assert_eq!(m.groups().len(), 1);
     assert_eq!(
         keys(&m),
         ["LIV-4", "LIV-3", "LIV-2", "LIV-1"],
@@ -1285,7 +1288,7 @@ fn a_collapsed_group_keeps_its_count_and_drops_out_of_navigation() {
     m.toggle_collapsed(GroupKey::State(State::Planned));
     assert_eq!(keys(&m), ["LIV-1", "LIV-4"]);
     let planned = m
-        .groups
+        .groups()
         .iter()
         .find(|g| g.key == GroupKey::State(State::Planned))
         .unwrap();
@@ -1304,15 +1307,15 @@ fn a_collapsed_group_keeps_its_count_and_drops_out_of_navigation() {
         Some(GroupKey::State(State::Planned)),
         "past the rows, the folded band, never its rows"
     );
-    assert_eq!(m.filtered.len(), 4, "the board still shows everything");
+    assert_eq!(m.filtered().len(), 4, "the board still shows everything");
     m.toggle_collapsed(GroupKey::State(State::Planned));
-    assert_eq!(m.rows.len(), 4);
+    assert_eq!(m.rows().len(), 4);
 }
 
 #[test]
 fn dropping_moves_state_or_priority_and_refuses_with_the_reason() {
     let (dir, mut m) = mixed();
-    let id = |m: &Model, k: &str| m.filtered.iter().find(|r| r.key == k).unwrap().id;
+    let id = |m: &Model, k: &str| m.filtered().iter().find(|r| r.key == k).unwrap().id;
     let liv1 = id(&m, "LIV-1");
     assert!(
         !m.can_drop(liv1, GroupKey::State(State::Doing)),
@@ -1384,7 +1387,7 @@ fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
         std::slice::from_ref(&k),
         "done shows; canceled does not"
     );
-    assert_eq!(m.groups[0].key, GroupKey::State(State::Done));
+    assert_eq!(m.groups()[0].key, GroupKey::State(State::Done));
     let done_col = m
         .columns()
         .into_iter()
@@ -1392,7 +1395,7 @@ fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
         .unwrap();
     assert_eq!(done_col.1.len(), 1, "the board's Done column holds it");
 
-    let id = m.rows[0].id;
+    let id = m.rows()[0].id;
     assert!(m.can_drop(id, GroupKey::State(State::Doing)));
     m.drop_on(id, GroupKey::State(State::Doing));
     assert!(m.notice().is_none(), "{:?}", m.notice());
@@ -1402,7 +1405,7 @@ fn done_work_stays_in_view_and_can_be_reopened_by_dragging() {
     );
 
     m.toggle_dismissed();
-    assert_eq!(m.rows.len(), 2, "h brings back what was dismissed");
+    assert_eq!(m.rows().len(), 2, "h brings back what was dismissed");
 }
 
 #[test]
@@ -1410,7 +1413,7 @@ fn board_columns_follow_the_grouping_and_a_drop_sets_that_property() {
     let (dir, mut m) = mixed();
     m.set_grouping(Grouping::None);
     m.toggle_layout();
-    assert_eq!(m.layout, Layout::Board);
+    assert_eq!(m.layout(), Layout::Board);
     assert_eq!(
         m.display().grouping,
         Grouping::State,
@@ -1434,7 +1437,7 @@ fn board_columns_follow_the_grouping_and_a_drop_sets_that_property() {
             (GroupKey::Priority(4), vec!["LIV-4".to_owned()]),
         ]
     );
-    let liv4 = m.filtered.iter().find(|r| r.key == "LIV-4").unwrap().id;
+    let liv4 = m.filtered().iter().find(|r| r.key == "LIV-4").unwrap().id;
     m.drop_on(liv4, GroupKey::Priority(1));
     let urgent: Vec<&str> = m.columns()[0].1.iter().map(|r| r.key.as_str()).collect();
     assert_eq!(urgent, ["LIV-1", "LIV-4"], "dropped into Urgent");
@@ -1506,7 +1509,7 @@ fn ten_thousand_tasks_stay_fast() {
     let tick = ticks.iter().min().unwrap();
     eprintln!(
         "10k tasks: open and list {open:?}, idle tick {tick:?}, rows {}",
-        m.rows.len()
+        m.rows().len()
     );
     assert!(open < Duration::from_millis(300), "open took {open:?}");
     assert!(
@@ -1584,7 +1587,7 @@ fn a_rewritten_log_of_100k_events_never_stalls_the_tick() {
 #[test]
 fn the_panel_follows_a_drag_a_filter_and_a_fold() {
     let (_dir, mut m) = mixed();
-    let id = |m: &Model, k: &str| m.filtered.iter().find(|r| r.key == k).unwrap().id;
+    let id = |m: &Model, k: &str| m.filtered().iter().find(|r| r.key == k).unwrap().id;
     let panel = |m: &Model| m.detail.as_ref().map(|d| d.node.key.clone());
     m.select(id(&m, "LIV-1"));
     m.open_detail();
@@ -1604,7 +1607,7 @@ fn the_panel_follows_a_drag_a_filter_and_a_fold() {
     m.select(id(&m, "LIV-2"));
     let at = m.selected_index().unwrap();
     let group = m
-        .groups
+        .groups()
         .iter()
         .find(|g| (g.start..g.start + g.shown).contains(&at))
         .map(|g| g.key)
@@ -1620,7 +1623,7 @@ fn the_panel_follows_a_drag_a_filter_and_a_fold() {
 #[test]
 fn the_panel_keeps_its_node_through_a_filter_and_follows_a_folded_card() {
     let (_dir, mut m) = mixed();
-    let id = |m: &Model, k: &str| m.filtered.iter().find(|r| r.key == k).unwrap().id;
+    let id = |m: &Model, k: &str| m.filtered().iter().find(|r| r.key == k).unwrap().id;
     let panel = |m: &Model| m.detail.as_ref().map(|d| d.node.key.clone());
     m.select(id(&m, "LIV-2"));
     m.open_detail();
@@ -1638,9 +1641,9 @@ fn the_panel_keeps_its_node_through_a_filter_and_follows_a_folded_card() {
     );
 
     let liv1 = id(&m, "LIV-1");
-    let at = m.rows.iter().position(|r| r.id == liv1).unwrap();
+    let at = m.rows().iter().position(|r| r.id == liv1).unwrap();
     let group = m
-        .groups
+        .groups()
         .iter()
         .find(|g| (g.start..g.start + g.shown).contains(&at))
         .map(|g| g.key)
@@ -1657,28 +1660,28 @@ fn the_panel_keeps_its_node_through_a_filter_and_follows_a_folded_card() {
 #[test]
 fn j_and_k_stand_on_bands_and_enter_folds_one() {
     let (_dir, mut m) = mixed();
-    assert!(m.groups.len() >= 2, "grouped by state");
+    assert!(m.groups().len() >= 2, "grouped by state");
     // The first row is selected; up from it, its band.
     m.select_by(-1);
-    assert_eq!(m.band(), Some(m.groups[0].key), "the first band");
+    assert_eq!(m.band(), Some(m.groups()[0].key), "the first band");
     assert!(m.selected().is_none());
     m.select_by(1);
-    let first = m.rows[m.groups[0].start].key.clone();
+    let first = m.rows()[m.groups()[0].start].key.clone();
     assert_eq!(
         m.selected().map(|r| r.key.clone()),
         Some(first),
         "then its first row"
     );
-    for _ in 0..m.groups[0].shown {
+    for _ in 0..m.groups()[0].shown {
         m.select_by(1);
     }
-    let second = m.groups[1].key;
+    let second = m.groups()[1].key;
     assert_eq!(m.band(), Some(second), "past the last row, the next band");
     m.enter();
-    assert!(m.groups[1].collapsed, "Enter folds it");
+    assert!(m.groups()[1].collapsed, "Enter folds it");
     assert_eq!(m.band(), Some(second), "and the selection stays on it");
     m.enter();
-    assert!(!m.groups[1].collapsed, "and unfolds it");
+    assert!(!m.groups()[1].collapsed, "and unfolds it");
     // A filter that hides the band's group lets the band go.
     m.set_filter("zzzz");
     m.set_filter("");
@@ -1731,7 +1734,7 @@ fn on_the_board_j_and_k_cross_columns_and_h_and_l_move_between_them() {
     assert_eq!(at(&m), cols[0][i], "h: back");
     // A card of a group folded in the list is selected on the board, and acted on.
     m.set_layout(Layout::List);
-    let first = m.groups[0].key;
+    let first = m.groups()[0].key;
     m.toggle_collapsed(first);
     m.set_layout(Layout::Board);
     for _ in 0..10 {
@@ -1772,29 +1775,34 @@ fn family() -> (tempfile::TempDir, Model) {
 #[test]
 fn sub_tasks_nest_under_their_parent_within_a_group() {
     let (_dir, mut m) = family();
-    let parent = m.rows.iter().find(|r| r.title == "parent").unwrap().clone();
+    let parent = m
+        .rows()
+        .iter()
+        .find(|r| r.title == "parent")
+        .unwrap()
+        .clone();
     let child = m
-        .rows
+        .rows()
         .iter()
         .find(|r| r.title == "child planned")
         .unwrap()
         .clone();
     let elsewhere = m
-        .rows
+        .rows()
         .iter()
         .find(|r| r.title == "child in backlog")
         .unwrap()
         .clone();
-    let at = |m: &Model, id| m.rows.iter().position(|r| r.id == id).unwrap();
+    let at = |m: &Model, id| m.rows().iter().position(|r| r.id == id).unwrap();
     assert_eq!(
         at(&m, child.id),
         at(&m, parent.id) + 1,
         "right under its parent"
     );
-    assert_eq!(m.depth.get(&child.id), Some(&1));
+    assert_eq!(m.depth().get(&child.id), Some(&1));
     assert_eq!(m.parent_key(&child), None, "nested: no chip");
     assert_eq!(
-        m.depth.get(&elsewhere.id),
+        m.depth().get(&elsewhere.id),
         None,
         "another group: not nested"
     );
@@ -1803,7 +1811,7 @@ fn sub_tasks_nest_under_their_parent_within_a_group() {
         Some(parent.key.as_str()),
         "but named"
     );
-    assert_eq!(m.progress.get(&parent.id), Some(&(0, 2)));
+    assert_eq!(m.progress().get(&parent.id), Some(&(0, 2)));
 
     // A filter that shows the sub-task but not its parent shows it on its own, named.
     m.set_filter("child planned");
@@ -1812,6 +1820,6 @@ fn sub_tasks_nest_under_their_parent_within_a_group() {
     m.set_filter("");
 
     m.toggle_nest();
-    assert_eq!(m.depth.get(&child.id), None, "flat");
+    assert_eq!(m.depth().get(&child.id), None, "flat");
     assert_eq!(m.parent_key(&child), Some(parent.key.as_str()));
 }

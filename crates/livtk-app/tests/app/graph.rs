@@ -263,7 +263,7 @@ fn the_graph_shows_every_kind_and_hides_dismissed_work_until_h() {
     m.set_view(View::Graph);
     assert_eq!(keys(&m), ["LES-1", "LIV-1", "LIV-2"]);
     assert_eq!(m.graph.edges.len(), 2);
-    assert!(m.rows.is_empty(), "the graph has no rows");
+    assert!(m.rows().is_empty(), "the graph has no rows");
     m.toggle_dismissed();
     assert_eq!(keys(&m), ["LES-1", "LIV-1", "LIV-2", "LIV-3"]);
     let lesson = m.graph.nodes.iter().find(|n| n.key == "LES-1").unwrap();
@@ -321,7 +321,7 @@ fn a_click_opens_a_node_and_its_actions_act_on_it() {
     let n = m.graph.nodes[plan].clone();
     let (x, y) = m.graph.camera.to_screen(n.x + 5., n.y + 5.);
     assert!(m.graph_click(x, y));
-    assert_eq!(m.view, View::Graph, "the graph stays");
+    assert_eq!(m.view(), View::Graph, "the graph stays");
     assert_eq!(m.detail.as_ref().unwrap().node.key, "LIV-2");
     m.decide();
     let ws = Workspace::open(dir.path()).unwrap();
@@ -425,7 +425,7 @@ fn the_palette_goes_to_the_graph_and_fits_it() {
     m.open_palette();
     m.palette_query("go to graph");
     m.palette_run();
-    assert_eq!(m.view, View::Graph);
+    assert_eq!(m.view(), View::Graph);
     m.graph_viewport(900., 600.);
     let fitted = m.graph.camera;
     m.graph_pan(400., 400.);

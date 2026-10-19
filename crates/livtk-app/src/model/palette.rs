@@ -463,15 +463,15 @@ impl Model {
             Kind::Finding => View::Findings,
         };
         // The inbox shows it already, if it waits for the human.
-        let in_view = self.all.iter().any(|r| r.id == found.id);
-        if !(self.view == View::Inbox && in_view) {
+        let in_view = self.pane().all.iter().any(|r| r.id == found.id);
+        if !(self.pane().view == View::Inbox && in_view) {
             self.set_view(view);
         }
         if found.state.is_dismissed() && !self.display().show_dismissed {
             self.toggle_dismissed();
         }
-        if !self.rows.iter().any(|r| r.id == found.id) {
-            let view = self.view;
+        if !self.pane().rows.iter().any(|r| r.id == found.id) {
+            let view = self.pane().view;
             let d = self
                 .displays
                 .entry(view)
@@ -482,7 +482,7 @@ impl Model {
             self.collapsed.retain(|(v, _)| *v != view);
             self.arrange();
         }
-        self.selected = Some(found.id);
+        self.pane_mut().selected = Some(found.id);
         self.open_detail();
     }
 
@@ -603,7 +603,7 @@ impl Model {
             (View::Graph, "G R"),
             (View::Terminal, "G X"),
         ] {
-            if v != self.view {
+            if v != self.pane().view {
                 out.push(plain(
                     &format!("Go to {}", v.title()),
                     Some(keys),
@@ -625,15 +625,15 @@ impl Model {
             Some("O"),
             Run::Ask(Ask::OpenFolder),
         ));
-        if self.view == View::Tasks {
-            let label = match self.layout {
+        if self.pane().view == View::Tasks {
+            let label = match self.pane().layout {
                 Layout::List => "Switch to board",
                 Layout::Board => "Switch to list",
             };
             out.push(plain(label, Some("B"), Run::ToggleLayout));
         }
         let d = self.display();
-        let board = self.view == View::Tasks && self.layout == Layout::Board;
+        let board = self.pane().view == View::Tasks && self.pane().layout == Layout::Board;
         for (label, g) in [
             ("Group by state", Grouping::State),
             ("Group by priority", Grouping::Priority),
@@ -652,10 +652,10 @@ impl Model {
                 out.push(plain(label, None, Run::Order(o)));
             }
         }
-        if self.view == View::Graph {
+        if self.pane().view == View::Graph {
             out.push(plain("Zoom to fit", Some("0"), Run::FitGraph));
         }
-        if self.view.kind().is_some() {
+        if self.pane().view.kind().is_some() {
             let label = if d.show_empty {
                 "Hide empty groups"
             } else {
@@ -667,7 +667,7 @@ impl Model {
                 Run::ToggleEmpty,
             ));
         }
-        if self.view.shows_dismissed() {
+        if self.pane().view.shows_dismissed() {
             let label = if d.show_dismissed {
                 "Hide dismissed work"
             } else {

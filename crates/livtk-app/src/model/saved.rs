@@ -187,9 +187,9 @@ impl Model {
                     (dir.to_string_lossy().into_owned(), shut)
                 })
                 .collect(),
-            view: Some(view_name(self.view)),
+            view: Some(view_name(self.pane().view)),
             layout: Some(
-                match self.layout {
+                match self.pane().layout {
                     Layout::List => "list",
                     Layout::Board => "board",
                 }
@@ -256,7 +256,7 @@ impl Model {
                 .unwrap_or_default(),
             compact: saved.reading_compact,
         };
-        self.layout = match saved.layout.as_deref() {
+        self.pane_mut().layout = match saved.layout.as_deref() {
             Some("board") => Layout::Board,
             _ => Layout::List,
         };
@@ -288,7 +288,7 @@ impl Model {
             .into_iter()
             .find(|v| Some(view_name(*v)) == saved.view);
         match view {
-            Some(v) if v != self.view => self.set_view(v),
+            Some(v) if v != self.pane().view => self.set_view(v),
             _ => self.reload(),
         }
     }

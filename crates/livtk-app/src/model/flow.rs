@@ -183,7 +183,7 @@ impl Model {
                 to: choice.to,
             }
         };
-        let row = self.rows.iter().find(|r| r.id == id).cloned();
+        let row = self.pane().rows.iter().find(|r| r.id == id).cloned();
         self.run(cmd, row)
     }
 }

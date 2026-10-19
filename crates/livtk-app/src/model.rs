@@ -409,20 +409,16 @@ pub struct Model {
     pub current: usize,
     /// The projects' directories in the order they were last opened, the latest first.
     pub recent: Vec<PathBuf>,
-    pub view: View,
-    pub layout: Layout,
-    /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
-    pub rows: Vec<Summary>,
-    /// The groups of `rows`, in order.
-    pub groups: Vec<Group>,
-    /// Every row after filtering, collapsed or not: what the board shows.
-    pub filtered: Vec<Summary>,
+    /// The panes, each a view with its own state, and the one acted on: the focused one, but
+    /// for a moment another (`with_pane`) while it is brought up to date or drawn.
+    panes: Vec<Pane>,
+    at: usize,
+    /// How the panes are laid out, by their ids; and the id the next pane takes.
+    pub split: Split,
+    next_pane: u64,
     pub detail: Option<Detail>,
     /// Rows that changed under the app's feet (Claude, the CLI, a git pull), and when it noticed.
     pub flashed: HashMap<Uuid, Instant>,
-    /// Rows the human just moved out of the current view, where they were, and when: the view
-    /// fades them out in place.
-    pub leaving: Vec<(Summary, usize, Instant)>,
     /// What the app tells the human in the window.
     toasts: Toasts,
     /// The activity grid above the feed.
@@ -455,17 +451,146 @@ pub struct Model {
     activity_seen_before: Option<Uuid>,
     /// The graph view's nodes, links, camera and selection.
     pub graph: Graph,
+    displays: HashMap<View, Display>,
+    collapsed: HashSet<(View, GroupKey)>,
+}
+
+/// Which way a split lays its panes: side by side, or one over another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Axis {
+    Row,
+    Column,
+}
+
+/// How the panes are laid out: a pane, or panes split along an axis, each with its share of
+/// the room (the shares add up to 1).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Split {
+    Pane(u64),
+    Split {
+        axis: Axis,
+        parts: Vec<(Split, f32)>,
+    },
+}
+
+impl Split {
+    /// The panes' ids, in reading order.
+    pub fn ids(&self) -> Vec<u64> {
+        match self {
+            Split::Pane(id) => vec![*id],
+            Split::Split { parts, .. } => parts.iter().flat_map(|(p, _)| p.ids()).collect(),
+        }
+    }
+
+    /// `id`'s pane split along `axis`, `new` after it, the two sharing its room. In a split
+    /// along the same axis, `new` joins it rather than nesting.
+    fn split(&mut self, id: u64, axis: Axis, new: u64) -> bool {
+        match self {
+            Split::Pane(p) if *p == id => {
+                *self = Split::Split {
+                    axis,
+                    parts: vec![(Split::Pane(id), 0.5), (Split::Pane(new), 0.5)],
+                };
+                true
+            }
+            Split::Pane(_) => false,
+            Split::Split { axis: a, parts } => {
+                if *a == axis
+                    && let Some(i) = parts.iter().position(|(p, _)| *p == Split::Pane(id))
+                {
+                    let half = parts[i].1 / 2.;
+                    parts[i].1 = half;
+                    parts.insert(i + 1, (Split::Pane(new), half));
+                    return true;
+                }
+                parts.iter_mut().any(|(p, _)| p.split(id, axis, new))
+            }
+        }
+    }
+
+    /// `id`'s pane taken out, its room given to the rest of its split; a split left with one
+    /// part becomes that part.
+    fn remove(&mut self, id: u64) -> bool {
+        let Split::Split { parts, .. } = self else {
+            return false;
+        };
+        if let Some(i) = parts.iter().position(|(p, _)| *p == Split::Pane(id)) {
+            let (_, share) = parts.remove(i);
+            let rest: f32 = parts.iter().map(|(_, f)| f).sum();
+            for (_, f) in parts.iter_mut() {
+                *f += share * *f / rest.max(f32::EPSILON);
+            }
+        } else if !parts.iter_mut().any(|(p, _)| p.remove(id)) {
+            return false;
+        }
+        if parts.len() == 1 {
+            *self = parts.remove(0).0;
+        }
+        true
+    }
+
+    /// The split at `path` (each step a part's index), if there is one.
+    pub fn at_mut(&mut self, path: &[usize]) -> Option<&mut Split> {
+        match path.split_first() {
+            None => Some(self),
+            Some((&i, rest)) => match self {
+                Split::Split { parts, .. } => parts.get_mut(i)?.0.at_mut(rest),
+                Split::Pane(_) => None,
+            },
+        }
+    }
+}
+
+/// A pane of the window: the view it shows, and that view's own state: what it lists and how,
+/// and where its selection is. Each view shows in one pane at most, so what a view keeps by
+/// itself (the docs, the graph, the feed, its display) stays the model's.
+#[derive(Clone, Debug)]
+pub struct Pane {
+    pub id: u64,
+    /// Whether it waits for a view to be chosen: a split's new pane, until one is.
+    pub placeholder: bool,
+    pub view: View,
+    pub layout: Layout,
+    /// The rows shown, in display order: filtered, grouped, ordered, collapsed groups left out.
+    pub rows: Vec<Summary>,
+    /// The groups of `rows`, in order.
+    pub groups: Vec<Group>,
+    /// Every row after filtering, collapsed or not: what the board shows.
+    pub filtered: Vec<Summary>,
+    /// Rows the human just moved out of the view, where they were, and when: the view fades
+    /// them out in place.
+    pub leaving: Vec<(Summary, usize, Instant)>,
     selected: Option<Uuid>,
     /// The group band the selection rests on in a list, instead of a row: Enter folds it.
     band: Option<GroupKey>,
     /// Everything the view holds, before display options.
     all: Vec<Summary>,
-    displays: HashMap<View, Display>,
-    collapsed: HashSet<(View, GroupKey)>,
     /// How deep each nested sub-task sits under its parent (absent: not nested).
     pub depth: HashMap<Uuid, usize>,
     /// Each parent's sub-tasks: how many are done, of how many.
     pub progress: HashMap<Uuid, (usize, usize)>,
+}
+
+impl Pane {
+    pub fn new(id: u64, view: View) -> Pane {
+        Pane {
+            id,
+            placeholder: false,
+            view,
+            layout: Layout::List,
+            rows: Vec::new(),
+            groups: Vec::new(),
+            filtered: Vec::new(),
+            leaving: Vec::new(),
+            selected: None,
+            band: None,
+            all: Vec::new(),
+            depth: HashMap::new(),
+            progress: HashMap::new(),
+        }
+    }
 }
 
 impl Model {
@@ -508,14 +633,12 @@ impl Model {
             projects,
             current: 0,
             recent: Vec::new(),
-            view: View::Inbox,
-            layout: Layout::List,
-            rows: Vec::new(),
-            groups: Vec::new(),
-            filtered: Vec::new(),
+            panes: vec![Pane::new(0, View::Inbox)],
+            at: 0,
+            split: Split::Pane(0),
+            next_pane: 1,
             detail: None,
             flashed: HashMap::new(),
-            leaving: Vec::new(),
             toasts: Toasts::default(),
             grid: grid::Grid::default(),
             docs: docs::Docs::default(),
@@ -532,13 +655,8 @@ impl Model {
             activity_index: 0,
             activity_seen_before: None,
             graph: Graph::default(),
-            selected: None,
-            band: None,
-            all: Vec::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),
-            depth: HashMap::new(),
-            progress: HashMap::new(),
         };
         if let Some(text) = failed {
             model.warn(text);
@@ -576,6 +694,127 @@ impl Model {
         }
     }
 
+    // ---- panes --------------------------------------------------------------------------------
+
+    /// The pane acted on: the focused one, or the one `with_pane` is on.
+    fn pane(&self) -> &Pane {
+        &self.panes[self.at]
+    }
+
+    fn pane_mut(&mut self) -> &mut Pane {
+        &mut self.panes[self.at]
+    }
+
+    /// Act on pane `i` for a while (bring it up to date, draw it), then on the one before.
+    pub fn with_pane<R>(&mut self, i: usize, f: impl FnOnce(&mut Model) -> R) -> R {
+        let was = self.at;
+        self.at = i.min(self.panes.len() - 1);
+        let out = f(self);
+        self.at = was;
+        out
+    }
+
+    /// The panes, in the order they were made.
+    pub fn panes(&self) -> &[Pane] {
+        &self.panes
+    }
+
+    /// The focused pane, by its place in `panes`.
+    pub fn focused(&self) -> usize {
+        self.at
+    }
+
+    /// The place in `panes` of the pane `id`.
+    pub fn pane_index(&self, id: u64) -> Option<usize> {
+        self.panes.iter().position(|p| p.id == id)
+    }
+
+    /// Give pane `i` the keys, the sidebar and the dock.
+    pub fn focus_pane(&mut self, i: usize) {
+        if i < self.panes.len() {
+            self.at = i;
+        }
+    }
+
+    /// The pane `delta` along from the focused one, in reading order, round the ends.
+    pub fn focus_next_pane(&mut self, delta: isize) {
+        let order = self.split.ids();
+        let id = self.pane().id;
+        let Some(here) = order.iter().position(|p| *p == id) else {
+            return;
+        };
+        let n = order.len() as isize;
+        let to = order[(here as isize + delta).rem_euclid(n) as usize];
+        if let Some(i) = self.pane_index(to) {
+            self.at = i;
+        }
+    }
+
+    /// Split the focused pane along `axis`: a placeholder beside it (after it), focused.
+    pub fn split_pane(&mut self, axis: Axis) {
+        let id = self.next_pane;
+        if self.split.split(self.pane().id, axis, id) {
+            self.next_pane += 1;
+            let mut pane = Pane::new(id, View::Inbox);
+            pane.placeholder = true;
+            self.panes.push(pane);
+            self.at = self.panes.len() - 1;
+        }
+    }
+
+    /// Close the focused pane, unless it is the last; the one before it (else after) is
+    /// focused.
+    pub fn close_pane(&mut self) {
+        if self.panes.len() < 2 {
+            return;
+        }
+        let id = self.pane().id;
+        let order = self.split.ids();
+        let here = order.iter().position(|p| *p == id).unwrap_or(0);
+        let next = if here > 0 { order[here - 1] } else { order[1] };
+        if self.split.remove(id) {
+            self.panes.retain(|p| p.id != id);
+            self.at = self.pane_index(next).unwrap_or(0);
+        }
+    }
+
+    /// The view of the pane acted on.
+    pub fn view(&self) -> View {
+        self.pane().view
+    }
+
+    pub fn layout(&self) -> Layout {
+        self.pane().layout
+    }
+
+    /// The rows the pane acted on shows, in display order.
+    pub fn rows(&self) -> &[Summary] {
+        &self.pane().rows
+    }
+
+    pub fn groups(&self) -> &[Group] {
+        &self.pane().groups
+    }
+
+    /// Every row after filtering, collapsed or not: what the board shows.
+    pub fn filtered(&self) -> &[Summary] {
+        &self.pane().filtered
+    }
+
+    pub fn leaving(&self) -> &[(Summary, usize, Instant)] {
+        &self.pane().leaving
+    }
+
+    /// How deep each nested sub-task sits under its parent.
+    pub fn depth(&self) -> &HashMap<Uuid, usize> {
+        &self.pane().depth
+    }
+
+    /// Each parent's sub-tasks: how many are done, of how many.
+    pub fn progress(&self) -> &HashMap<Uuid, (usize, usize)> {
+        &self.pane().progress
+    }
+
     pub fn project(&self) -> Option<&Project> {
         self.projects.get(self.current)
     }
@@ -593,11 +832,11 @@ impl Model {
     pub fn select_project(&mut self, index: usize) {
         if index < self.projects.len() && index != self.current {
             self.current = index;
-            self.selected = None;
-            self.band = None;
+            self.pane_mut().selected = None;
+            self.pane_mut().band = None;
             self.detail = None;
             self.grid.pick.clear();
-            self.leaving.clear();
+            self.pane_mut().leaving.clear();
             self.flashed.clear();
             self.enter_activity();
             self.enter_graph();
@@ -639,35 +878,52 @@ impl Model {
         order
     }
 
+    /// Show `view` in the focused pane; shown in another pane already, that pane is focused
+    /// instead, as each view shows in one pane at most.
     pub fn set_view(&mut self, view: View) {
-        if view != self.view {
-            self.view = view;
-            self.selected = None;
-            self.band = None;
+        if let Some(i) = self
+            .panes
+            .iter()
+            .position(|p| !p.placeholder && p.view == view)
+            && i != self.at
+        {
+            self.at = i;
+            return;
+        }
+        if view != self.pane().view || self.pane().placeholder {
+            let p = self.pane_mut();
+            p.placeholder = false;
+            p.view = view;
+            p.selected = None;
+            p.band = None;
+            p.leaving.clear();
             self.detail = None;
-            self.leaving.clear();
-            self.enter_activity();
-            self.enter_graph();
+            if view == View::Activity {
+                self.enter_activity();
+            }
+            if view == View::Graph {
+                self.enter_graph();
+            }
             self.reload();
         }
     }
 
     /// List or board, as chosen from the View options menu.
     pub fn set_layout(&mut self, layout: Layout) {
-        if self.layout != layout {
+        if self.pane().layout != layout {
             self.toggle_layout();
         }
     }
 
     pub fn toggle_layout(&mut self) {
         // A band is a list's; the board has none.
-        self.band = None;
-        self.layout = match self.layout {
+        self.pane_mut().band = None;
+        self.pane_mut().layout = match self.pane().layout {
             Layout::List => Layout::Board,
             Layout::Board => Layout::List,
         };
         // A board needs columns: as in Linear, it is never ungrouped.
-        if self.layout == Layout::Board && self.display().grouping == Grouping::None {
+        if self.pane().layout == Layout::Board && self.display().grouping == Grouping::None {
             self.set_grouping(Grouping::State);
         }
     }
@@ -676,24 +932,24 @@ impl Model {
 
     /// The selected node: a row of the list, or on the board any card, a folded group's too.
     pub fn selected(&self) -> Option<&Summary> {
-        let id = self.selected?;
+        let id = self.pane().selected?;
         let shown = if self.on_board() {
-            &self.filtered
+            &self.pane().filtered
         } else {
-            &self.rows
+            &self.pane().rows
         };
         shown.iter().find(|r| r.id == id)
     }
 
     pub fn selected_index(&self) -> Option<usize> {
-        let id = self.selected?;
-        self.rows.iter().position(|r| r.id == id)
+        let id = self.pane().selected?;
+        self.pane().rows.iter().position(|r| r.id == id)
     }
 
     pub fn select(&mut self, id: Uuid) {
-        if self.rows.iter().any(|r| r.id == id) {
-            self.band = None;
-            self.selected = Some(id);
+        if self.pane().rows.iter().any(|r| r.id == id) {
+            self.pane_mut().band = None;
+            self.pane_mut().selected = Some(id);
             if self.detail.is_some() {
                 self.open_detail();
             }
@@ -702,26 +958,26 @@ impl Model {
 
     /// The group band the selection rests on, if it rests on one.
     pub fn band(&self) -> Option<GroupKey> {
-        self.band
+        self.pane().band
     }
 
     /// Whether the view is the tasks' board.
     pub fn on_board(&self) -> bool {
-        self.view == View::Tasks && self.layout == Layout::Board
+        self.pane().view == View::Tasks && self.pane().layout == Layout::Board
     }
 
     /// Move the selection by `delta`, stopping at the ends: in a list through its group bands
     /// and their rows; on the board down a column and on into the next (up into the previous).
     pub fn select_by(&mut self, delta: isize) {
-        if self.view == View::Docs {
+        if self.pane().view == View::Docs {
             self.docs_select_by(delta);
             return;
         }
-        if self.view == View::Activity {
+        if self.pane().view == View::Activity {
             self.activity_select_by(delta);
             return;
         }
-        if self.view == View::Graph {
+        if self.pane().view == View::Graph {
             self.graph_select_by(delta);
             return;
         }
@@ -731,20 +987,20 @@ impl Model {
         }
         // A list's stops: each group's band (when grouped), then its rows shown.
         let mut stops: Vec<(Option<GroupKey>, Option<Uuid>)> = Vec::new();
-        for g in &self.groups {
+        for g in &self.pane().groups {
             if g.key != GroupKey::All {
                 stops.push((Some(g.key), None));
             }
-            for r in &self.rows[g.start..g.start + g.shown] {
+            for r in &self.pane().rows[g.start..g.start + g.shown] {
                 stops.push((None, Some(r.id)));
             }
         }
         if stops.is_empty() {
             return;
         }
-        let at = stops.iter().position(|(band, row)| match self.band {
+        let at = stops.iter().position(|(band, row)| match self.pane().band {
             Some(k) => *band == Some(k),
-            None => row.is_some() && *row == self.selected,
+            None => row.is_some() && *row == self.pane().selected,
         });
         let next = match at {
             None => 0,
@@ -752,8 +1008,8 @@ impl Model {
         };
         match stops[next] {
             (Some(k), _) => {
-                self.band = Some(k);
-                self.selected = None;
+                self.pane_mut().band = Some(k);
+                self.pane_mut().selected = None;
             }
             (_, Some(id)) => self.select(id),
             _ => {}
@@ -768,7 +1024,7 @@ impl Model {
             .map(|(_, rows)| rows.iter().map(|r| r.id).collect::<Vec<_>>())
             .filter(|c| !c.is_empty())
             .collect();
-        let at = self.selected.and_then(|id| {
+        let at = self.pane().selected.and_then(|id| {
             cols.iter()
                 .enumerate()
                 .find_map(|(c, col)| col.iter().position(|x| *x == id).map(|i| (c, i)))
@@ -805,7 +1061,7 @@ impl Model {
     /// `h` and `l` on the board: to the column `delta` along, as far down as it goes.
     pub fn select_column_by(&mut self, delta: isize) {
         // In the docs' list, across is in and out of the folders; reading, it is nothing.
-        if self.view == View::Docs {
+        if self.pane().view == View::Docs {
             if self.docs.reading {
                 return;
             }
@@ -829,8 +1085,8 @@ impl Model {
 
     /// Select a card on the board, which shows the cards of groups folded in the list too.
     fn select_card(&mut self, id: Uuid) {
-        self.band = None;
-        self.selected = Some(id);
+        self.pane_mut().band = None;
+        self.pane_mut().selected = Some(id);
         if self.detail.is_some() {
             self.open_detail();
         }
@@ -838,11 +1094,11 @@ impl Model {
 
     /// Enter: fold or unfold the band the selection rests on; else open the selected node.
     pub fn enter(&mut self) {
-        if self.view == View::Docs {
+        if self.pane().view == View::Docs {
             self.docs_enter();
             return;
         }
-        match self.band {
+        match self.pane().band {
             Some(k) => self.toggle_collapsed(k),
             None => self.open_detail(),
         }
@@ -866,6 +1122,7 @@ impl Model {
             blocked: n.blocked,
             standing: n.props.get("scope").and_then(|v| v.as_str()) == Some("always"),
             parent: self
+                .pane()
                 .all
                 .iter()
                 .find(|r| r.id == n.id)
@@ -876,14 +1133,16 @@ impl Model {
     // ---- the detail panel ---------------------------------------------------------------------
 
     pub fn open_detail(&mut self) {
-        if self.view == View::Activity {
+        if self.pane().view == View::Activity {
             // The feed's highlighted event opens its node, and the feed stays.
-            self.selected = self.activity_node();
+            self.pane_mut().selected = self.activity_node();
         }
-        if self.view == View::Graph {
-            self.selected = self.graph_node();
+        if self.pane().view == View::Graph {
+            self.pane_mut().selected = self.graph_node();
         }
-        let Some(id) = self.selected else { return };
+        let Some(id) = self.pane().selected else {
+            return;
+        };
         let Some(project) = self.projects.get(self.current) else {
             return;
         };
@@ -1037,10 +1296,8 @@ impl Model {
                 }
                 self.toasts.clear_errors();
                 let created = events.first().map(|e| e.op.subjects().0);
-                if self.view != View::Tasks {
-                    self.view = View::Tasks;
-                    self.detail = None;
-                }
+                // Into the tasks, wherever they show: their pane, or this one.
+                self.set_view(View::Tasks);
                 self.reload();
                 if let Some(id) = created {
                     self.select(id);
@@ -1059,9 +1316,11 @@ impl Model {
         // Only a row that was on screen can fade out of it, from where it was.
         let at = row
             .as_ref()
-            .and_then(|r| self.rows.iter().position(|x| x.id == r.id));
+            .and_then(|r| self.pane().rows.iter().position(|x| x.id == r.id));
         let row = row.filter(|_| at.is_some());
-        let was_selected = row.as_ref().is_some_and(|r| self.selected == Some(r.id));
+        let was_selected = row
+            .as_ref()
+            .is_some_and(|r| self.pane().selected == Some(r.id));
         let Some(project) = self.projects.get_mut(self.current) else {
             return false;
         };
@@ -1076,16 +1335,18 @@ impl Model {
                 // A row that left the view (acknowledged out of the inbox, say) fades out, and
                 // the selection moves to the row that took its place.
                 if let Some(row) = row
-                    && !self.rows.iter().any(|r| r.id == row.id)
+                    && !self.pane().rows.iter().any(|r| r.id == row.id)
                 {
-                    self.leaving.push((row, at.unwrap_or(0), Instant::now()));
+                    self.pane_mut()
+                        .leaving
+                        .push((row, at.unwrap_or(0), Instant::now()));
                     // The selection moves on only if it was on the row that left.
                     if was_selected
                         && let Some(i) = at
-                        && !self.rows.is_empty()
+                        && !self.pane().rows.is_empty()
                     {
-                        let id = self.rows[i.min(self.rows.len() - 1)].id;
-                        self.selected = Some(id);
+                        let id = self.pane().rows[i.min(self.pane().rows.len() - 1)].id;
+                        self.pane_mut().selected = Some(id);
                     }
                     if self.detail.is_some() {
                         self.open_detail();
@@ -1169,8 +1430,9 @@ impl Model {
             return began;
         }
         let before: HashMap<Uuid, String> = self
-            .rows
+            .panes
             .iter()
+            .flat_map(|p| &p.rows)
             .map(|r| (r.id, r.updated.clone()))
             .collect();
         let newest = self.activity.first().map(|a| a.event.id);
@@ -1188,7 +1450,7 @@ impl Model {
                 self.flashed.insert(a.event.id, now);
             }
         }
-        for r in &self.rows {
+        for r in self.panes.iter().flat_map(|p| &p.rows) {
             if before.get(&r.id) != Some(&r.updated) {
                 self.flashed.insert(r.id, now);
             }
@@ -1297,8 +1559,9 @@ impl Model {
     /// Forget visual state older than `age`: finished flashes and fades.
     pub fn settle(&mut self, now: Instant, age: std::time::Duration) {
         self.flashed.retain(|_, at| now.duration_since(*at) < age);
-        self.leaving
-            .retain(|(_, _, at)| now.duration_since(*at) < age);
+        for p in &mut self.panes {
+            p.leaving.retain(|(_, _, at)| now.duration_since(*at) < age);
+        }
     }
 
     // ---- notifications -------------------------------------------------------------------------
@@ -1373,15 +1636,15 @@ impl Model {
 
     pub fn display(&self) -> Display {
         self.displays
-            .get(&self.view)
+            .get(&self.pane().view)
             .cloned()
-            .unwrap_or_else(|| Display::for_view(self.view))
+            .unwrap_or_else(|| Display::for_view(self.pane().view))
     }
 
     fn edit_display(&mut self, edit: impl FnOnce(&mut Display)) {
         let mut d = self.display();
         edit(&mut d);
-        self.displays.insert(self.view, d);
+        self.displays.insert(self.pane().view, d);
         self.arrange();
         self.reselect();
     }
@@ -1393,21 +1656,21 @@ impl Model {
     fn reselect(&mut self) {
         // Resting on a band is a selection too: folding it keeps it there. A band gone from
         // view (filtered out) is let go, and the selection found again as below.
-        if let Some(k) = self.band {
-            if self.groups.iter().any(|g| g.key == k) {
+        if let Some(k) = self.pane().band {
+            if self.pane().groups.iter().any(|g| g.key == k) {
                 return;
             }
-            self.band = None;
+            self.pane_mut().band = None;
         }
         if self.selected().is_none() {
             let panel = self
                 .detail
                 .as_ref()
                 .map(|d| d.node.id)
-                .filter(|id| self.rows.iter().any(|r| r.id == *id));
-            match panel.or_else(|| self.rows.first().map(|r| r.id)) {
+                .filter(|id| self.pane().rows.iter().any(|r| r.id == *id));
+            match panel.or_else(|| self.pane().rows.first().map(|r| r.id)) {
                 Some(id) => self.select(id),
-                None => self.selected = None,
+                None => self.pane_mut().selected = None,
             }
         }
     }
@@ -1429,7 +1692,7 @@ impl Model {
 
     /// Show only rows in `state`, besides those in the states already chosen, or no longer.
     pub fn toggle_state(&mut self, state: State) {
-        let kind = self.view.kind();
+        let kind = self.pane().view.kind();
         self.edit_display(|d| {
             if let Some(i) = d.states.iter().position(|s| *s == state) {
                 d.states.remove(i);
@@ -1450,7 +1713,7 @@ impl Model {
     }
 
     pub fn set_grouping(&mut self, grouping: Grouping) {
-        if self.layout == Layout::Board && grouping == Grouping::None {
+        if self.pane().layout == Layout::Board && grouping == Grouping::None {
             return;
         }
         self.edit_display(|d| d.grouping = grouping);
@@ -1462,7 +1725,7 @@ impl Model {
 
     /// Show or hide the current view's empty groups, where it lists groups of one kind.
     pub fn toggle_empty(&mut self) {
-        if self.view.kind().is_some() {
+        if self.pane().view.kind().is_some() {
             self.edit_display(|d| d.show_empty = !d.show_empty);
         }
     }
@@ -1470,21 +1733,21 @@ impl Model {
     /// Show or hide the current view's dismissed work, where it has any. What a view holds is
     /// read without it, so it is read again.
     pub fn toggle_dismissed(&mut self) {
-        if self.view.shows_dismissed() {
+        if self.pane().view.shows_dismissed() {
             let mut d = self.display();
             d.show_dismissed = !d.show_dismissed;
             // A dismissed state chosen in the filter would show nothing while hidden.
             if !d.show_dismissed {
                 d.states.retain(|s| !s.is_dismissed());
             }
-            self.displays.insert(self.view, d);
+            self.displays.insert(self.pane().view, d);
             self.reload();
         }
     }
 
     pub fn toggle_collapsed(&mut self, key: GroupKey) {
-        if !self.collapsed.remove(&(self.view, key)) {
-            self.collapsed.insert((self.view, key));
+        if !self.collapsed.remove(&(self.pane().view, key)) {
+            self.collapsed.insert((self.pane().view, key));
         }
         self.arrange();
         self.reselect();
@@ -1495,6 +1758,7 @@ impl Model {
         let d = self.display();
         let needle = d.filter.trim().to_lowercase();
         let mut rows: Vec<Summary> = self
+            .pane()
             .all
             .iter()
             .filter(|r| {
@@ -1515,7 +1779,7 @@ impl Model {
             Grouping::Priority => GroupKey::Priority(r.priority),
             Grouping::None => GroupKey::All,
         };
-        let kind = self.view.kind();
+        let kind = self.pane().view.kind();
         let group_rank = |k: GroupKey| match k {
             GroupKey::State(s) => state_order(kind, s),
             GroupKey::Priority(p) => p,
@@ -1530,13 +1794,13 @@ impl Model {
                     Ordering::Created => b.id.cmp(&a.id),
                 })
         });
-        self.progress = progress(&self.all);
+        self.pane_mut().progress = progress(&self.pane().all);
         let (rows, depth) = if d.nest {
             nest(rows, |a, b| group_of(a) == group_of(b))
         } else {
             (rows, HashMap::new())
         };
-        self.depth = depth;
+        self.pane_mut().depth = depth;
         // The groups the rows fall in, in order; with `show_empty`, every group there can be.
         let mut keys: Vec<GroupKey> = Vec::new();
         for r in &rows {
@@ -1554,7 +1818,7 @@ impl Model {
         let mut shown: Vec<Summary> = Vec::with_capacity(rows.len());
         let mut next = rows.iter().peekable();
         for key in keys {
-            let collapsed = self.collapsed.contains(&(self.view, key));
+            let collapsed = self.collapsed.contains(&(self.pane().view, key));
             let start = shown.len();
             let mut count = 0;
             while let Some(r) = next.next_if(|r| group_of(r) == key) {
@@ -1565,22 +1829,22 @@ impl Model {
             }
             groups.push(Group {
                 key,
-                kind: self.view.kind(),
+                kind: self.pane().view.kind(),
                 count,
                 collapsed,
                 start,
                 shown: shown.len() - start,
             });
         }
-        self.filtered = rows;
-        self.rows = shown;
-        self.groups = groups;
+        self.pane_mut().filtered = rows;
+        self.pane_mut().rows = shown;
+        self.pane_mut().groups = groups;
     }
 
     /// The key of `r`'s parent, when `r` is a sub-task shown on its own (not under it): its
     /// parent is in another group, filtered out, or nesting is off.
     pub fn parent_key(&self, r: &Summary) -> Option<&str> {
-        if self.depth.contains_key(&r.id) {
+        if self.pane().depth.contains_key(&r.id) {
             return None;
         }
         self.parent_of(r)
@@ -1589,7 +1853,8 @@ impl Model {
     /// The key of `r`'s parent, if `r` is a sub-task (as a board card names it).
     pub fn parent_of(&self, r: &Summary) -> Option<&str> {
         let parent = r.parent?;
-        self.all
+        self.pane()
+            .all
             .iter()
             .find(|p| p.id == parent)
             .map(|p| p.key.as_str())
@@ -1604,7 +1869,7 @@ impl Model {
     /// dismissed ones only while shown, or each priority. None where the view is ungrouped or
     /// mixes kinds, as the inbox does.
     fn every_group(&self, d: &Display) -> Vec<GroupKey> {
-        match (d.grouping, self.view.kind()) {
+        match (d.grouping, self.pane().view.kind()) {
             (Grouping::State, Some(kind)) => kind
                 .states()
                 .iter()
@@ -1621,7 +1886,8 @@ impl Model {
 
     /// Whether dropping node `id` on `target` is a legal change.
     pub fn can_drop(&self, id: Uuid, target: GroupKey) -> bool {
-        self.all
+        self.pane()
+            .all
             .iter()
             .find(|r| r.id == id)
             .is_some_and(|r| drop_allowed(r.kind, r.state, r.priority, target))
@@ -1630,12 +1896,12 @@ impl Model {
     /// Drop node `id` on a group or column: move it to that state, or give it that priority.
     /// A move the rules refuse becomes the notice, with the core's reason.
     pub fn drop_on(&mut self, id: Uuid, target: GroupKey) {
-        let Some(r) = self.all.iter().find(|r| r.id == id).cloned() else {
+        let Some(r) = self.pane().all.iter().find(|r| r.id == id).cloned() else {
             return;
         };
         // The card dragged is what the human acts on next: the panel follows it too, even
         // when its group is folded in the list (the board shows it all the same).
-        self.selected = Some(id);
+        self.pane_mut().selected = Some(id);
         if self.detail.is_some() {
             self.open_detail();
         }
@@ -1679,6 +1945,7 @@ impl Model {
         keys.into_iter()
             .map(|key| {
                 let rows = self
+                    .pane()
                     .filtered
                     .iter()
                     .filter(|r| match key {
@@ -1693,29 +1960,47 @@ impl Model {
             .collect()
     }
 
+    /// Read everything shown again: what every pane shows, the sidebar's counts, the panel.
     fn reload(&mut self) {
         self.load_grid();
-        if self.view == View::Docs {
-            self.load_docs();
-        }
-        if self.view == View::Activity {
-            self.load_activity();
-        }
-        if self.view == View::Graph {
-            self.load_graph();
+        // The panes first: the feed, looked at, marks what it shows seen before it is counted.
+        for i in 0..self.panes.len() {
+            self.with_pane(i, Model::reload_pane);
         }
         for p in &mut self.projects {
             p.inbox_items = p.ws.inbox().unwrap_or_default();
             p.inbox = p.inbox_items.len();
             p.unseen = p.ws.unseen_activity().unwrap_or(0);
         }
+        if let Some(id) = self.detail.as_ref().map(|d| d.node.id)
+            && let Some(project) = self.projects.get(self.current)
+        {
+            self.detail = load_detail(&project.ws, id).ok();
+        }
+    }
+
+    /// Read again what the pane acted on shows.
+    fn reload_pane(&mut self) {
+        if self.pane().placeholder {
+            return;
+        }
+        if self.pane().view == View::Docs {
+            self.load_docs();
+        }
+        if self.pane().view == View::Activity {
+            self.load_activity();
+        }
+        if self.pane().view == View::Graph {
+            self.load_graph();
+        }
         let Some(project) = self.projects.get(self.current) else {
-            self.rows.clear();
+            self.pane_mut().rows.clear();
             return;
         };
-        let rows = match self.view.kind() {
-            // The feed lists events and the graph lays nodes out; neither has rows.
-            None if matches!(self.view, View::Activity | View::Graph) => Ok(Vec::new()),
+        let rows = match self.pane().view.kind() {
+            // The feed lists events, the graph lays nodes out, the docs and the terminal are
+            // their own: none has rows.
+            None if self.pane().view != View::Inbox => Ok(Vec::new()),
             None => project.ws.inbox(),
             Some(kind) => {
                 let states: Vec<State> = if self.display().show_dismissed {
@@ -1731,17 +2016,12 @@ impl Model {
             }
         };
         match rows {
-            Ok(rows) => self.all = rows,
+            Ok(rows) => self.pane_mut().all = rows,
             Err(e) => self.warn(e.to_string()),
         }
         self.arrange();
         if self.selected().is_none() {
-            self.selected = self.rows.first().map(|r| r.id);
-        }
-        if let Some(id) = self.detail.as_ref().map(|d| d.node.id)
-            && let Some(project) = self.projects.get(self.current)
-        {
-            self.detail = load_detail(&project.ws, id).ok();
+            self.pane_mut().selected = self.pane().rows.first().map(|r| r.id);
         }
     }
 }

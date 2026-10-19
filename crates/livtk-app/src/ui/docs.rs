@@ -1090,7 +1090,7 @@ impl LivtkApp {
     /// ⌘F in the Docs view: the find bar, its field given the keys.
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let docs = &self.model.docs;
-        if self.model.view != super::View::Docs || !docs.reading || docs.text.is_none() {
+        if self.model.view() != super::View::Docs || !docs.reading || docs.text.is_none() {
             return;
         }
         self.reader.finding = true;

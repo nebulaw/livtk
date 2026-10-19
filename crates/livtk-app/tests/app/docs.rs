@@ -350,7 +350,7 @@ fn the_palette_finds_docs_and_opens_them() {
         .position(|i| matches!(i, Item::Doc(d) if d.path == "docs/guide/setup.md"))
         .expect("the doc is found");
     m.palette_run_at(at);
-    assert_eq!(m.view, View::Docs);
+    assert_eq!(m.view(), View::Docs);
     assert_eq!(m.docs.open.as_deref(), Some("docs/guide/setup.md"));
 }
 

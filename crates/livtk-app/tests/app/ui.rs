@@ -83,9 +83,9 @@ fn keys_move_the_selection_and_decide(cx: &mut TestAppContext) {
     assert_eq!(state_of(dir.path(), "LIV-1"), State::Planned);
 
     cx.simulate_keystrokes("g t");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
     cx.simulate_keystrokes("g l");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Lessons));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Lessons));
     cx.simulate_keystrokes("shift-a");
     let ws = Workspace::open(dir.path()).unwrap();
     assert_eq!(
@@ -307,7 +307,7 @@ fn the_filter_narrows_the_list_and_typing_in_it_runs_no_command(cx: &mut TestApp
     cx.simulate_input("second");
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
-        let keys: Vec<&str> = a.model().rows.iter().map(|r| r.key.as_str()).collect();
+        let keys: Vec<&str> = a.model().rows().iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["LIV-2"], "only the second plan is left in the inbox");
     });
     cx.simulate_keystrokes("enter a");
@@ -569,7 +569,7 @@ fn g_a_opens_the_feed_and_enter_and_a_decide_from_it(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g a");
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Activity);
+        assert_eq!(a.model().view(), View::Activity);
         assert_eq!(a.model().projects[0].unseen, 0, "looking clears the badge");
     });
     assert!(cx.debug_bounds("event-0").is_some(), "the lines are drawn");
@@ -578,7 +578,7 @@ fn g_a_opens_the_feed_and_enter_and_a_decide_from_it(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("j");
     open_detail(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Activity, "the feed stays");
+        assert_eq!(a.model().view(), View::Activity, "the feed stays");
         assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2");
     });
     cx.simulate_keystrokes("a");
@@ -683,7 +683,7 @@ fn g_r_opens_the_graph_fitted_and_a_click_opens_a_card(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("g r");
     draw_graph(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Graph);
+        assert_eq!(a.model().view(), View::Graph);
         assert_eq!(a.model().graph.nodes.len(), 3);
     });
     let graph = cx.debug_bounds("graph").expect("drawn");
@@ -701,7 +701,7 @@ fn g_r_opens_the_graph_fitted_and_a_click_opens_a_card(cx: &mut TestAppContext) 
     }
     click_on(cx, "gnode-LIV-2");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Graph, "the graph stays");
+        assert_eq!(a.model().view(), View::Graph, "the graph stays");
         assert_eq!(a.model().detail.as_ref().unwrap().node.key, "LIV-2");
     });
 }
@@ -995,7 +995,7 @@ fn a_board_cards_priority_and_the_panels_are_set_from_menus_too(cx: &mut TestApp
     cx.simulate_keystrokes("g t b");
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().layout, livtk_app::model::Layout::Board)
+        assert_eq!(a.model().layout(), livtk_app::model::Layout::Board)
     });
     click_on(
         cx,
@@ -1493,7 +1493,7 @@ fn the_docks_new_task_button_works(cx: &mut TestAppContext) {
     click_on(cx, "dock-view");
     click_on(cx, "view-layout-board");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().layout, livtk_app::model::Layout::Board)
+        assert_eq!(a.model().layout(), livtk_app::model::Layout::Board)
     });
     click_on(cx, "view-show-dismissed");
     app.read_with(cx, |a, _| assert!(a.model().display().show_dismissed));
@@ -1724,7 +1724,7 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
     resize(cx, 1400., 900.);
     cx.simulate_keystrokes("g x");
     redraw(cx);
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Terminal));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Terminal));
     assert!(
         cx.debug_bounds("terminal").is_some(),
         "the terminal is drawn"
@@ -1732,7 +1732,7 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("g t");
     redraw(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Terminal, "typed into the shell");
+        assert_eq!(a.model().view(), View::Terminal, "typed into the shell");
     });
     cx.update(|window, cx| {
         assert!(app.read(cx).terminal_focused(window, cx), "it has the keys");
@@ -1765,11 +1765,15 @@ fn the_terminal_has_the_keys_but_the_apps_command_keys(cx: &mut TestAppContext) 
         );
     });
     click_on(cx, "view-Tasks");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
     cx.simulate_keystrokes("g x");
     redraw(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Terminal, "the list's keys work again");
+        assert_eq!(
+            a.model().view(),
+            View::Terminal,
+            "the list's keys work again"
+        );
     });
 }
 
@@ -1792,7 +1796,7 @@ fn the_docs_list_opens_a_doc_to_read_and_follows_links(cx: &mut TestAppContext) 
     resize(cx, 1400., 900.);
     cx.simulate_keystrokes("g o");
     redraw(cx);
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Docs));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Docs));
     assert!(cx.debug_bounds("docs-list").is_some(), "the list");
     assert!(
         cx.debug_bounds("doc-folder-docs/guide").is_some(),
@@ -2164,7 +2168,7 @@ fn an_empty_list_offers_to_clear_its_filter(cx: &mut TestAppContext) {
     click_on(cx, "empty-clear-filter");
     app.read_with(cx, |a, _| {
         assert!(a.model().display().filter.is_empty());
-        assert!(!a.model().rows.is_empty());
+        assert!(!a.model().rows().is_empty());
     });
 }
 
@@ -2180,9 +2184,9 @@ fn the_rails_buttons_go_to_views_and_shortcuts(cx: &mut TestAppContext) {
         "the proposed lesson waits in the inbox: its button has a dot"
     );
     click_on(cx, "rail-Tasks");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
     click_on(cx, "rail-Lessons");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Lessons));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Lessons));
     assert!(
         cx.debug_bounds("rail-projects").is_none(),
         "projects are the top bar's"
@@ -2307,7 +2311,7 @@ fn the_layout_and_each_views_display_come_back_after_a_restart(cx: &mut TestAppC
     resize(cx, 1600., 900.);
     app.update_in(cx, |a, window, cx| a.remember(path.clone(), window, cx));
     redraw(cx);
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Tasks));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
     assert!(cx.debug_bounds("rail").is_some(), "still collapsed");
     cx.simulate_keystrokes("secondary-b");
     redraw(cx);
@@ -2596,7 +2600,7 @@ fn view_options_open_upwards_and_turn_empty_groups_and_dismissed_work_on(cx: &mu
     app.read_with(cx, |a, _| {
         assert!(a.model().display().show_empty);
         assert_eq!(
-            a.model().groups.len(),
+            a.model().groups().len(),
             7,
             "a band for every task state not dismissed"
         );
@@ -2609,7 +2613,7 @@ fn view_options_open_upwards_and_turn_empty_groups_and_dismissed_work_on(cx: &mu
     click_on(cx, "view-show-dismissed");
     app.read_with(cx, |a, _| {
         assert!(a.model().display().show_dismissed);
-        assert_eq!(a.model().groups.len(), 8, "and canceled");
+        assert_eq!(a.model().groups().len(), 8, "and canceled");
     });
 
     // Closed, `s d` still shows and hides dismissed work.
@@ -2618,7 +2622,7 @@ fn view_options_open_upwards_and_turn_empty_groups_and_dismissed_work_on(cx: &mu
     cx.simulate_keystrokes("s d");
     app.read_with(cx, |a, _| {
         assert!(!a.model().display().show_dismissed);
-        assert_eq!(a.model().groups.len(), 7);
+        assert_eq!(a.model().groups().len(), 7);
     });
 }
 
@@ -2649,15 +2653,15 @@ fn view_options_choose_list_or_board_above_a_line_and_keys_set_each_option(
 
     click_on(cx, "view-layout-board");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().layout, Layout::Board);
+        assert_eq!(a.model().layout(), Layout::Board);
         assert_eq!(a.menu_open(), Some("view"), "a choice leaves the menu open");
     });
     click_on(cx, "view-layout-list");
-    app.read_with(cx, |a, _| assert_eq!(a.model().layout, Layout::List));
+    app.read_with(cx, |a, _| assert_eq!(a.model().layout(), Layout::List));
     click_on(cx, "dock-view");
     cx.simulate_keystrokes("b");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().layout, Layout::Board, "b still switches")
+        assert_eq!(a.model().layout(), Layout::Board, "b still switches")
     });
     cx.simulate_keystrokes("b s e");
     app.read_with(cx, |a, _| {
@@ -2752,13 +2756,13 @@ fn the_filter_menu_narrows_by_state(cx: &mut TestAppContext) {
     click_on(cx, "filter-state-backlog");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().display().states, [State::Backlog]);
-        assert!(a.model().rows.is_empty(), "both tasks are planned");
+        assert!(a.model().rows().is_empty(), "both tasks are planned");
         assert_eq!(a.menu_open(), Some("filter"), "a box leaves the menu open");
     });
     click_on(cx, "clear-filters");
     app.read_with(cx, |a, _| {
         assert!(a.model().display().states.is_empty());
-        assert_eq!(a.model().rows.len(), 2);
+        assert_eq!(a.model().rows().len(), 2);
     });
 
     // The inbox mixes kinds: it has no states to filter by.
@@ -2832,7 +2836,7 @@ fn what_arrives_while_the_window_is_away_is_a_system_notification(cx: &mut TestA
     cx.simulate_keystrokes("g t");
     click_on(cx, "notice-act-0");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Inbox, "Open goes to the inbox");
+        assert_eq!(a.model().view(), View::Inbox, "Open goes to the inbox");
         assert_eq!(
             a.model().selected().map(|r| r.key.clone()),
             Some(front.clone())
@@ -2856,7 +2860,7 @@ fn what_arrives_while_the_window_is_away_is_a_system_notification(cx: &mut TestA
     });
     cx.run_until_parked();
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Inbox, "a click opens the inbox");
+        assert_eq!(a.model().view(), View::Inbox, "a click opens the inbox");
         assert_eq!(
             a.model().selected().map(|r| r.key.clone()),
             Some(key.clone())
@@ -3053,7 +3057,7 @@ fn the_menu_bars_keys_work_from_anywhere(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes("secondary-3");
     app.read_with(cx, |a, _| {
-        assert_eq!(a.model().view, View::Inbox, "no view by number")
+        assert_eq!(a.model().view(), View::Inbox, "no view by number")
     });
     cx.simulate_keystrokes("secondary-n");
     app.read_with(cx, |a, _| assert!(a.form_open(), "Cmd+N opens a new task"));
@@ -3204,7 +3208,7 @@ fn the_shortcuts_and_about_keep_the_keys_from_the_list(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(state_of(dir.path(), "LIV-1"), before, "nothing decided");
     assert_eq!(priority_of(dir.path(), "LIV-1"), 3, "no priority set");
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Inbox));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Inbox));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(cx.debug_bounds("about").is_none());
@@ -3273,7 +3277,7 @@ fn the_docks_items_work_with_no_window_active(cx: &mut TestAppContext) {
     assert!(available(cx), "the Dock's item is not greyed");
     cx.update(|_, cx| cx.defer(|cx| cx.dispatch_action(&livtk_app::ui::GoInbox)));
     cx.run_until_parked();
-    app.read_with(cx, |a, _| assert_eq!(a.model().view, View::Inbox));
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Inbox));
     cx.deactivate_window();
     cx.update(|_, cx| cx.defer(|cx| cx.dispatch_action(&livtk_app::ui::NewTask)));
     cx.run_until_parked();

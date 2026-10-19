@@ -621,6 +621,88 @@ impl LivtkApp {
         )
     }
 
+    /// The split's group on the collapsed sidebar's rail: each pane's view as a rail button
+    /// in a box, the focused one lit; a click focuses its pane, the × at its corner (on hover)
+    /// unsplits it. Buttons fade in as they join.
+    pub(super) fn rail_split(
+        &self,
+        split: &[(u64, Option<View>)],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if split.is_empty() {
+            return None;
+        }
+        let focused = (!self.model.solo()).then(|| self.model.focused_id());
+        let motion = if cx.reduce_motion() {
+            std::time::Duration::ZERO
+        } else {
+            super::SLIDE
+        };
+        let mut group = div()
+            .debug_selector(|| "rail-split".into())
+            .p(px(3.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(2.))
+            .rounded_xl()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER));
+        for &(id, view) in split {
+            let Some(i) = self.model.pane_index(id) else {
+                continue;
+            };
+            let (glyph, label) = match view {
+                Some(v) => (view_icon(v), v.title()),
+                None => (Icon::Grouping, "Empty pane"),
+            };
+            let name = view.map_or("empty".to_owned(), |v| v.title().to_owned());
+            let unsplit = format!("rail-unsplit-{name}");
+            let button = super::rail_button(
+                SharedString::from(format!("rail-split-{name}")),
+                glyph,
+                focused == Some(id),
+                false,
+                SharedString::from(format!("{label} · in the split")),
+            )
+            .group("rail-split-button")
+            .child(
+                div()
+                    .id(SharedString::from(unsplit.clone()))
+                    .debug_selector(move || unsplit.clone())
+                    .group("rail-unsplit")
+                    .absolute()
+                    .top(px(-3.))
+                    .right(px(-3.))
+                    .size(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(color(LIFTED))
+                    .border_1()
+                    .border_color(color(BORDER_STRONG))
+                    .invisible()
+                    .group_hover("rail-split-button", |s| s.visible())
+                    .child(icon_hover(Icon::Close, 10., TEXT_3, "rail-unsplit", TEXT))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.unsplit(id, window, cx);
+                    })),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.focus_pane(i, window, cx);
+            }));
+            group = group.child(div().child(button).with_animation(
+                SharedString::from(format!("rail-split-in-{id}-{name}")),
+                Animation::new(motion).with_easing(super::ease_out_cubic),
+                |el, t| el.opacity(t).mt(px(-6. * (1. - t))),
+            ));
+        }
+        Some(group.into_any_element())
+    }
+
     /// Pane `id` taken out of the split: closed, its view back in its usual place.
     fn unsplit(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         let was = self.model.shown_split();

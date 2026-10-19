@@ -29,7 +29,8 @@ list's place, behind a header bar, and Esc gives the list back.
 - A split starts with a placeholder: the views to put in it, and a way to close it.
 - While there is a split, its views sit grouped at the sidebar's top (sliding in as they join),
   in the split's order, the focused one lit; each has an unsplit button that closes its pane
-  and puts the view back in its usual place.
+  and puts the view back in its usual place. The collapsed sidebar's rail groups them the same
+  way, the unsplit × at a button's corner.
 - The sidebar picks a view the split has: its pane is focused. A view the split does not have
   shows alone over it, and the split comes back when one of its views is picked (or with the
   next pane's key, or closing the view alone). Splitting a view shown alone takes it into the

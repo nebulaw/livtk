@@ -3572,3 +3572,38 @@ fn the_divider_between_panes_is_dragged_as_the_sidebars_edge(cx: &mut TestAppCon
     });
     assert!((shares - 0.5).abs() < 1e-4, "evened out: {shares}");
 }
+
+/// On the collapsed sidebar's rail the split's views are grouped too, out of their usual
+/// places; a click focuses a pane, the × at a button's corner unsplits it.
+#[gpui_kit::test]
+fn the_rail_groups_the_splits_views_and_unsplits_them(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g x secondary-\\");
+    redraw(cx);
+    click_on(cx, "place-tasks");
+    cx.simulate_keystrokes("secondary-b");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("rail-split").is_some(),
+        "the group on the rail"
+    );
+    assert!(
+        cx.debug_bounds("rail-Terminal").is_none(),
+        "out of its usual place"
+    );
+    click_on(cx, "rail-split-Terminal");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Terminal));
+    let button = cx.debug_bounds("rail-split-Tasks").unwrap();
+    cx.simulate_mouse_move(button.center(), None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    click_on(cx, "rail-unsplit-Tasks");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().panes().len(), 1));
+    assert!(cx.debug_bounds("rail-split").is_none());
+    assert!(cx.debug_bounds("rail-Tasks").is_some(), "back in its place");
+}

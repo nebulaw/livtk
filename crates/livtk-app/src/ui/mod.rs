@@ -2399,11 +2399,19 @@ impl LivtkApp {
             .pb_3()
             .pt_1()
             .gap(px(2.));
+        // The split's views first, grouped, as on the sidebar; out of their usual places.
+        let split = self.model.split_views();
+        if let Some(group) = self.rail_split(&split, cx) {
+            rail = rail.child(group).child(div().h(px(10.)));
+        }
         for view in View::ALL {
             // The inbox and the feed, the views of the work, the tools, as the sidebar groups
             // them.
             if matches!(view, View::Tasks | View::Graph) {
                 rail = rail.child(div().h(px(14.)));
+            }
+            if split.iter().any(|(_, v)| *v == Some(view)) {
+                continue;
             }
             let new = match view {
                 View::Inbox => inbox > 0,

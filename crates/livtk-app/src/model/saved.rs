@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use livtk_core::State;
 use serde::{Deserialize, Serialize};
 
-use super::{Display, GroupKey, Grouping, Layout, Model, Ordering, View};
+use super::{Display, GroupKey, Grouping, Layout, Model, Ordering, Pane, Split, View};
 
 /// Everything remembered, as written to `app.toml`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -38,7 +38,25 @@ pub struct Saved {
     /// How docs read: "small", "regular" or "large", and compact or not.
     pub reading_size: Option<String>,
     pub reading_compact: bool,
+    /// The panes: how they are laid out, what each shows, and the one focused.
+    pub panes: Option<SavedPanes>,
     pub window: SavedWindow,
+}
+
+/// The panes as remembered: the split by the panes' ids, each pane, the focused one's id.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedPanes {
+    pub split: Split,
+    pub panes: Vec<SavedPane>,
+    pub focused: u64,
+}
+
+/// A pane as remembered: its view by name (none while it is a placeholder), list or board.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedPane {
+    pub id: u64,
+    pub view: Option<String>,
+    pub board: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -196,6 +214,19 @@ impl Model {
                 .to_owned(),
             ),
             show_all: false,
+            panes: Some(SavedPanes {
+                split: self.split.clone(),
+                panes: self
+                    .panes
+                    .iter()
+                    .map(|p| SavedPane {
+                        id: p.id,
+                        view: (!p.placeholder).then(|| view_name(p.view)),
+                        board: p.layout == Layout::Board,
+                    })
+                    .collect(),
+                focused: self.pane().id,
+            }),
             views,
             told_no_notifications: self.told_no_notifications,
             reading_size: Some(self.reading.size.name().to_lowercase()),
@@ -284,6 +315,12 @@ impl Model {
         {
             self.select_project(i);
         }
+        if let Some(panes) = &saved.panes
+            && self.restore_panes(panes)
+        {
+            self.reload();
+            return;
+        }
         let view = View::ALL
             .into_iter()
             .find(|v| Some(view_name(*v)) == saved.view);
@@ -291,5 +328,54 @@ impl Model {
             Some(v) if v != self.pane().view => self.set_view(v),
             _ => self.reload(),
         }
+    }
+}
+
+impl Model {
+    /// The panes as remembered, when what was remembered holds together: each pane in the split
+    /// once. A view remembered in two panes shows in the first; the other waits for a view.
+    fn restore_panes(&mut self, saved: &SavedPanes) -> bool {
+        let mut ids = saved.split.ids();
+        let mut theirs: Vec<u64> = saved.panes.iter().map(|p| p.id).collect();
+        ids.sort_unstable();
+        theirs.sort_unstable();
+        if ids.is_empty() || ids != theirs || ids.windows(2).any(|w| w[0] == w[1]) {
+            return false;
+        }
+        let mut shown: Vec<View> = Vec::new();
+        let panes: Vec<Pane> = saved
+            .panes
+            .iter()
+            .map(|sp| {
+                let view = View::ALL
+                    .into_iter()
+                    .find(|v| sp.view.as_deref() == Some(view_name(*v).as_str()))
+                    .filter(|v| !shown.contains(v));
+                let mut p = Pane::new(sp.id, view.unwrap_or(View::Inbox));
+                p.placeholder = view.is_none();
+                p.layout = if sp.board {
+                    Layout::Board
+                } else {
+                    Layout::List
+                };
+                shown.extend(view);
+                p
+            })
+            .collect();
+        self.next_pane = ids.last().map_or(0, |m| m + 1);
+        self.at = panes
+            .iter()
+            .position(|p| p.id == saved.focused)
+            .unwrap_or(0);
+        self.panes = panes;
+        self.split = saved.split.clone();
+        if let Some(i) = self
+            .panes
+            .iter()
+            .position(|p| !p.placeholder && p.view == View::Activity)
+        {
+            self.with_pane(i, Model::enter_activity);
+        }
+        true
     }
 }

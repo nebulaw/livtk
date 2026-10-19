@@ -3466,3 +3466,42 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
         assert_eq!(a.model().panes().len(), 1, "never the last")
     });
 }
+
+/// Terminals the VS Code way: Cmd-T starts another, a list beside names them, a click shows
+/// one, its × kills it, and with one left the list goes.
+#[gpui_kit::test]
+fn cmd_t_starts_another_terminal_listed_beside_and_its_cross_kills_it(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 1000.);
+    // From the list: the first terminal, no list beside it yet.
+    cx.simulate_keystrokes("secondary-t");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Terminal));
+    assert!(cx.debug_bounds("terminal-list").is_none(), "one: no list");
+    cx.simulate_keystrokes("secondary-t");
+    redraw(cx);
+    assert!(cx.debug_bounds("terminal-list").is_some(), "two: listed");
+    assert!(cx.debug_bounds("terminal-1").is_some());
+    cx.update(|window, cx| {
+        assert!(
+            app.read(cx).terminal_focused(window, cx),
+            "the new one has the keys"
+        )
+    });
+    click_on(cx, "terminal-0");
+    redraw(cx);
+    cx.update(|window, cx| assert!(app.read(cx).terminal_focused(window, cx)));
+    // Over the second, its × shows; pressed, it is gone, and so is the list.
+    let line = cx.debug_bounds("terminal-1").unwrap();
+    cx.simulate_mouse_move(line.center(), None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    click_on(cx, "terminal-kill-1");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("terminal-list").is_none(),
+        "one left: no list"
+    );
+    assert!(cx.debug_bounds("terminal").is_some());
+}

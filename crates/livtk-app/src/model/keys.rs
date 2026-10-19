@@ -15,6 +15,12 @@ pub const SIDEBAR: &str = if MAC { "⌘ B" } else { "Ctrl B" };
 /// The bottom bar and the detail panel, shown or hidden.
 pub const BOTTOM: &str = if MAC { "⌘ J" } else { "Ctrl J" };
 pub const PANEL: &str = if MAC { "⌥ ⌘ B" } else { "Ctrl Alt B" };
+/// Panes: split the focused one right or down, close it, go to the next; another terminal.
+pub const SPLIT_RIGHT: &str = if MAC { "⌘ \\" } else { "Ctrl \\" };
+pub const SPLIT_DOWN: &str = if MAC { "⌥ ⌘ \\" } else { "Ctrl Alt \\" };
+pub const CLOSE_PANE: &str = if MAC { "⌥ ⌘ W" } else { "Ctrl Alt W" };
+pub const NEXT_PANE: &str = if MAC { "⌥ ⌘ ]" } else { "Ctrl Alt ]" };
+pub const NEW_TERMINAL: &str = if MAC { "⌘ T" } else { "Ctrl T" };
 pub const ALT: &str = if MAC { "⌥" } else { "Alt" };
 pub const SUBMIT: &str = if MAC { "⌘ ↵" } else { "Ctrl ↵" };
 /// Ratify as a standing rule.

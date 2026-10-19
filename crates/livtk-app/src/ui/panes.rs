@@ -283,7 +283,7 @@ impl LivtkApp {
             return editor;
         }
         let content = match self.terminal_view(cx) {
-            Some(t) => div().flex_1().min_h_0().child(t).into_any_element(),
+            Some(t) => self.terminal_element(t, cx),
             None => self.content(window, cx),
         };
         div()

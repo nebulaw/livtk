@@ -143,3 +143,36 @@ fn a_change_from_elsewhere_reaches_every_pane() {
         "the tasks' pane, unfocused"
     );
 }
+
+#[test]
+fn the_panes_come_back_after_a_restart_as_they_were_left() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+    let mut m = open(dir.path());
+    m.set_view(View::Terminal);
+    m.split_pane(Axis::Row);
+    m.set_view(View::Tasks);
+    m.toggle_layout();
+    m.split_pane(Axis::Column);
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = open(dir.path());
+    back.restore(&livtk_app::model::Saved::load(&path));
+    assert_eq!(back.split, m.split, "laid out the same");
+    assert_eq!(
+        views(&back),
+        [Some(View::Terminal), Some(View::Tasks), None]
+    );
+    assert!(back.placeholder(), "the placeholder, focused as it was");
+    back.focus_next_pane(-1);
+    assert_eq!(back.view(), View::Tasks);
+    assert_eq!(back.layout(), livtk_app::model::Layout::Board);
+    assert_eq!(back.rows().len(), 3, "and read");
+    // A new pane takes an id none has.
+    back.split_pane(Axis::Row);
+    let mut ids = back.split.ids();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4);
+}

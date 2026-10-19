@@ -15,6 +15,7 @@ pub mod menus;
 mod panes;
 pub mod state_flow;
 pub mod terminal;
+mod terminals;
 mod theme;
 
 use std::cell::Cell;
@@ -111,6 +112,7 @@ actions!(
         ClosePane,
         NextPane,
         PrevPane,
+        NewTerminal,
         OpenPalette,
         PaletteUp,
         PaletteDown,
@@ -310,6 +312,23 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Docs", &[keys::MOD, "+", "]"], "Forward again"),
     ("Navigate", &["G", "then", "X"], "Terminal"),
     ("Navigate", &["[", "or", "]"], "Previous or next project"),
+    ("Panes", &[keys::MOD, "+", "\\"], "Split the pane right"),
+    (
+        "Panes",
+        &[keys::ALT, "+", keys::MOD, "+", "\\"],
+        "Split the pane down",
+    ),
+    (
+        "Panes",
+        &[keys::ALT, "+", keys::MOD, "+", "]", "or", "["],
+        "Next or previous pane",
+    ),
+    (
+        "Panes",
+        &[keys::ALT, "+", keys::MOD, "+", "W"],
+        "Close the pane",
+    ),
+    ("Panes", &[keys::MOD, "+", "T"], "Another terminal"),
     ("Decide", &["A"], "Acknowledge, ratify or accept"),
     (
         "Decide",
@@ -516,6 +535,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-alt-w", ClosePane, None),
         KeyBinding::new("secondary-alt-]", NextPane, None),
         KeyBinding::new("secondary-alt-[", PrevPane, None),
+        KeyBinding::new("secondary-t", NewTerminal, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
         // Ctrl+N and Ctrl+P are Control on every platform, as in every Mac text field.
         KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
@@ -660,9 +680,9 @@ pub struct LivtkApp {
     rail_from: Option<f32>,
     /// The docs reader: its scrolling, its sections, its find bar.
     reader: docs::Reader,
-    /// Each project's terminal, by its folder: started the first time it is shown, kept while
-    /// the app runs.
-    terminals: HashMap<PathBuf, Entity<terminal::TerminalPane>>,
+    /// Each project's terminals, by its folder: the first started the first time the view is
+    /// shown, all kept while the app runs.
+    terminals: HashMap<PathBuf, terminals::Terminals>,
     /// The view and project last drawn, so arriving at a terminal gives it the keys, and leaving
     /// gives them back to the list.
     last_place: Option<(u64, View, usize)>,
@@ -1262,6 +1282,11 @@ impl LivtkApp {
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.set_help(true, window, cx),
+            Some(Ask::SplitRight) => self.split_pane(PaneAxis::Row, window, cx),
+            Some(Ask::SplitDown) => self.split_pane(PaneAxis::Column, window, cx),
+            Some(Ask::ClosePane) => self.close_pane(window, cx),
+            Some(Ask::NextPane) => self.next_pane(1, window, cx),
+            Some(Ask::NewTerminal) => self.new_terminal(window, cx),
             Some(Ask::PickLink) | None => {}
         }
         self.after_move(cx);
@@ -1326,22 +1351,9 @@ impl LivtkApp {
         cx.notify();
     }
 
-    /// The open project's terminal, once it has one.
+    /// The open project's terminal shown, once it has one.
     fn current_terminal(&self) -> Option<&Entity<terminal::TerminalPane>> {
-        self.terminals.get(&self.model.project()?.dir)
-    }
-
-    /// In the Terminal view, the open project's terminal, made the first time.
-    fn terminal_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<terminal::TerminalPane>> {
-        if self.model.view() != View::Terminal || self.model.placeholder() {
-            return None;
-        }
-        let dir = self.model.project()?.dir.clone();
-        let pane = self
-            .terminals
-            .entry(dir.clone())
-            .or_insert_with(|| cx.new(|cx| terminal::TerminalPane::new(dir, cx)));
-        Some(pane.clone())
+        self.terminals.get(&self.model.project()?.dir)?.current()
     }
 
     /// Arriving at a terminal (by any way: a key, the sidebar, the palette, another project)
@@ -5427,6 +5439,11 @@ impl LivtkApp {
             Run::Ask(Ask::EditTitle | Ask::EditBody) => Icon::Edit,
             Run::Ask(Ask::OpenFolder) => Icon::OpenProject,
             Run::Ask(Ask::Help) => Icon::Shortcuts,
+            Run::Ask(Ask::SplitRight) => Icon::PanelRight,
+            Run::Ask(Ask::SplitDown) => Icon::PanelBottom,
+            Run::Ask(Ask::ClosePane) => Icon::Close,
+            Run::Ask(Ask::NextPane) => Icon::ArrowRight,
+            Run::Ask(Ask::NewTerminal) => Icon::Terminal,
         };
         slot.child(icon(glyph, 16., TEXT_3))
     }
@@ -6350,7 +6367,7 @@ impl Render for LivtkApp {
             .flatten();
         let main = match (self.terminal_view(cx), editing) {
             (_, Some(e)) => e,
-            (Some(t), None) => div().flex_1().min_h_0().child(t).into_any_element(),
+            (Some(t), None) => self.terminal_element(t, cx),
             (None, None) => list_area.into_any_element(),
         };
         // The focused pane: its view with the keys, the dock floating over its bottom, the docs'
@@ -6490,6 +6507,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &ClosePane, w, cx| this.close_pane(w, cx)))
             .on_action(cx.listener(|this, _: &NextPane, w, cx| this.next_pane(1, w, cx)))
             .on_action(cx.listener(|this, _: &PrevPane, w, cx| this.next_pane(-1, w, cx)))
+            .on_action(cx.listener(|this, _: &NewTerminal, w, cx| this.new_terminal(w, cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleHelp, window, cx| {
                     this.set_help(!this.help, window, cx)

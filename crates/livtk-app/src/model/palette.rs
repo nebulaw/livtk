@@ -114,6 +114,11 @@ pub enum Ask {
     EditBody,
     OpenFolder,
     Help,
+    SplitRight,
+    SplitDown,
+    ClosePane,
+    NextPane,
+    NewTerminal,
 }
 
 /// A node the palette found.
@@ -679,6 +684,33 @@ impl Model {
                 Run::ToggleDismissed,
             ));
         }
+        out.push(plain(
+            "Split pane right",
+            Some(super::keys::SPLIT_RIGHT),
+            Run::Ask(Ask::SplitRight),
+        ));
+        out.push(plain(
+            "Split pane down",
+            Some(super::keys::SPLIT_DOWN),
+            Run::Ask(Ask::SplitDown),
+        ));
+        if self.panes.len() > 1 {
+            out.push(plain(
+                "Close pane",
+                Some(super::keys::CLOSE_PANE),
+                Run::Ask(Ask::ClosePane),
+            ));
+            out.push(plain(
+                "Next pane",
+                Some(super::keys::NEXT_PANE),
+                Run::Ask(Ask::NextPane),
+            ));
+        }
+        out.push(plain(
+            "New terminal",
+            Some(super::keys::NEW_TERMINAL),
+            Run::Ask(Ask::NewTerminal),
+        ));
         out.push(plain(
             "Keyboard shortcuts",
             Some(super::keys::HELP),

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""What others do in the project, as it happens: one short line per thing an agent working
+here needs to hear. The human's moves (an ack, a done, a task sent back), tasks and nodes
+created, notes, edits, links and doc links, and work unblocked. Claude's own are left out.
+
+    scripts/watch [--since EVENT] [--state FILE] [-C DIR]
+
+Runs until stopped, following `livtk events` and picking it up again where it left off if it
+ends (a new livtk installed, the store rebuilt). With `--state`, the last event seen is kept in
+FILE and a watch started again goes on from there, so nothing between two watches is missed.
+"""
+
+import json
+import subprocess
+import sys
+import time
+
+
+def show(key, cwd):
+    """The node's title, or nothing."""
+    try:
+        out = subprocess.run(
+            ["livtk", "show", key, "--json"], cwd=cwd, capture_output=True, text=True, timeout=10
+        )
+        return json.loads(out.stdout)["node"]["title"]
+    except Exception:
+        return ""
+
+
+def line(s, cwd):
+    """The line to print for signal `s`, or None to pass it over."""
+    by = s.get("by", "")
+    if by == "claude":
+        return None
+    key, what = s.get("key", "?"), s["signal"]
+    who = "" if by == "human" else f" ({by})"
+    if what == "node.created":
+        return f"{key} created{who}: {show(key, cwd)}"
+    if what == "node.moved":
+        return f"{key} {s.get('from')} -> {s.get('to')}{who}"
+    if what == "node.noted":
+        text = " ".join(s.get("text", "").split())
+        return f"{key} noted{who}: {text[:240]}"
+    if what == "node.edited":
+        return f"{key} edited{who}: {', '.join(s.get('fields', []))}"
+    if what in ("link.added", "link.removed"):
+        verb = "linked" if what == "link.added" else "unlinked"
+        return f"{key} {verb} {s.get('rel')} {s.get('other')}{who}"
+    if what in ("doc.linked", "doc.unlinked"):
+        verb = "linked" if what == "doc.linked" else "unlinked"
+        return f"{key} {verb} doc {s.get('path')}{who}"
+    if what == "work.unblocked":
+        return f"{key} unblocked"
+    # decision.needed / decision.made repeat a move already told.
+    return None
+
+
+def main():
+    args = sys.argv[1:]
+    cwd = None
+    since = None
+    state = None
+    while args:
+        a = args.pop(0)
+        if a == "-C":
+            cwd = args.pop(0)
+        elif a == "--since":
+            since = args.pop(0)
+        elif a == "--state":
+            state = args.pop(0)
+    if since is None and state:
+        try:
+            with open(state) as f:
+                since = f.read().strip() or None
+        except OSError:
+            pass
+    if since is None:
+        last = subprocess.run(["livtk", "events"], cwd=cwd, capture_output=True, text=True)
+        lines = last.stdout.strip().splitlines()
+        since = json.loads(lines[-1])["event"] if lines else None
+    while True:
+        cmd = ["livtk", "events", "--follow"] + (["--since", since] if since else [])
+        with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, text=True) as p:
+            for raw in p.stdout:
+                try:
+                    s = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                since = s.get("event", since)
+                out = line(s, cwd)
+                if out:
+                    print(out, flush=True)
+                if state and since:
+                    with open(state, "w") as f:
+                        f.write(since)
+        print("watch: livtk events ended; following again", file=sys.stderr, flush=True)
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

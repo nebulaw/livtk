@@ -3029,8 +3029,9 @@ impl LivtkApp {
     /// zoom; none in a view with nothing for it. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
     fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
-        // A placeholder has no view yet, nothing to filter or shape.
-        if self.model.placeholder() {
+        // A placeholder has no view yet, nothing to filter or shape; a detail open as a full
+        // page in its place has the list's dock no more.
+        if self.model.placeholder() || self.full_page_here() {
             return None;
         }
         let view = self.model.view();

@@ -3722,6 +3722,10 @@ fn the_detail_opens_as_a_side_peek_a_center_peek_or_a_full_page(cx: &mut TestApp
         cx.debug_bounds("full-page").is_some(),
         "in the list's place"
     );
+    assert!(
+        cx.debug_bounds("dock").is_none(),
+        "the list's dock gone with it"
+    );
     assert!(cx.debug_bounds("center-peek").is_none());
     assert!(cx.debug_bounds("detail-panel").is_none(), "no panel beside");
     cx.simulate_keystrokes("escape");
@@ -3730,6 +3734,7 @@ fn the_detail_opens_as_a_side_peek_a_center_peek_or_a_full_page(cx: &mut TestApp
         cx.debug_bounds("full-page").is_none(),
         "Esc gives the list back"
     );
+    assert!(cx.debug_bounds("dock").is_some(), "and its dock");
     // The next detail opens the same way.
     cx.simulate_keystrokes("enter");
     settle(cx);
@@ -3763,4 +3768,143 @@ fn a_full_page_in_a_split_stays_in_its_pane(cx: &mut TestAppContext) {
     redraw(cx);
     let still = cx.debug_bounds("full-page").expect("still shown");
     assert!((f32::from(still.left()) - f32::from(page.left())).abs() < 1.);
+}
+
+#[gpui_kit::test]
+fn probe_full_page_esc_with_menu_open(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
+    cx.simulate_keystrokes("g t enter");
+    settle(cx);
+    assert!(cx.debug_bounds("full-page").is_some());
+    click_on(cx, "detail-mode");
+    settle(cx);
+    assert!(cx.debug_bounds("detail-mode-menu").is_some(), "menu open");
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    let open = app.read_with(cx, |a, _| a.model().detail.is_some());
+    let menu = cx.debug_bounds("detail-mode-menu").is_some();
+    eprintln!("PROBE1 detail_open={open} menu_visible={menu}");
+}
+
+#[gpui_kit::test]
+fn probe_full_page_note_escape(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g t c");
+    settle(cx);
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    let side = app.read_with(cx, |a, _| a.model().detail.is_some());
+    // full page
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
+    redraw(cx);
+    cx.simulate_keystrokes("c");
+    settle(cx);
+    app.update(cx, |a, _| a.model_mut().close_detail());
+    redraw(cx);
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    eprintln!("PROBE2 side_after_note_esc_open={side}");
+}
+
+#[gpui_kit::test]
+fn probe_close_pane_with_full_page(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
+    cx.simulate_keystrokes("g x secondary-\\");
+    redraw(cx);
+    click_on(cx, "place-tasks");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    assert!(cx.debug_bounds("full-page").is_some());
+    cx.simulate_keystrokes("secondary-alt-w");
+    settle(cx);
+    let open = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().map(|d| d.node.key.clone())
+    });
+    let shown = cx.debug_bounds("full-page").is_some()
+        || cx.debug_bounds("detail-panel").is_some()
+        || cx.debug_bounds("center-peek").is_some();
+    eprintln!("PROBE3 detail={open:?} shown={shown}");
+}
+
+#[gpui_kit::test]
+fn probe_center_peek_new_task(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Center
+    });
+    cx.simulate_keystrokes("g t enter");
+    settle(cx);
+    assert!(cx.debug_bounds("center-peek").is_some());
+    cx.simulate_keystrokes("n");
+    settle(cx);
+    let form = cx.debug_bounds("new-task-card");
+    let peek = cx.debug_bounds("center-peek").is_some();
+    eprintln!("PROBE4 form={form:?} peek={peek}");
+    if let Some(b) = form {
+        cx.simulate_click(b.center(), gpui_kit::Modifiers::default());
+        settle(cx);
+        let open = app.read_with(cx, |a, _| a.model().detail.is_some());
+        eprintln!("PROBE4 after click on form: detail_open={open}");
+    }
+}
+
+#[gpui_kit::test]
+fn probe_note_esc_full(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g t c");
+    settle(cx);
+    app.update(cx, |a, _| a.model_mut().detail_mode = livtk_app::model::DetailMode::Full);
+    redraw(cx);
+    assert!(cx.debug_bounds("full-page").is_some());
+    cx.simulate_keystrokes("h i");
+    settle(cx);
+    let open1 = app.read_with(cx, |a, _| a.model().detail.is_some());
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    let open = app.read_with(cx, |a, _| a.model().detail.is_some());
+    eprintln!("PROBE5 after typing open={open1}; after esc in note field detail_open={open}");
+}
+
+#[gpui_kit::test]
+fn probe_stale_menu(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    app.update(cx, |a, _| a.model_mut().detail_mode = livtk_app::model::DetailMode::Full);
+    cx.simulate_keystrokes("g t enter");
+    settle(cx);
+    click_on(cx, "detail-mode");
+    settle(cx);
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    cx.simulate_keystrokes("j enter");
+    settle(cx);
+    let menu = cx.debug_bounds("detail-mode-menu").is_some();
+    let sel = app.read_with(cx, |a, _| a.model().detail.as_ref().map(|d| d.node.key.clone()));
+    eprintln!("PROBE6 reopened detail={sel:?} menu_still_open={menu}");
 }

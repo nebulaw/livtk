@@ -155,6 +155,14 @@ impl LivtkApp {
         )
     }
 
+    /// Whether the pane acted on shows a detail as a full page.
+    pub(super) fn full_page_here(&self) -> bool {
+        let m = &self.model;
+        m.detail_mode == DetailMode::Full
+            && m.detail.is_some()
+            && m.detail_pane == Some(m.panes()[m.focused()].id)
+    }
+
     /// The full page: in the pane acted on, when it is the one the detail was opened from, the
     /// detail in the list's place, `width` wide. Focused, it has the keys (Esc closes it);
     /// outside the list's, so its note field is typed in freely.

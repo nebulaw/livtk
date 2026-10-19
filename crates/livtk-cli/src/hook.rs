@@ -87,6 +87,9 @@ pub fn run(event: &str) -> ExitCode {
 
 fn session_start(input: &Value) -> Option<Value> {
     let mut ws = Workspace::open(&cwd(input)).ok()?;
+    if !ws.config().hook_on("session-start") {
+        return None;
+    }
     let mut text = brief(&ws, false)?;
     // What the project's config asks that livtk no longer does: said where Claude reads it.
     for w in ws.take_warnings() {
@@ -101,9 +104,17 @@ fn user_prompt_submit(input: &Value) -> Option<Value> {
         return None;
     }
     let mut ws = Workspace::open(&cwd(input)).ok()?;
+    if !ws.config().hook_on("user-prompt-submit") {
+        return None;
+    }
+    let say = ws.config().user_prompt_submit.clone();
     let head: String = prompt.chars().take(RECALL_INPUT).collect();
     let mut text = String::new();
-    let hits = ws.recall(&head).unwrap_or_default();
+    let hits = if say.has("memory") {
+        ws.recall(&head).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     if !hits.is_empty() {
         text.push_str("livtk memory relevant to this prompt (`livtk show KEY` gives the why):\n");
         for h in &hits {
@@ -116,7 +127,7 @@ fn user_prompt_submit(input: &Value) -> Option<Value> {
             let _ = writeln!(text, "- {} ({what}) {}", h.key, h.title);
         }
     }
-    if prompt.len() <= PROMPT_MAX && reads_as_correction(prompt) {
+    if say.has("nudge") && prompt.len() <= PROMPT_MAX && reads_as_correction(prompt) {
         text.push_str(
             "This reads like a correction or a standing rule. After you act on it, if it should \
              hold beyond this task, propose it: `livtk lesson \"<the rule in one sentence>\" \
@@ -151,6 +162,9 @@ fn reads_as_correction(prompt: &str) -> bool {
 
 fn subagent_start(input: &Value) -> Option<Value> {
     let ws = Workspace::open(&cwd(input)).ok()?;
+    if !ws.config().hook_on("subagent-start") {
+        return None;
+    }
     Some(context("SubagentStart", brief(&ws, true)?))
 }
 
@@ -195,6 +209,9 @@ fn subagent_stop(input: &Value) -> Option<Value> {
         return None;
     }
     let ws = Workspace::open(&cwd(input)).ok()?;
+    if !ws.config().hook_on("subagent-stop") {
+        return None;
+    }
     let silent: Vec<String> = ws
         .tasks(&[State::Doing])
         .ok()?
@@ -243,27 +260,66 @@ fn brief(ws: &Workspace, subagent: bool) -> Option<String> {
     let review = ws.tasks(&[State::Review]).ok()?;
     let waiting = ws.tasks(&[State::Planned]).ok()?;
     let inbox = ws.inbox().ok()?;
-    let _ = writeln!(
-        b,
-        "livtk ({prefix}): this project tracks its work with the `livtk` CLI (`livtk --help`). \
-         The livtk:plan, livtk:work and livtk:remember skills describe the workflow."
-    );
-    section(&mut b, "In progress", &doing, ws, true);
-    section(&mut b, "In review", &review, ws, false);
-    section(
-        &mut b,
-        "Waiting for the human to acknowledge (do not start these)",
-        &waiting,
-        ws,
-        false,
-    );
-    if !ws.config().gates.human.is_empty() {
+    // The sections the project keeps (`[session_start] include`): all, unless it names some.
+    let say = &ws.config().session_start;
+    if say.has("intro") {
         let _ = writeln!(
             b,
-            "This project also keeps these moves for the human: {}.",
-            ws.config().gates.human.join("; ")
+            "livtk ({prefix}): this project tracks its work with the `livtk` CLI (`livtk --help`). \
+             The livtk:plan, livtk:work and livtk:remember skills describe the workflow."
         );
     }
+    if say.has("tasks") {
+        section(&mut b, "In progress", &doing, ws, true);
+        section(&mut b, "In review", &review, ws, false);
+        section(
+            &mut b,
+            "Waiting for the human to acknowledge (do not start these)",
+            &waiting,
+            ws,
+            false,
+        );
+    }
+    if say.has("gates") {
+        // The built-in gates are said in the protocol; without it, here.
+        if !say.has("protocol") {
+            b.push_str(
+                "Only the human acknowledges a plan and decides what binds (ratifying a lesson, \
+                 accepting a decision).\n",
+            );
+        }
+        if !ws.config().gates.human.is_empty() {
+            let _ = writeln!(
+                b,
+                "This project also keeps these moves for the human: {}.",
+                ws.config().gates.human.join("; ")
+            );
+        }
+    }
+    if say.has("tasks") {
+        waiting_and_next(&mut b, ws, &doing, &inbox)?;
+    }
+    if say.has("rules") {
+        standing_rules(&mut b, &rules);
+    }
+    if say.has("protocol") {
+        b.push_str(
+            "How to work: plan work as livtk tasks and wait for the human's acknowledgement before \
+             starting one; only the human acknowledges and ratifies; never edit .livtk/ by hand; \
+             record what you try with `livtk note KEY \"...\"`; propose what should hold beyond one \
+             task as a lesson (`livtk lesson`); commit .livtk/ with the work it describes.\n",
+        );
+    }
+    (!b.is_empty()).then(|| clip(b))
+}
+
+/// What else waits for the human, and the task to start next.
+fn waiting_and_next(
+    b: &mut String,
+    ws: &Workspace,
+    doing: &[livtk_core::Summary],
+    inbox: &[livtk_core::Summary],
+) -> Option<()> {
     let lessons = inbox.iter().filter(|s| s.kind == Kind::Lesson).count();
     let decisions = inbox.iter().filter(|s| s.kind == Kind::Decision).count();
     if lessons + decisions > 0 {
@@ -280,14 +336,7 @@ fn brief(ws: &Workspace, subagent: bool) -> Option<String> {
         None if doing.is_empty() => b.push_str("Nothing is ready to start.\n"),
         None => {}
     }
-    standing_rules(&mut b, &rules);
-    b.push_str(
-        "How to work: plan work as livtk tasks and wait for the human's acknowledgement before \
-         starting one; only the human acknowledges and ratifies; never edit .livtk/ by hand; \
-         record what you try with `livtk note KEY \"...\"`; propose what should hold beyond one \
-         task as a lesson (`livtk lesson`); commit .livtk/ with the work it describes.\n",
-    );
-    Some(clip(b))
+    Some(())
 }
 
 /// The ratified standing rules, within a fixed budget.

@@ -46,7 +46,40 @@ your formatter from your own `PostToolUse` hook and your check from your own `Su
 `Stop` hook (see Claude Code's hooks documentation). A `[hooks] format` or `check` left in
 `.livtk/config.toml` is ignored with a warning, and becomes an error in the next release.
 
-Optional per-project settings live in `.livtk/config.toml`:
+**A project with hooks of its own.** Claude Code runs every hook registered for an event, so a
+project that already briefs Claude at session start gets two overlapping blocks. Two ways out:
+
+- Keep the plugin, and tell livtk what to leave out, in `.livtk/config.toml`:
+
+  ```toml
+  [hooks]
+  disable = ["session-start"]          # or user-prompt-submit, subagent-start, subagent-stop
+
+  [session_start]
+  include = ["tasks", "gates"]         # of intro, tasks, gates, protocol, rules
+
+  [user_prompt_submit]
+  include = ["memory"]                 # of memory (what is recalled), nudge (propose a lesson)
+  ```
+
+  Nothing set, everything is said, as before. A name livtk does not know stops it with an error
+  naming it, so a typo never switches something off quietly. The guard on the human's commands
+  cannot be switched off.
+
+- Or skip the plugin and call livtk from your own hook: `livtk hook <event>` reads the hook's
+  JSON on stdin and answers in Claude Code's own shape, so one hook per event says both:
+
+  ```bash
+  #!/usr/bin/env bash
+  # .claude/hooks/session-start.sh: your project's own context, then livtk's, as one block.
+  input=$(cat)
+  ours="Branch: $(git branch --show-current 2>/dev/null)"
+  theirs=$(printf '%s' "$input" | livtk hook session-start | jq -r '.hookSpecificOutput.additionalContext // empty')
+  jq -n --arg c "$ours"$'\n'"$theirs" \
+    '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+  ```
+
+Other optional per-project settings in `.livtk/config.toml`:
 
 ```toml
 [gates]

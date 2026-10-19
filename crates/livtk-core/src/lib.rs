@@ -24,6 +24,7 @@ pub use model::{Actor, Kind, Rel, State};
 pub use search::Hit;
 pub use store::{Brief, DayEvents, Node, Snapshot, Summary};
 pub use workspace::{
-    Activity, Command, Config, DIR_NAME, Gate, Gates, Hooks, Links, Memory, RECALL_MAX, Scope,
-    UNSEEN_CAP, Workspace, find_dir, link_allowed,
+    Activity, Command, Config, DIR_NAME, Gate, Gates, HOOK_NAMES, Hooks, Links, Memory,
+    PROMPT_SECTIONS, RECALL_MAX, SESSION_SECTIONS, Scope, Sections, UNSEEN_CAP, Workspace,
+    find_dir, link_allowed,
 };

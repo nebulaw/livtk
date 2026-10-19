@@ -608,3 +608,82 @@ fn the_brief_names_the_docs_of_the_work_in_progress() {
         "{brief}"
     );
 }
+
+// ---- a project switching parts off ---------------------------------------------------------------
+
+fn with_config(dir: &Path, toml: &str) {
+    let path = dir.join(".livtk/config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    config.push('\n');
+    config.push_str(toml);
+    fs::write(path, config).unwrap();
+}
+
+fn brief_of(dir: &Path) -> Option<String> {
+    answer("session-start", &json!({ "cwd": dir })).map(|v| {
+        v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    })
+}
+
+#[test]
+fn a_project_switches_off_a_hook_or_keeps_only_some_sections() {
+    let dir = project();
+    livtk(dir.path(), true, &["new", "build it"]);
+    livtk(dir.path(), true, &["move", "LIV-1", "planned"]);
+    livtk(dir.path(), true, &["ack", "LIV-1"]);
+    livtk(dir.path(), true, &["start", "LIV-1"]);
+    let full = brief_of(dir.path()).unwrap();
+    assert!(full.contains("How to work"), "{full}");
+    // Only the tasks and the gates: the work in progress, the gates, no protocol.
+    with_config(
+        dir.path(),
+        "[session_start]\ninclude = [\"tasks\", \"gates\"]\n",
+    );
+    let some = brief_of(dir.path()).unwrap();
+    assert!(some.contains("LIV-1"), "{some}");
+    assert!(some.contains("Only the human acknowledges"), "{some}");
+    assert!(!some.contains("How to work"), "{some}");
+    assert!(!some.contains("livtk:plan"), "no intro: {some}");
+    // The whole hook off: nothing said; the others go on.
+    with_config(dir.path(), "[hooks]\ndisable = [\"session-start\"]\n");
+    assert_eq!(brief_of(dir.path()), None);
+    assert!(
+        answer("subagent-start", &json!({ "cwd": dir.path() })).is_some(),
+        "the other hooks unaffected"
+    );
+}
+
+#[test]
+fn the_prompt_hook_keeps_only_the_sections_asked_for() {
+    let dir = project();
+    with_config(dir.path(), "[user_prompt_submit]\ninclude = [\"memory\"]\n");
+    let nudge = answer(
+        "user-prompt-submit",
+        &json!({ "cwd": dir.path(), "prompt": "no, we always use tabs here" }),
+    );
+    assert_eq!(nudge, None, "no nudge: {nudge:?}");
+}
+
+#[test]
+fn an_unknown_hook_or_section_stops_livtk_with_its_name() {
+    for toml in [
+        "[hooks]\ndisable = [\"sesion-start\"]\n",
+        "[session_start]\ninclude = [\"taks\"]\n",
+        "[hooks]\ndisable = [\"pre-tool-use\"]\n",
+    ] {
+        let dir = project();
+        with_config(dir.path(), toml);
+        let out = Command::new(env!("CARGO_BIN_EXE_livtk"))
+            .current_dir(dir.path())
+            .arg("list")
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{toml}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        let name = toml.split('"').nth(1).unwrap();
+        assert!(err.contains(name), "{toml}: {err}");
+    }
+}

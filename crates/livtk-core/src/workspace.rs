@@ -51,6 +51,63 @@ pub struct Config {
     /// The folder the project's docs are in, from its folder: `docs` unless given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<String>,
+    /// What the session-start brief says, by section; everything unless given.
+    #[serde(default, skip_serializing_if = "Sections::is_default")]
+    pub session_start: Sections,
+    /// What is added before each prompt, by section; everything unless given.
+    #[serde(default, skip_serializing_if = "Sections::is_default")]
+    pub user_prompt_submit: Sections,
+}
+
+/// The hooks a project may switch off with `[hooks] disable`. The guard (pre-tool-use) is not
+/// among them: it keeps the human's gates, and the file is one Claude could edit.
+pub const HOOK_NAMES: [&str; 4] = [
+    "session-start",
+    "user-prompt-submit",
+    "subagent-start",
+    "subagent-stop",
+];
+/// What the session-start brief is made of, as a reader sees it.
+pub const SESSION_SECTIONS: [&str; 5] = ["intro", "tasks", "gates", "protocol", "rules"];
+/// What is added before a prompt: the memory recalled for it, and the nudge to propose a lesson.
+pub const PROMPT_SECTIONS: [&str; 2] = ["memory", "nudge"];
+
+/// The sections of what a hook says that a project keeps: all of them unless `include` names
+/// some.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sections {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+}
+
+impl Sections {
+    fn is_default(&self) -> bool {
+        self.include.is_none()
+    }
+
+    /// Whether `section` is said.
+    pub fn has(&self, section: &str) -> bool {
+        self.include
+            .as_ref()
+            .is_none_or(|i| i.iter().any(|s| s == section))
+    }
+
+    /// The first name in `include` that is not one of `known`.
+    fn unknown(&self, known: &[&str]) -> Option<String> {
+        self.include
+            .iter()
+            .flatten()
+            .find(|s| !known.contains(&s.as_str()))
+            .cloned()
+    }
+}
+
+impl Config {
+    /// Whether the hook `name` (`session-start`, ...) runs: not switched off in `[hooks]`.
+    pub fn hook_on(&self, name: &str) -> bool {
+        !self.hooks.disable.iter().any(|h| h == name)
+    }
 }
 
 /// Moves this project keeps for the human, beyond the built-in ones (acknowledging, and
@@ -165,6 +222,9 @@ impl Config {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Hooks {
+    /// The hooks this project switches off, because it covers them itself: any of `HOOK_NAMES`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disable: Vec<String>,
     /// Deprecated, ignored: was a formatter run on files Claude edited.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub format: Vec<String>,
@@ -362,6 +422,8 @@ impl Workspace {
             gates: Gates::default(),
             on: Vec::new(),
             docs: None,
+            session_start: Sections::default(),
+            user_prompt_submit: Sections::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -1431,6 +1493,37 @@ fn load_config(dir: &Path) -> Result<Config> {
         .gates
         .parse()
         .map_err(|e| bad(format!("[gates] human: {e}")))?;
+    // A typo must not quietly switch something off.
+    if let Some(h) = config
+        .hooks
+        .disable
+        .iter()
+        .find(|h| !HOOK_NAMES.contains(&h.as_str()))
+    {
+        return Err(bad(format!(
+            "[hooks] disable: no hook `{h}` can be switched off; the ones that can: {}",
+            HOOK_NAMES.join(", ")
+        )));
+    }
+    for (table, sections, known) in [
+        (
+            "session_start",
+            &config.session_start,
+            &SESSION_SECTIONS[..],
+        ),
+        (
+            "user_prompt_submit",
+            &config.user_prompt_submit,
+            &PROMPT_SECTIONS[..],
+        ),
+    ] {
+        if let Some(s) = sections.unknown(known) {
+            return Err(bad(format!(
+                "[{table}] include: no section `{s}`; the sections: {}",
+                known.join(", ")
+            )));
+        }
+    }
     Ok(config)
 }
 

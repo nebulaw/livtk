@@ -698,3 +698,86 @@ fn starting_a_task_names_its_docs() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("read: docs/design.md  The design"), "{text}");
 }
+
+// ---- readable by machines, and a markdown mirror ---------------------------------------------------
+
+#[test]
+fn json_rows_carry_the_fields_asked_for_and_show_carries_everything() {
+    let dir = project();
+    let d = dir.path();
+    ok(
+        d,
+        As::Claude,
+        &["new", "import the board", "--body", "Match on board_id."],
+    );
+    ok(d, As::Claude, &["note", "LIV-1", "tried matching by title"]);
+    // The default row is as it was.
+    let rows = json(d, &["list"]);
+    assert!(rows[0].get("body").is_none() && rows[0].get("props").is_none());
+    assert!(rows[0].get("key").is_some());
+    // Only the fields asked for, a node's own too.
+    let rows = json(d, &["list", "--fields", "key,state,body,props"]);
+    let row = rows[0].as_object().unwrap();
+    assert_eq!(
+        row.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["body", "key", "props", "state"]
+    );
+    assert_eq!(row["body"], "Match on board_id.");
+    let bad = livtk(d, As::Claude, &["--json", "list", "--fields", "key,nope"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("nope"));
+    // Show: body, props, links and notes in one object.
+    let one = json(d, &["show", "LIV-1"]);
+    assert_eq!(one["node"]["body"], "Match on board_id.");
+    assert!(one["node"]["props"].is_object());
+    assert!(one["links"].is_object());
+    assert_eq!(one["notes"][0]["text"], "tried matching by title");
+}
+
+#[test]
+fn export_mirrors_every_node_as_markdown_and_check_says_when_it_is_stale() {
+    let dir = project();
+    let d = dir.path();
+    ok(
+        d,
+        As::Claude,
+        &[
+            "new",
+            "import the board",
+            "--body",
+            "Only in the body: zebra-42.",
+        ],
+    );
+    ok(
+        d,
+        As::Claude,
+        &["lesson", "Read before editing", "--why", "lost text"],
+    );
+    ok(d, As::Human, &["export"]);
+    let out = d.join(".livtk/export");
+    let task = std::fs::read_to_string(out.join("tasks/LIV-1.md")).unwrap();
+    assert!(task.starts_with("---\nkey: \"LIV-1\""), "{task}");
+    assert!(task.contains("zebra-42"), "the body, greppable");
+    assert!(out.join("lessons").read_dir().unwrap().count() == 1);
+    assert!(
+        std::fs::read_to_string(out.join(".gitignore"))
+            .unwrap()
+            .contains('*'),
+        "kept out of git by default"
+    );
+    // A second run with nothing changed writes nothing.
+    let again = ok(d, As::Human, &["export"]);
+    assert!(again.contains("(0 file(s) written)"), "{again}");
+    assert!(livtk(d, As::Human, &["export", "--check"]).status.success());
+    // A change makes it stale; exported again, it is current.
+    ok(d, As::Claude, &["note", "LIV-1", "a new note"]);
+    assert!(!livtk(d, As::Human, &["export", "--check"]).status.success());
+    ok(d, As::Human, &["export"]);
+    assert!(livtk(d, As::Human, &["export", "--check"]).status.success());
+    // Editing an exported file changes nothing in livtk.
+    std::fs::write(out.join("tasks/LIV-1.md"), "---\ntitle: \"hacked\"\n---\n").unwrap();
+    assert_eq!(
+        json(d, &["show", "LIV-1"])["node"]["title"],
+        "import the board"
+    );
+}

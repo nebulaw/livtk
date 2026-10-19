@@ -122,6 +122,17 @@ Docs are the project's markdown files, under `docs/` (or the folder `docs = "...
 
 Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 
+**For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
+row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY
+--json` gives everything about one node: its fields with body and props, its links, its notes and
+its history.
+
+**A markdown mirror, if you want one.** `livtk export` writes every node as a markdown file
+(fields as frontmatter, then the body, the links and the notes) into `.livtk/export`, which keeps
+itself out of git; `--dir` writes elsewhere, and `--check` fails if the folder is behind the log,
+for CI. **It is a copy, never read back: editing an exported file changes nothing in livtk.** The
+log is the truth, and an export is whatever this machine can read of it, wherever the log lives.
+
 ### Signals
 
 Agents and tools hear what happens as signals, one JSON object per line, derived from the log:

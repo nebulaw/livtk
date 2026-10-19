@@ -1,6 +1,7 @@
 //! `livtk`: the command line over livtk-core. Thin by design: parse, call the workspace, print.
 
 mod embed;
+mod export;
 mod guard;
 mod hook;
 mod output;
@@ -122,9 +123,23 @@ enum Cmd {
         /// Include what is over: done, canceled, rejected, retired, superseded.
         #[arg(long, short)]
         all: bool,
+        /// With --json, only these fields of each row, and any of a node's own: body, props,
+        /// created, created_by. Comma-separated: `--fields key,state,props`.
+        #[arg(long, value_delimiter = ',')]
+        fields: Vec<String>,
     },
     /// Show a node with its links, notes and history.
     Show { key: String },
+    /// Write every node as a markdown file (frontmatter, body, links, notes): a copy derived from
+    /// the log for grep and diff, never read back. Default folder: .livtk/export, kept out of git.
+    Export {
+        /// The folder to write to.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Write nothing; fail if the folder differs from the log (for CI).
+        #[arg(long)]
+        check: bool,
+    },
     /// Search every node, by keywords and by meaning.
     Search {
         query: String,
@@ -464,7 +479,13 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Retire { key } => moved(ws, &key, State::Retired, by, json),
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
         Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
-        Cmd::List { kind, state, all } => {
+        Cmd::Export { dir, check } => export::run(ws, dir.as_deref(), check),
+        Cmd::List {
+            kind,
+            state,
+            all,
+            fields,
+        } => {
             let states: Vec<State> = if !state.is_empty() {
                 state
             } else if all {
@@ -476,7 +497,11 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                     .filter(|s| s.is_active())
                     .collect()
             };
-            output::list(&ws.list(kind, &states)?, json)
+            let rows = ws.list(kind, &states)?;
+            if json && !fields.is_empty() {
+                return output::list_fields(ws, &rows, &fields);
+            }
+            output::list(&rows, json)
         }
         Cmd::Search { query, limit } => output::hits(&ws.search(&query, Scope::All, limit)?, json),
         Cmd::Recall { query } => output::hits(&ws.recall(&query)?, json),

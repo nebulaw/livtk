@@ -78,6 +78,43 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
     Ok(())
 }
 
+/// The rows as JSON objects of only `fields`: a row's own, and a node's (body, props, created,
+/// created_by), which are read per node only when asked for.
+pub fn list_fields(ws: &Workspace, rows: &[Summary], fields: &[String]) -> Result<()> {
+    const NODE: [&str; 4] = ["body", "props", "created", "created_by"];
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let row = serde_json::to_value(r)?;
+        let needs_node = fields.iter().any(|f| NODE.contains(&f.as_str()));
+        let node = if needs_node {
+            Some(serde_json::to_value(ws.node(&r.key)?)?)
+        } else {
+            None
+        };
+        let mut obj = serde_json::Map::new();
+        for f in fields {
+            let value = row
+                .get(f)
+                .or_else(|| node.as_ref().and_then(|n| n.get(f)))
+                .cloned();
+            match value {
+                Some(v) => {
+                    obj.insert(f.clone(), v);
+                }
+                None => anyhow::bail!(
+                    "no field `{f}`: a row has {}, and a node's {}",
+                    row.as_object()
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default(),
+                    NODE.join(", ")
+                ),
+            }
+        }
+        out.push(serde_json::Value::Object(obj));
+    }
+    print_json(&out)
+}
+
 pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
     if json {
         return print_json(&tasks);
@@ -134,8 +171,17 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
             .iter()
             .map(|(p, t)| json!({"path": p, "title": t, "missing": t.is_none()}))
             .collect();
+        let notes: Vec<_> = history
+            .iter()
+            .filter_map(|e| match &e.op {
+                Op::NodeNote { data, .. } => {
+                    Some(json!({"at": e.at, "by": e.by, "text": data.text}))
+                }
+                _ => None,
+            })
+            .collect();
         return print_json(&json!({
-            "node": node, "links": links, "history": history,
+            "node": node, "notes": notes, "links": links, "history": history,
             "supersedes": replaces, "superseded_by": replaced_by,
             "learned_from": learned_from, "taught": taught,
             "part_of": part_of, "sub_tasks": parts, "related": related,

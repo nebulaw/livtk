@@ -34,6 +34,7 @@ use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
 use crate::model::Axis as PaneAxis;
+use crate::model::Split;
 use crate::model::docs::DocRow;
 use crate::model::keys;
 use crate::model::{
@@ -705,6 +706,11 @@ pub struct LivtkApp {
     /// Where each pane and each split was drawn, by pane id and by the split's path: what a
     /// divider dragged and the dock's room are measured against.
     pane_bounds: std::cell::RefCell<HashMap<u64, Bounds<Pixels>>>,
+    /// A pane just split off, growing in; a pane just closed, shrinking away in the layout it
+    /// left (drawn empty); and which of each, so each animates once.
+    pane_born: Option<u64>,
+    pane_gone: Option<(Split, u64)>,
+    pane_epoch: usize,
     split_bounds: std::cell::RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>,
 
     /// The edge under the pointer (or being dragged), where along it, and since which arrival.
@@ -921,6 +927,9 @@ impl LivtkApp {
             panel_width: PANEL_WIDTH,
             resizing: None,
             pane_bounds: Default::default(),
+            pane_born: None,
+            pane_gone: None,
+            pane_epoch: 0,
             split_bounds: Default::default(),
             edge_hover: None,
             edge_leaving: None,

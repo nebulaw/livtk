@@ -24,7 +24,11 @@ impl LivtkApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let split = self.model.shown_split();
+        // A pane closing: the layout it left, a moment longer, while it shrinks away.
+        let split = match &self.pane_gone {
+            Some((was, _)) => was.clone(),
+            None => self.model.shown_split(),
+        };
         let mut focused = Some(focused);
         self.split_element(&split, &mut Vec::new(), &mut focused, window, cx)
     }
@@ -79,9 +83,78 @@ impl LivtkApp {
             cell.style().flex_grow = Some(*share);
             cell.style().flex_shrink = Some(1.);
             cell.style().flex_basis = Some(px(0.).into());
-            out = out.child(cell);
+            out = out.child(self.pane_motion(part, *share, cell, cx));
         }
         out.into_any_element()
+    }
+
+    /// A pane split off grows from nothing to its share as its neighbours give way, fading in;
+    /// a pane closed shrinks from its share to nothing, fading out. Once each; with less motion
+    /// asked for, neither.
+    fn pane_motion(
+        &self,
+        part: &Split,
+        share: f32,
+        cell: Div,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Split::Pane(id) = part else {
+            return cell.into_any_element();
+        };
+        let id = *id;
+        let born = self.pane_born == Some(id);
+        let gone = self.pane_gone.as_ref().is_some_and(|(_, g)| *g == id);
+        if cx.reduce_motion() || !(born || gone) {
+            return cell.into_any_element();
+        }
+        let (name, duration) = if born {
+            (format!("pane-in-{id}-{}", self.pane_epoch), super::SLIDE)
+        } else {
+            (
+                format!("pane-out-{id}-{}", self.pane_epoch),
+                super::SLIDE_OUT,
+            )
+        };
+        cell.with_animation(
+            SharedString::from(name),
+            Animation::new(duration).with_easing(if born {
+                super::ease_out_cubic
+            } else {
+                super::ease_in_out
+            }),
+            move |mut el, t| {
+                let open = if born { t } else { 1. - t };
+                el.style().flex_grow = Some(share * open);
+                el.opacity(0.2 + 0.8 * open)
+            },
+        )
+        .into_any_element()
+    }
+
+    /// After `duration`, the pane animation of `epoch` is over (unless another began).
+    fn end_pane_motion(&self, epoch: usize, duration: std::time::Duration, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.pane_epoch == epoch {
+                    app.pane_born = None;
+                    app.pane_gone = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Pane `id` about to close from layout `was`: it shrinks away there before it is gone.
+    fn pane_closing(&mut self, was: Split, id: u64, cx: &mut Context<Self>) {
+        if was.ids().len() < 2 || !was.ids().contains(&id) {
+            return;
+        }
+        self.pane_epoch += 1;
+        self.pane_born = None;
+        self.pane_gone = Some((was, id));
+        self.end_pane_motion(self.pane_epoch, super::SLIDE_OUT, cx);
     }
 
     /// The gutter between part `before` and the next of the split at `path`: an edge as the
@@ -236,7 +309,14 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(i) = self.model.pane_index(id) else {
-            return div().into_any_element();
+            // The pane closing, drawn empty as it shrinks away.
+            return div()
+                .size_full()
+                .rounded_xl()
+                .border_1()
+                .border_color(color(BORDER))
+                .bg(color(CONTENT))
+                .into_any_element();
         };
         let is_focused = i == self.model.focused();
         let several = self.model.shown_split().ids().len() > 1;
@@ -401,14 +481,34 @@ impl LivtkApp {
     }
 
     pub(super) fn split_pane(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.model.split.ids();
         self.model.split_pane(axis);
+        // The pane that joined the split grows in.
+        if let Some(&new) = self
+            .model
+            .split
+            .ids()
+            .iter()
+            .find(|id| !before.contains(id))
+        {
+            self.pane_epoch += 1;
+            self.pane_gone = None;
+            self.pane_born = Some(new);
+            self.end_pane_motion(self.pane_epoch, super::SLIDE, cx);
+        }
         self.glide = None;
         self.sync_filter(window, cx);
         cx.notify();
     }
 
     pub(super) fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.model.shown_split();
+        let id = self.model.focused_id();
+        let solo = self.model.solo();
         self.model.close_pane();
+        if !solo {
+            self.pane_closing(was, id, cx);
+        }
         self.glide = None;
         self.sync_filter(window, cx);
         self.focus_main(window, cx);
@@ -523,7 +623,9 @@ impl LivtkApp {
 
     /// Pane `id` taken out of the split: closed, its view back in its usual place.
     fn unsplit(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.model.shown_split();
         self.model.unsplit(id);
+        self.pane_closing(was, id, cx);
         self.glide = None;
         self.sync_filter(window, cx);
         self.focus_main(window, cx);

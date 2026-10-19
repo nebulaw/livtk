@@ -3411,6 +3411,8 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
     let dir = project();
     cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
     let (app, cx) = open_app(cx, dir.path());
+    // Where the panes land, not their growing in.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1600., 1000.);
     cx.simulate_keystrokes("g x");
     redraw(cx);
@@ -3540,6 +3542,8 @@ fn the_divider_between_panes_is_dragged_as_the_sidebars_edge(cx: &mut TestAppCon
     let dir = project();
     cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
     let (app, cx) = open_app(cx, dir.path());
+    // Where the panes land, not their growing in.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1600., 1000.);
     cx.simulate_keystrokes("g t secondary-\\");
     redraw(cx);

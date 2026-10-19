@@ -332,6 +332,14 @@ fn an_implementer_may_not_stop_leaving_work_in_progress_unrecorded() {
     livtk(dir.path(), true, &["move", "LIV-1", "planned"]);
     livtk(dir.path(), true, &["ack", "LIV-1"]);
     livtk(dir.path(), true, &["start", "LIV-1"]);
+    // Someone else's task in progress, unrecorded: not the implementer's to answer for.
+    assert_eq!(stop("livtk:implementer", false), None, "not its task");
+    // The implementer worked on it (its events are signed with its name).
+    livtk(
+        dir.path(),
+        false,
+        &["--agent", "implementer", "edit", "LIV-1", "--priority", "2"],
+    );
     let v = stop("livtk:implementer", false).unwrap();
     assert_eq!(v["decision"], "block");
     assert!(v["reason"].as_str().unwrap().contains("LIV-1"), "{v}");

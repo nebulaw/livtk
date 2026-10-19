@@ -221,11 +221,10 @@ finds the binary and prints the install line if it is missing. Prebuilt releases
 | UserPromptSubmit | Recall (milestone 3); spot corrections and nudge Claude to propose a lesson |
 | PreToolUse (Bash) | Block human-only `livtk` commands and environment tampering |
 | PreCompact | Keep the tasks in progress in context |
-| SubagentStop / Stop | Run the project's check command, only if files changed and only for agents that write code |
-| PostToolUse (Edit/Write) | Run the project's format command on the edited file |
+| SubagentStop | Refuse the implementer's stop while a task it worked on is in progress with no note |
 
-Commands for checking and formatting come from `.livtk/config.toml`, so the OS stays language
-neutral (Rust today, anything tomorrow).
+livtk runs no project's own commands (since TAS-55): checking and formatting belong to the
+project's hooks, so the OS stays language neutral and out of the way.
 
 **Skills**: `plan` (break work into tasks with acceptance checks), `work` (next → start → do →
 review), `review` (the refuter), `remember` (propose a lesson or decision).

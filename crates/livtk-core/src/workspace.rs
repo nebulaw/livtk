@@ -248,12 +248,13 @@ impl Hooks {
         if !self.format.is_empty() || !self.format_extensions.is_empty() {
             gone.push("format");
         }
-        if !self.check.is_empty() || !self.check_agents.is_empty() {
+        // `check_agents` alone ran nothing (it only named who a check applied to): no warning.
+        if !self.check.is_empty() {
             gone.push("check");
         }
         (!gone.is_empty()).then(|| {
             format!(
-                "[hooks] {} in .livtk/config.toml is ignored: livtk no longer runs a project's formatter or build check. Run them from the project's own Claude Code hooks (PostToolUse to format, SubagentStop or Stop to check), and remove the field; it becomes an error in the next release",
+                "[hooks] {} in .livtk/config.toml is ignored: livtk no longer runs a project's formatter or build check. They belong in the project's own Claude Code hooks (PostToolUse to format, SubagentStop or Stop to check). The developer removes the field (Claude cannot edit .livtk/); it becomes an error in the next release",
                 gone.join(" and ")
             )
         })

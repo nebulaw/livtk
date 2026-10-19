@@ -197,39 +197,57 @@ fn pre_tool_use(input: &Value) -> Option<Value> {
     guard::refuse_path(path).map(|reason| deny(&reason))
 }
 
-/// A stop that would leave the work unrecorded: an implementer stopping while a task it may
-/// be carrying is in progress with nothing written about it. What only livtk can know, so the
-/// one thing it refuses at a stop; a project's own checks run from its own hooks.
+/// A stop that would leave the work unrecorded: the implementer stopping while a task it worked
+/// on (one it moved or wrote to) is in progress with nothing recorded about it. Others' tasks
+/// are theirs to record. What only livtk can know, so the one thing it refuses at a stop; a
+/// project's own checks run from its own hooks.
 fn subagent_stop(input: &Value) -> Option<Value> {
     // Once blocked already: let it stop rather than loop.
     if input.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
         return None;
     }
-    if input.get("agent_type")?.as_str()? != IMPLEMENTER {
+    let agent = input.get("agent_type")?.as_str()?;
+    if agent != IMPLEMENTER {
         return None;
     }
     let ws = Workspace::open(&cwd(input)).ok()?;
     if !ws.config().hook_on("subagent-stop") {
         return None;
     }
+    // Its events are signed with its name (see the guard).
+    let by = format!("claude:{}", guard::agent_name(agent));
     let silent: Vec<String> = ws
         .tasks(&[State::Doing])
         .ok()?
         .into_iter()
         .filter(|t| {
-            !ws.history(Some(&t.key))
-                .is_ok_and(|h| h.iter().any(|e| matches!(e.op, Op::NodeNote { .. })))
+            let Ok(history) = ws.history(Some(&t.key)) else {
+                return false;
+            };
+            history.iter().any(|e| e.by == by)
+                && !history.iter().any(|e| matches!(e.op, Op::NodeNote { .. }))
         })
         .map(|t| t.key)
         .collect();
     if silent.is_empty() {
         return None;
     }
+    let shown = silent
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = silent.len().saturating_sub(5);
+    let more = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
     Some(json!({
         "decision": "block",
         "reason": format!(
-            "{} is in progress with nothing recorded about it. Before stopping, note what you did, tried or found: `livtk note KEY \"...\"`.",
-            silent.join(", ")
+            "{shown}{more}: in progress, worked on by you, with nothing recorded about it. Before stopping, note what you did, tried or found: `livtk note KEY \"...\"`.",
         ),
     }))
 }

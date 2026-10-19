@@ -8,7 +8,7 @@ use gpui_kit::*;
 
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
-use super::{LivtkApp, View, empty_action, view_icon};
+use super::{Edge, LivtkApp, View, empty_action, view_icon};
 use crate::model::{Axis, Split};
 
 /// The gutter between two panes, where the divider is dragged.
@@ -69,7 +69,7 @@ impl LivtkApp {
             });
         for (i, (part, share)) in parts.iter().enumerate() {
             if i > 0 {
-                out = out.child(self.divider(key.clone(), i - 1, axis, cx));
+                out = out.child(self.divider(key.clone(), i - 1, axis, window, cx));
             }
             path.push(i);
             let inner = self.split_element(part, path, focused, window, cx);
@@ -84,101 +84,129 @@ impl LivtkApp {
         out.into_any_element()
     }
 
-    /// The gutter between part `before` and the next of the split at `path`: dragged, it moves
-    /// the room between them.
+    /// The gutter between part `before` and the next of the split at `path`: an edge as the
+    /// sidebar's is (a glow following the pointer, the handle on it, a double-click evening
+    /// the two out), dragged to move the room between them.
     fn divider(
         &self,
         path: Vec<usize>,
         before: usize,
         axis: Axis,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let row = axis == Axis::Row;
-        let id = format!("divider-{}-{before}", path_name(&path));
-        let dragging = self.split_drag.as_ref() == Some(&(path.clone(), before));
+        let Some(edge) = self.divider_edge(&path, before, axis) else {
+            return div().into_any_element();
+        };
         div()
-            .id(SharedString::from(id.clone()))
-            .debug_selector(move || id.clone())
             .flex_none()
+            .relative()
             .when(row, |d| d.w(px(GUTTER)).h_full())
             .when(!row, |d| d.h(px(GUTTER)).w_full())
-            .flex()
-            .items_center()
-            .justify_center()
-            .group("divider")
-            .cursor(if row {
-                CursorStyle::ResizeLeftRight
-            } else {
-                CursorStyle::ResizeUpDown
-            })
-            .child(
-                div()
-                    .rounded_full()
-                    .when(row, |d| d.w(px(2.)).h(px(32.)))
-                    .when(!row, |d| d.h(px(2.)).w(px(32.)))
-                    .bg(color(if dragging { ACCENT } else { BORDER_STRONG }))
-                    .invisible()
-                    .group_hover("divider", |s| s.visible())
-                    .when(dragging, |d| d.visible()),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.split_drag = Some((path.clone(), before));
-                    cx.notify();
-                }),
-            )
+            .child(self.edge(edge, window, cx).left_0().top_0())
             .into_any_element()
     }
 
-    /// While a divider is dragged: the pointer anywhere in the window moves it, and letting go
-    /// ends it.
-    pub(super) fn split_drag_listener(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (path, before) = self.split_drag.clone()?;
-        let this = cx.entity().downgrade();
-        Some(
-            canvas(
-                |_, _, _| {},
-                move |_, _, window, _| {
-                    let moved = this.clone();
-                    let path = path.clone();
-                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture {
-                            return;
-                        }
-                        let _ = moved.update(cx, |app, cx| {
-                            if e.pressed_button != Some(MouseButton::Left) {
-                                app.split_drag = None;
-                            } else {
-                                app.drag_divider(&path, before, e.position);
-                            }
-                            cx.notify();
-                        });
-                    });
-                    let released = this.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                        if phase != DispatchPhase::Capture {
-                            return;
-                        }
-                        let _ = released.update(cx, |app, cx| {
-                            app.split_drag = None;
-                            cx.notify();
-                        });
-                    });
-                },
+    /// The edge of the divider after part `before` of the split at `path`, named by the first
+    /// pane on either side of it, which stays the same while the split is dragged.
+    fn divider_edge(&self, path: &[usize], before: usize, axis: Axis) -> Option<Edge> {
+        let mut split = self.model.split.clone();
+        let Split::Split { parts, .. } = split.at_mut(path)? else {
+            return None;
+        };
+        let first = |s: &Split| s.ids().first().copied();
+        Some(Edge::Divider {
+            a: first(&parts.get(before)?.0)?,
+            b: first(&parts.get(before + 1)?.0)?,
+            across: axis == Axis::Column,
+        })
+    }
+
+    /// Where the divider between the parts led by panes `a` and `b` is: its split's path, the
+    /// part before it, and that split's bounds as drawn last.
+    fn divider_at(&self, a: u64, b: u64) -> Option<(Vec<usize>, usize, Bounds<Pixels>)> {
+        fn find(s: &Split, a: u64, b: u64, path: &mut Vec<usize>) -> Option<(Vec<usize>, usize)> {
+            let Split::Split { parts, .. } = s else {
+                return None;
+            };
+            let first = |s: &Split| s.ids().first().copied();
+            for i in 0..parts.len().saturating_sub(1) {
+                if first(&parts[i].0) == Some(a) && first(&parts[i + 1].0) == Some(b) {
+                    return Some((path.clone(), i));
+                }
+            }
+            for (i, (p, _)) in parts.iter().enumerate() {
+                path.push(i);
+                if let Some(found) = find(p, a, b, path) {
+                    return Some(found);
+                }
+                path.pop();
+            }
+            None
+        }
+        let (path, before) = find(&self.model.split, a, b, &mut Vec::new())?;
+        let bounds = self.split_bounds.borrow().get(&path).copied()?;
+        Some((path, before, bounds))
+    }
+
+    /// How long the divider is (its split's height across panes side by side, its width
+    /// across stacked ones), and how far along it the window's point `p` is.
+    pub(super) fn divider_along(&self, edge: Edge, p: Option<Point<Pixels>>) -> (f32, f32) {
+        let Edge::Divider { a, b, across } = edge else {
+            return (0., 0.);
+        };
+        let Some((_, _, bounds)) = self.divider_at(a, b) else {
+            return (0., 0.);
+        };
+        let (len, at) = if across {
+            (
+                f32::from(bounds.size.width),
+                p.map_or(0., |p| f32::from(p.x - bounds.origin.x)),
             )
-            .absolute()
-            .size_full()
-            .into_any_element(),
-        )
+        } else {
+            (
+                f32::from(bounds.size.height),
+                p.map_or(0., |p| f32::from(p.y - bounds.origin.y)),
+            )
+        };
+        (len, at)
+    }
+
+    /// The divider `edge` dragged to the window's point `at`.
+    pub(super) fn drag_divider_edge(&mut self, edge: Edge, at: Point<Pixels>) {
+        if let Edge::Divider { a, b, .. } = edge
+            && let Some((path, before, bounds)) = self.divider_at(a, b)
+        {
+            self.drag_divider(&path, before, bounds, at);
+        }
+    }
+
+    /// The two parts either side of divider `edge` given even room again.
+    pub(super) fn even_divider(&mut self, edge: Edge) {
+        let Edge::Divider { a, b, .. } = edge else {
+            return;
+        };
+        let Some((path, before, _)) = self.divider_at(a, b) else {
+            return;
+        };
+        if let Some(Split::Split { parts, .. }) = self.model.split.at_mut(&path)
+            && before + 1 < parts.len()
+        {
+            let pair = parts[before].1 + parts[before + 1].1;
+            parts[before].1 = pair / 2.;
+            parts[before + 1].1 = pair / 2.;
+        }
     }
 
     /// The divider after part `before` of the split at `path` dragged to `at`.
-    fn drag_divider(&mut self, path: &[usize], before: usize, at: Point<Pixels>) {
-        let Some(bounds) = self.split_bounds.borrow().get(path).copied() else {
-            return;
-        };
+    fn drag_divider(
+        &mut self,
+        path: &[usize],
+        before: usize,
+        bounds: Bounds<Pixels>,
+        at: Point<Pixels>,
+    ) {
         let Some(Split::Split { axis, parts }) = self.model.split.at_mut(path) else {
             return;
         };
@@ -512,17 +540,5 @@ impl LivtkApp {
             .borrow()
             .get(&id)
             .map_or(fallback, |b| f32::from(b.size.width))
-    }
-}
-
-/// A split's path as a name: "0-1" (the root's is "root").
-fn path_name(path: &[usize]) -> String {
-    if path.is_empty() {
-        "root".into()
-    } else {
-        path.iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join("-")
     }
 }

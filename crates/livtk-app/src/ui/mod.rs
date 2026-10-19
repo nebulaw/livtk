@@ -706,8 +706,7 @@ pub struct LivtkApp {
     /// divider dragged and the dock's room are measured against.
     pane_bounds: std::cell::RefCell<HashMap<u64, Bounds<Pixels>>>,
     split_bounds: std::cell::RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>,
-    /// The divider being dragged: its split's path, and the part before it.
-    split_drag: Option<(Vec<usize>, usize)>,
+
     /// The edge under the pointer (or being dragged), where along it, and since which arrival.
     edge_hover: Option<EdgeHover>,
     /// The glow the pointer just left, fading out.
@@ -923,7 +922,6 @@ impl LivtkApp {
             resizing: None,
             pane_bounds: Default::default(),
             split_bounds: Default::default(),
-            split_drag: None,
             edge_hover: None,
             edge_leaving: None,
             edge_epoch: 0,
@@ -2138,15 +2136,18 @@ impl LivtkApp {
     /// default. The caller places it: `right_0` beside the sidebar and the content, or across
     /// a floating panel's border.
     fn edge(&self, edge: Edge, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let id = match edge {
-            Edge::Sidebar => "sidebar-edge",
-            Edge::Panel => "panel-edge",
-            Edge::Bottom => "bottom-edge",
+        let id: SharedString = match edge {
+            Edge::Sidebar => "sidebar-edge".into(),
+            Edge::Panel => "panel-edge".into(),
+            Edge::Bottom => "bottom-edge".into(),
+            Edge::Divider { a, b, .. } => format!("divider-{a}-{b}").into(),
         };
         let dragging = self.resizing == Some(edge);
-        // The side edges run the height under the top bar; the bottom one the content's width.
+        // The side edges run the height under the top bar; the bottom one the content's width;
+        // a divider its split's.
         let len = match edge {
             Edge::Bottom => self.window_content_width(window),
+            Edge::Divider { .. } => self.divider_along(edge, None).0,
             _ => f32::from(window.viewport_size().height) - TOP_BAR,
         };
         let glow = match (self.edge_hover, self.edge_leaving) {
@@ -2154,8 +2155,12 @@ impl LivtkApp {
             (_, Some(h)) if h.edge == edge => Some(edge_glow(h, false, len, true)),
             _ => None,
         };
-        let el = div().id(id).debug_selector(move || id.into()).absolute();
-        let el = if edge == Edge::Bottom {
+        let selector = id.to_string();
+        let el = div()
+            .id(id)
+            .debug_selector(move || selector.clone())
+            .absolute();
+        let el = if edge.across() {
             el.left_0().right_0().h(px(EDGE_W))
         } else {
             el.top_0().bottom_0().w(px(EDGE_W))
@@ -2188,6 +2193,7 @@ impl LivtkApp {
                             Edge::Sidebar => this.sidebar_width = SIDEBAR_WIDTH,
                             Edge::Panel => this.panel_width = PANEL_WIDTH,
                             Edge::Bottom => this.bottom_height = BOTTOM_HEIGHT,
+                            Edge::Divider { .. } => this.even_divider(edge),
                         }
                         this.resizing = None;
                     } else {
@@ -2222,6 +2228,7 @@ impl LivtkApp {
     fn along(&self, edge: Edge, p: Point<Pixels>, window: &Window) -> f32 {
         match edge {
             Edge::Bottom => f32::from(p.x) - self.sidebar_px(window),
+            Edge::Divider { .. } => self.divider_along(edge, Some(p)).1,
             _ => f32::from(p.y) - TOP_BAR,
         }
     }
@@ -2260,6 +2267,7 @@ impl LivtkApp {
             Edge::Bottom => {
                 self.bottom_height = (window_h - y - BOTTOM_INSET).clamp(BOTTOM_MIN, BOTTOM_MAX)
             }
+            Edge::Divider { .. } => self.drag_divider_edge(edge, p),
         }
     }
 
@@ -6405,7 +6413,7 @@ impl Render for LivtkApp {
             .children(find_bar)
             .into_any_element();
         let panes = self.pane_tree(focused, window, cx);
-        let split_drag = self.split_drag_listener(cx);
+
         div()
             .size_full()
             .relative()
@@ -6591,7 +6599,6 @@ impl Render for LivtkApp {
             .children(settings)
             .children(notice)
             .children(drag)
-            .children(split_drag)
     }
 }
 
@@ -6711,6 +6718,20 @@ enum Edge {
     Panel,
     /// The bottom bar's top.
     Bottom,
+    /// The gutter between two panes, named by the first pane either side of it; `across`
+    /// between stacked panes.
+    Divider {
+        a: u64,
+        b: u64,
+        across: bool,
+    },
+}
+
+impl Edge {
+    /// Whether it runs across, so its glow lies along it sideways.
+    fn across(self) -> bool {
+        matches!(self, Edge::Bottom | Edge::Divider { across: true, .. })
+    }
 }
 
 /// The pointer on an edge: which, how far along it, and which arrival (each fades in).
@@ -6740,7 +6761,7 @@ fn edge_glow(h: EdgeHover, dragging: bool, len: f32, leaving: bool) -> AnyElemen
     let at = h.at.clamp(half, (len - half).max(half));
     let strength = if dragging { 1. } else { 0.75 };
     // Down a side edge, or across the bottom one: the same glow turned.
-    let across = h.edge == Edge::Bottom;
+    let across = h.edge.across();
     let pill = |w: f32, len: f32, alpha: f32| {
         let lit = with_alpha(ACCENT, alpha * strength);
         let clear = with_alpha(ACCENT, 0.);

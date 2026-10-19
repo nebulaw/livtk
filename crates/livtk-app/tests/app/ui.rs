@@ -3532,3 +3532,39 @@ fn cmd_t_starts_another_terminal_listed_beside_and_its_cross_kills_it(cx: &mut T
     );
     assert!(cx.debug_bounds("terminal").is_some());
 }
+
+/// The divider between two panes is an edge as the sidebar's: its handle follows the pointer
+/// along it, a drag moves the room between the panes, a double-click evens them out.
+#[gpui_kit::test]
+fn the_divider_between_panes_is_dragged_as_the_sidebars_edge(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g t secondary-\\");
+    redraw(cx);
+    click_on(cx, "place-findings");
+    redraw(cx);
+    let edge = cx.debug_bounds("divider-0-1").expect("the divider");
+    let at = gpui_kit::point(edge.center().x, gpui_kit::px(500.));
+    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    let handle = cx.debug_bounds("edge-handle").expect("its handle shows");
+    assert!(
+        (f32::from(handle.center().y) - 500.).abs() < 1.,
+        "at the pointer: {handle:?}"
+    );
+    drag_to(cx, "divider-0-1", f32::from(edge.center().x) + 200.);
+    let shares = app.read_with(cx, |a, _| match &a.model().split {
+        livtk_app::model::Split::Split { parts, .. } => parts[0].1,
+        _ => 0.,
+    });
+    assert!(shares > 0.55, "the left pane grew: {shares}");
+    double_click_on(cx, "divider-0-1");
+    redraw(cx);
+    let shares = app.read_with(cx, |a, _| match &a.model().split {
+        livtk_app::model::Split::Split { parts, .. } => parts[0].1,
+        _ => 0.,
+    });
+    assert!((shares - 0.5).abs() < 1e-4, "evened out: {shares}");
+}

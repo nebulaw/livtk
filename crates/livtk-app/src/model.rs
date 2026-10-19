@@ -729,6 +729,13 @@ impl Model {
         self.panes.iter().position(|p| p.id == id)
     }
 
+    /// Act on pane `i` (to draw it) until told otherwise; the pane acted on before.
+    pub fn act_on(&mut self, i: usize) -> usize {
+        let was = self.at;
+        self.at = i.min(self.panes.len() - 1);
+        was
+    }
+
     /// Give pane `i` the keys, the sidebar and the dock.
     pub fn focus_pane(&mut self, i: usize) {
         if i < self.panes.len() {
@@ -776,6 +783,11 @@ impl Model {
             self.panes.retain(|p| p.id != id);
             self.at = self.pane_index(next).unwrap_or(0);
         }
+    }
+
+    /// Whether the pane acted on waits for a view to be chosen.
+    pub fn placeholder(&self) -> bool {
+        self.pane().placeholder
     }
 
     /// The view of the pane acted on.

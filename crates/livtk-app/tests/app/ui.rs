@@ -3402,3 +3402,67 @@ fn a_day_clicked_in_the_grid_filters_the_feed_and_esc_clears_it(cx: &mut TestApp
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.model().grid.pick.span, None));
 }
+
+/// The terminal and the tasks side by side: Cmd-\ splits a placeholder beside the terminal, a
+/// view picked there fills it; the keys are the focused pane's alone; a press in the other pane
+/// focuses it; the next pane's key goes round; Cmd-Alt-W closes a pane, never the last.
+#[gpui_kit::test]
+fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g x");
+    redraw(cx);
+    cx.simulate_keystrokes("secondary-\\");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("placeholder").is_some(),
+        "a placeholder beside"
+    );
+    assert!(
+        cx.debug_bounds("terminal").is_some(),
+        "the terminal still drawn"
+    );
+    click_on(cx, "place-tasks");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view(), View::Tasks);
+        assert_eq!(a.model().panes().len(), 2);
+    });
+    // J moves the tasks' selection; the shell hears nothing.
+    let before = app.read_with(cx, |a, _| a.model().selected().map(|r| r.key.clone()));
+    cx.simulate_keystrokes("j");
+    redraw(cx);
+    let after = app.read_with(cx, |a, _| a.model().selected().map(|r| r.key.clone()));
+    assert_ne!(before, after, "the focused list moved");
+    cx.update(|window, cx| assert!(!app.read(cx).terminal_focused(window, cx)));
+    // A press in the terminal's pane focuses it, and it has the keys.
+    let terminal_pane = app.read_with(cx, |a, _| a.model().panes()[0].id);
+    assert_eq!(terminal_pane, 0);
+    click_on(cx, "pane-0");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Terminal));
+    cx.update(|window, cx| assert!(app.read(cx).terminal_focused(window, cx)));
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view(), View::Terminal, "typed into the shell")
+    });
+    // The next pane: the tasks again; closed, the terminal is all there is, and stays.
+    cx.simulate_keystrokes("secondary-alt-]");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Tasks));
+    cx.simulate_keystrokes("secondary-alt-w");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().panes().len(), 1);
+        assert_eq!(a.model().view(), View::Terminal);
+    });
+    cx.update(|window, cx| assert!(app.read(cx).terminal_focused(window, cx)));
+    cx.simulate_keystrokes("secondary-alt-w");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().panes().len(), 1, "never the last")
+    });
+}

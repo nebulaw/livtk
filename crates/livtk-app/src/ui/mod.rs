@@ -12,6 +12,7 @@ pub mod diagram;
 mod docs;
 pub mod icons;
 pub mod menus;
+mod panes;
 pub mod state_flow;
 pub mod terminal;
 mod theme;
@@ -31,6 +32,7 @@ use livtk_core::event::{Event, Op};
 use livtk_core::{Kind, State, Summary};
 use uuid::Uuid;
 
+use crate::model::Axis as PaneAxis;
 use crate::model::docs::DocRow;
 use crate::model::keys;
 use crate::model::{
@@ -104,6 +106,11 @@ actions!(
         ToggleSidebar,
         ToggleBottom,
         TogglePanel,
+        SplitRight,
+        SplitDown,
+        ClosePane,
+        NextPane,
+        PrevPane,
         OpenPalette,
         PaletteUp,
         PaletteDown,
@@ -503,6 +510,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-[", DocBack, None),
         KeyBinding::new("secondary-]", DocForward, None),
         KeyBinding::new("secondary-alt-b", TogglePanel, None),
+        // Panes: split the focused one, close it, go to the next or the one before.
+        KeyBinding::new("secondary-\\", SplitRight, None),
+        KeyBinding::new("secondary-alt-\\", SplitDown, None),
+        KeyBinding::new("secondary-alt-w", ClosePane, None),
+        KeyBinding::new("secondary-alt-]", NextPane, None),
+        KeyBinding::new("secondary-alt-[", PrevPane, None),
         // Bound after GPUI Component's own, so in the palette's field they win over the cursor.
         // Ctrl+N and Ctrl+P are Control on every platform, as in every Mac text field.
         KeyBinding::new("up", PaletteUp, Some(PALETTE_FIELD)),
@@ -606,7 +619,8 @@ pub struct LivtkApp {
     /// Whether the app follows the system's settings it is told of only by asking (Reduce
     /// Motion): the app does; a test sets them itself.
     follows_system: bool,
-    list_scroll: UniformListScrollHandle,
+    /// Each pane's list scrolling, by the pane's id.
+    list_scrolls: std::cell::RefCell<HashMap<u64, UniformListScrollHandle>>,
     filter: Entity<InputState>,
     note: Entity<TextareaState>,
     /// The node the note field is for, and each other node's unsent draft, by project and node:
@@ -651,7 +665,7 @@ pub struct LivtkApp {
     terminals: HashMap<PathBuf, Entity<terminal::TerminalPane>>,
     /// The view and project last drawn, so arriving at a terminal gives it the keys, and leaving
     /// gives them back to the list.
-    last_place: Option<(View, usize)>,
+    last_place: Option<(u64, View, usize)>,
     /// Whether the bottom bar is shown, and its height; whether it is sliding away, and how many
     /// times it opened or shut (each slides once).
     bottom_open: bool,
@@ -668,6 +682,12 @@ pub struct LivtkApp {
     panel_width: f32,
     /// The edge being dragged, if any.
     resizing: Option<Edge>,
+    /// Where each pane and each split was drawn, by pane id and by the split's path: what a
+    /// divider dragged and the dock's room are measured against.
+    pane_bounds: std::cell::RefCell<HashMap<u64, Bounds<Pixels>>>,
+    split_bounds: std::cell::RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>,
+    /// The divider being dragged: its split's path, and the part before it.
+    split_drag: Option<(Vec<usize>, usize)>,
     /// The edge under the pointer (or being dragged), where along it, and since which arrival.
     edge_hover: Option<EdgeHover>,
     /// The glow the pointer just left, fading out.
@@ -853,7 +873,7 @@ impl LivtkApp {
             modal_focus: cx.focus_handle(),
             flow,
             follows_system: false,
-            list_scroll: UniformListScrollHandle::new(),
+            list_scrolls: Default::default(),
             palette_input,
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
@@ -881,6 +901,9 @@ impl LivtkApp {
             sidebar_peek: false,
             panel_width: PANEL_WIDTH,
             resizing: None,
+            pane_bounds: Default::default(),
+            split_bounds: Default::default(),
+            split_drag: None,
             edge_hover: None,
             edge_leaving: None,
             edge_epoch: 0,
@@ -1310,7 +1333,7 @@ impl LivtkApp {
 
     /// In the Terminal view, the open project's terminal, made the first time.
     fn terminal_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<terminal::TerminalPane>> {
-        if self.model.view() != View::Terminal {
+        if self.model.view() != View::Terminal || self.model.placeholder() {
             return None;
         }
         let dir = self.model.project()?.dir.clone();
@@ -1324,11 +1347,12 @@ impl LivtkApp {
     /// Arriving at a terminal (by any way: a key, the sidebar, the palette, another project)
     /// gives it the keys; leaving one gives them back to the list.
     fn focus_on_arrival(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let place = (self.model.view(), self.model.current);
+        let pane = self.model.panes()[self.model.focused()].id;
+        let place = (pane, self.model.view(), self.model.current);
         if self.last_place == Some(place) {
             return;
         }
-        let was_terminal = self.last_place.is_some_and(|(v, _)| v == View::Terminal);
+        let was_terminal = self.last_place.is_some_and(|(_, v, _)| v == View::Terminal);
         self.last_place = Some(place);
         // However it was arrived at (a link, the palette, the sidebar), the filter shows this
         // view's.
@@ -1355,14 +1379,14 @@ impl LivtkApp {
                 .iter()
                 .position(|r| *r == FeedRow::Event(self.model.activity_index));
             if let Some(i) = at {
-                self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+                self.list_scroll().scroll_to_item(i, ScrollStrategy::Center);
             }
         } else if self.model.view() == View::Docs {
             self.reader.list.scroll_to_item(self.model.docs.index);
         } else if self.model.on_board() {
             self.reveal_card();
         } else if let Some(i) = self.display_index() {
-            self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+            self.list_scroll().scroll_to_item(i, ScrollStrategy::Center);
         }
         cx.notify();
     }
@@ -1385,6 +1409,16 @@ impl LivtkApp {
             // The column's header comes first, then its cards.
             self.column_scroll(key).scroll_to_item(i + 1);
         }
+    }
+
+    /// The list scrolling of the pane acted on.
+    fn list_scroll(&self) -> UniformListScrollHandle {
+        let id = self.model.panes()[self.model.focused()].id;
+        self.list_scrolls
+            .borrow_mut()
+            .entry(id)
+            .or_default()
+            .clone()
     }
 
     fn column_scroll(&self, key: GroupKey) -> ScrollHandle {
@@ -2020,7 +2054,7 @@ impl LivtkApp {
                     SharedString::from(format!("view-{}", view.title())),
                     view_icon(view),
                     view.title(),
-                    view == self.model.view(),
+                    view == self.model.view() && !self.model.placeholder(),
                     count,
                 )
                 .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
@@ -2092,7 +2126,7 @@ impl LivtkApp {
         let dragging = self.resizing == Some(edge);
         // The side edges run the height under the top bar; the bottom one the content's width.
         let len = match edge {
-            Edge::Bottom => self.content_width(window),
+            Edge::Bottom => self.window_content_width(window),
             _ => f32::from(window.viewport_size().height) - TOP_BAR,
         };
         let glow = match (self.edge_hover, self.edge_leaving) {
@@ -2343,7 +2377,7 @@ impl LivtkApp {
                 rail_button(
                     SharedString::from(format!("rail-{}", view.title())),
                     view_icon(view),
-                    view == self.model.view(),
+                    view == self.model.view() && !self.model.placeholder(),
                     new,
                     view.title().into(),
                 )
@@ -2870,6 +2904,11 @@ impl LivtkApp {
     /// is laid out right the first time: the window, less the sidebar, the content's inset and
     /// border, and the detail panel when it is open beside it.
     fn content_width(&self, window: &Window) -> f32 {
+        self.focused_width(self.window_content_width(window))
+    }
+
+    /// The content column's width, all panes together.
+    fn window_content_width(&self, window: &Window) -> f32 {
         let panel = if self.panel_open() && !self.panel_floats(window) {
             self.panel_px(window)
         } else {
@@ -3828,6 +3867,9 @@ impl LivtkApp {
             ))
             .into_any_element();
         }
+        if self.model.placeholder() {
+            return self.placeholder(cx);
+        }
         match (self.model.view(), self.model.layout()) {
             (View::Inbox, _) => self.inbox(cx).into_any_element(),
             (View::Activity, _) => self.activity_view(cx),
@@ -4187,11 +4229,14 @@ impl LivtkApp {
         let more = self.model.activity_more;
         // The lines, "Show older" while pages wait, then the dock's room at the end.
         let count = rows.len() + usize::from(more) + DOCK_ROWS;
+        let pane = self.model.focused();
         let list = uniform_list(
             "feed",
             count,
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                range
+                // Laid out later than drawn: as its own pane, whichever is focused.
+                let was = this.model.act_on(pane);
+                let out = range
                     .map(|i| match rows.get(i) {
                         // Every line spans the feed, as the lists' rows do.
                         Some(FeedRow::Day(label)) => div()
@@ -4234,10 +4279,12 @@ impl LivtkApp {
                             }))
                             .into_any_element(),
                     })
-                    .collect()
+                    .collect();
+                this.model.act_on(was);
+                out
             }),
         )
-        .track_scroll(&self.list_scroll)
+        .track_scroll(&self.list_scroll())
         .size_full();
         div()
             .debug_selector(|| "feed".into())
@@ -4405,10 +4452,13 @@ impl LivtkApp {
         }
         // The rows, then the dock's room at the end of what scrolls.
         let count = self.items().len() + DOCK_ROWS;
+        let pane = self.model.focused();
         uniform_list(
             "rows",
             count,
-            cx.processor(|this, range: std::ops::Range<usize>, _window, cx| {
+            cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                // Laid out later than drawn: its own pane's rows, whichever is focused.
+                let was = this.model.act_on(pane);
                 let items = this.items();
                 let selected = this.model.selected().map(|r| r.id);
                 let mut out = Vec::with_capacity(range.len());
@@ -4423,10 +4473,11 @@ impl LivtkApp {
                         None => out.push(dock_room()),
                     }
                 }
+                this.model.act_on(was);
                 out
             }),
         )
-        .track_scroll(&self.list_scroll)
+        .track_scroll(&self.list_scroll())
         .size_full()
         .into_any_element()
     }
@@ -6302,6 +6353,30 @@ impl Render for LivtkApp {
             (Some(t), None) => div().flex_1().min_h_0().child(t).into_any_element(),
             (None, None) => list_area.into_any_element(),
         };
+        // The focused pane: its view with the keys, the dock floating over its bottom, the docs'
+        // find bar over its top right (outside the list's keys, so typing in it is text).
+        let focused = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(main)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(DOCK_GAP))
+                    .flex()
+                    .justify_center()
+                    .children(dock),
+            )
+            .children(find_bar)
+            .into_any_element();
+        let panes = self.pane_tree(focused, window, cx);
+        let split_drag = self.split_drag_listener(cx);
         div()
             .size_full()
             .relative()
@@ -6407,6 +6482,15 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &ToggleBottom, _, cx| this.toggle_bottom(cx)))
             .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
             .on_action(
+                cx.listener(|this, _: &SplitRight, w, cx| this.split_pane(PaneAxis::Row, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SplitDown, w, cx| this.split_pane(PaneAxis::Column, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ClosePane, w, cx| this.close_pane(w, cx)))
+            .on_action(cx.listener(|this, _: &NextPane, w, cx| this.next_pane(1, w, cx)))
+            .on_action(cx.listener(|this, _: &PrevPane, w, cx| this.next_pane(-1, w, cx)))
+            .on_action(
                 cx.listener(|this, _: &ToggleHelp, window, cx| {
                     this.set_help(!this.help, window, cx)
                 }),
@@ -6463,44 +6547,7 @@ impl Render for LivtkApp {
                             .flex()
                             .flex_col()
                             .children(panel_edge.map(|e| e.right_0()))
-                            .child(
-                                div()
-                                    .debug_selector(|| "content-box".into())
-                                    .w_full()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .rounded_xl()
-                                    .border_1()
-                                    .border_color(color(BORDER))
-                                    .bg(color(CONTENT))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .relative()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .h_full()
-                                            .flex()
-                                            .flex_col()
-                                            .child(main)
-                                            // Floating over the content's bottom, centred on it; it moves
-                                            // with the content as the detail panel opens beside it.
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .left_0()
-                                                    .right_0()
-                                                    .bottom(px(DOCK_GAP))
-                                                    .flex()
-                                                    .justify_center()
-                                                    .children(dock),
-                                            )
-                                            // The docs' find bar, over the reader's top right,
-                                            // outside the list's keys so typing in it is text.
-                                            .children(find_bar),
-                                    ),
-                            )
+                            .child(div().w_full().flex_1().min_h_0().flex().child(panes))
                             .children(bottom),
                     )
                     // Beside the content box, on the window's own black, as the sidebar is: the content
@@ -6514,6 +6561,7 @@ impl Render for LivtkApp {
             .children(settings)
             .children(notice)
             .children(drag)
+            .children(split_drag)
     }
 }
 

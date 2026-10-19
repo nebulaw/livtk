@@ -3607,3 +3607,56 @@ fn the_rail_groups_the_splits_views_and_unsplits_them(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("rail-split").is_none());
     assert!(cx.debug_bounds("rail-Tasks").is_some(), "back in its place");
 }
+
+/// A view joining the split slides from its place in the list into the split's group, and
+/// back out on unsplit: at the start of the move it is where it was, at the end in its place.
+#[gpui_kit::test]
+fn a_view_joining_the_split_slides_from_its_place_into_the_group_and_back(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    let was = cx.debug_bounds("view-Tasks").unwrap().origin.y;
+    // Split: the tasks join the split's group, and start from where they were.
+    cx.simulate_keystrokes("secondary-\\");
+    redraw(cx);
+    let start = cx
+        .debug_bounds("split-Tasks")
+        .expect("in the group")
+        .origin
+        .y;
+    assert!(
+        // A few milliseconds in by the time it is drawn.
+        (f32::from(start) - f32::from(was)).abs() < 8.,
+        "starts at its old place: {start:?} from {was:?}"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    redraw(cx);
+    let end = cx.debug_bounds("split-Tasks").unwrap().origin.y;
+    assert!(end < was, "then sits up in the group: {end:?}");
+    // Unsplit: back down from the group to its place.
+    app.update(cx, |a, _| {
+        let id = a.model().split_views()[0].0;
+        a.model_mut().unsplit(id);
+    });
+    redraw(cx);
+    let back = cx
+        .debug_bounds("view-Tasks")
+        .expect("in its place")
+        .origin
+        .y;
+    assert!(
+        (f32::from(back) - f32::from(end)).abs() < 8.,
+        "starts from the group: {back:?} from {end:?}"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    redraw(cx);
+    let home = cx.debug_bounds("view-Tasks").unwrap().origin.y;
+    assert!(
+        (f32::from(home) - f32::from(was)).abs() < 1.,
+        "home: {home:?}"
+    );
+}

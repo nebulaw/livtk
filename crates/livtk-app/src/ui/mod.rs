@@ -711,6 +711,12 @@ pub struct LivtkApp {
     pane_born: Option<u64>,
     pane_gone: Option<(Split, u64)>,
     pane_epoch: usize,
+    /// The split's views as the sidebar last laid them out, and how each line moves from where
+    /// it was to where it is now (or comes in), while it does: a view joining the split slides
+    /// up into its group, one leaving slides back down, the rest make room.
+    side_was: Option<Vec<(u64, Option<View>)>>,
+    side_moves: HashMap<String, panes::SideMove>,
+    side_epoch: usize,
     split_bounds: std::cell::RefCell<HashMap<Vec<usize>, Bounds<Pixels>>>,
 
     /// The edge under the pointer (or being dragged), where along it, and since which arrival.
@@ -930,6 +936,9 @@ impl LivtkApp {
             pane_born: None,
             pane_gone: None,
             pane_epoch: 0,
+            side_was: None,
+            side_moves: HashMap::new(),
+            side_epoch: 0,
             split_bounds: Default::default(),
             edge_hover: None,
             edge_leaving: None,
@@ -2076,16 +2085,15 @@ impl LivtkApp {
                 View::Activity => unseen,
                 _ => 0,
             };
-            side = side.child(
-                nav_item(
-                    SharedString::from(format!("view-{}", view.title())),
-                    view_icon(view),
-                    view.title(),
-                    view == self.model.view() && !self.model.placeholder(),
-                    count,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
-            );
+            let row = nav_item(
+                SharedString::from(format!("view-{}", view.title())),
+                view_icon(view),
+                view.title(),
+                view == self.model.view() && !self.model.placeholder(),
+                count,
+            )
+            .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx)));
+            side = side.child(self.side_move(view.title(), row.into_any_element(), cx));
         }
         side.child(div().flex_1())
             .when_some(self.update.as_ref(), |side, staged| {
@@ -2418,16 +2426,15 @@ impl LivtkApp {
                 View::Activity => unseen > 0,
                 _ => false,
             };
-            rail = rail.child(
-                rail_button(
-                    SharedString::from(format!("rail-{}", view.title())),
-                    view_icon(view),
-                    view == self.model.view() && !self.model.placeholder(),
-                    new,
-                    view.title().into(),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx))),
-            );
+            let button = rail_button(
+                SharedString::from(format!("rail-{}", view.title())),
+                view_icon(view),
+                view == self.model.view() && !self.model.placeholder(),
+                new,
+                view.title().into(),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx)));
+            rail = rail.child(self.side_move(view.title(), button.into_any_element(), cx));
         }
         rail.child(div().flex_1())
             .child(
@@ -6148,8 +6155,9 @@ impl Render for LivtkApp {
         if Self::window_width(window) >= RAIL_BELOW {
             self.sidebar_peek = false;
         }
-        let sidebar = self.sidebar(window, cx);
         let rail = self.rail(window);
+        self.track_side(rail, cx);
+        let sidebar = self.sidebar(window, cx);
         // Collapsing or expanding the sidebar slides it; a drag of its edge does not.
         let side_w = self.sidebar_px(window);
         let from = match self.rail_was {

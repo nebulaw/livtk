@@ -9,6 +9,8 @@ use gpui_kit::*;
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
 use super::{Edge, LivtkApp, View, empty_action, view_icon};
+use std::collections::HashMap;
+
 use crate::model::{Axis, Split};
 
 /// The gutter between two panes, where the divider is dragged.
@@ -604,11 +606,7 @@ impl LivtkApp {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.focus_pane(i, window, cx);
                 }));
-            group = group.child(div().child(row).with_animation(
-                SharedString::from(format!("split-in-{id}-{name}")),
-                Animation::new(motion).with_easing(super::ease_out_cubic),
-                |el, t| el.opacity(t).mt(px(-8. * (1. - t))),
-            ));
+            group = group.child(self.side_move(&side_key(id, view), row.into_any_element(), cx));
         }
         Some(
             group
@@ -633,11 +631,6 @@ impl LivtkApp {
             return None;
         }
         let focused = (!self.model.solo()).then(|| self.model.focused_id());
-        let motion = if cx.reduce_motion() {
-            std::time::Duration::ZERO
-        } else {
-            super::SLIDE
-        };
         let mut group = div()
             .debug_selector(|| "rail-split".into())
             .p(px(3.))
@@ -694,11 +687,7 @@ impl LivtkApp {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.focus_pane(i, window, cx);
             }));
-            group = group.child(div().child(button).with_animation(
-                SharedString::from(format!("rail-split-in-{id}-{name}")),
-                Animation::new(motion).with_easing(super::ease_out_cubic),
-                |el, t| el.opacity(t).mt(px(-6. * (1. - t))),
-            ));
+            group = group.child(self.side_move(&side_key(id, view), button.into_any_element(), cx));
         }
         Some(group.into_any_element())
     }
@@ -724,5 +713,122 @@ impl LivtkApp {
             .borrow()
             .get(&id)
             .map_or(fallback, |b| f32::from(b.size.width))
+    }
+}
+
+/// How a line of the sidebar moves as the split changes: from `by` above (negative) or below
+/// where it is now, to its place; or in, where it had no place before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SideMove {
+    By(f32),
+    In,
+}
+
+/// A sidebar line's name across layouts: its view's, or, for a placeholder, its pane's.
+fn side_key(id: u64, view: Option<View>) -> String {
+    view.map_or(format!("empty-{id}"), |v| v.title().to_owned())
+}
+
+/// Where each line of the sidebar (or of the rail) sits from its top, as it lays them out with
+/// `split`'s views grouped: the group (a box, its header on the sidebar), then each view not
+/// in it, the spaces and headings between. Only the differences between two layouts are used.
+fn side_ys(split: &[(u64, Option<View>)], rail: bool) -> HashMap<String, f32> {
+    let gap = 2.;
+    let (row, pad, header) = if rail {
+        (36., 3., 0.)
+    } else {
+        (super::NAV_ROW, 4., 22. + gap)
+    };
+    let mut y = 0.;
+    let mut out = HashMap::new();
+    let place = |h: f32, y: &mut f32| {
+        let top = *y;
+        *y += h + gap;
+        top
+    };
+    if !split.is_empty() {
+        let n = split.len() as f32;
+        let top = place(2. + 2. * pad + header + n * row + (n - 1.) * gap, &mut y);
+        for (k, &(id, view)) in split.iter().enumerate() {
+            out.insert(
+                side_key(id, view),
+                top + 1. + pad + header + k as f32 * (row + gap),
+            );
+        }
+        place(10., &mut y);
+    }
+    for view in View::ALL {
+        if matches!(view, View::Tasks | View::Graph) {
+            place(14., &mut y);
+            if !rail {
+                place(24., &mut y);
+            }
+        }
+        if split.iter().any(|(_, v)| *v == Some(view)) {
+            continue;
+        }
+        out.insert(view.title().to_owned(), place(row, &mut y));
+    }
+    out
+}
+
+impl LivtkApp {
+    /// The split changed since the sidebar was last laid out: how each line moves from its old
+    /// place to its new one. Not on the first layout, nor with less motion asked for.
+    pub(super) fn track_side(&mut self, rail: bool, cx: &mut Context<Self>) {
+        let now = self.model.split_views();
+        let Some(was) = self.side_was.replace(now.clone()) else {
+            return;
+        };
+        if was == now || cx.reduce_motion() {
+            return;
+        }
+        let (before, after) = (side_ys(&was, rail), side_ys(&now, rail));
+        self.side_moves = after
+            .iter()
+            .filter_map(|(key, y)| match before.get(key) {
+                Some(old) if (old - y).abs() > 0.5 => Some((key.clone(), SideMove::By(old - y))),
+                Some(_) => None,
+                None => Some((key.clone(), SideMove::In)),
+            })
+            .collect();
+        self.side_epoch += 1;
+        let epoch = self.side_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(super::SLIDE).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.side_epoch == epoch {
+                    app.side_moves.clear();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Sidebar line `key`, sliding from where it was to its place, or fading in, while the
+    /// split's change plays.
+    pub(super) fn side_move(
+        &self,
+        key: &str,
+        el: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let _ = cx;
+        let Some(&m) = self.side_moves.get(key) else {
+            return el;
+        };
+        div()
+            .relative()
+            .child(el)
+            .with_animation(
+                SharedString::from(format!("side-{key}-{}", self.side_epoch)),
+                Animation::new(super::SLIDE).with_easing(super::ease_out_cubic),
+                move |d, t| match m {
+                    SideMove::By(by) => d.top(px(by * (1. - t))),
+                    SideMove::In => d.opacity(t),
+                },
+            )
+            .into_any_element()
     }
 }

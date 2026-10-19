@@ -115,7 +115,9 @@ impl Kind {
     /// longer what it says, so it needs approving again.
     pub const fn on_edit(self, state: State) -> Option<State> {
         match (self, state) {
-            (Kind::Task, State::Acked) => Some(State::Planned),
+            // The human approved the plan as it was: changed while acknowledged, under way or
+            // in review, it goes back to planned for a fresh acknowledgement.
+            (Kind::Task, State::Acked | State::Doing | State::Review) => Some(State::Planned),
             (Kind::Lesson, State::Ratified) | (Kind::Decision, State::Accepted) => {
                 Some(State::Proposed)
             }
@@ -517,7 +519,10 @@ mod tests {
             Kind::Decision.on_edit(State::Accepted),
             Some(State::Proposed)
         );
-        assert_eq!(Kind::Task.on_edit(State::Doing), None);
+        assert_eq!(Kind::Task.on_edit(State::Doing), Some(State::Planned));
+        assert_eq!(Kind::Task.on_edit(State::Review), Some(State::Planned));
+        assert_eq!(Kind::Task.on_edit(State::Backlog), None);
+        assert_eq!(Kind::Task.on_edit(State::Done), None);
         assert_eq!(Kind::Finding.on_edit(State::Recorded), None);
     }
 

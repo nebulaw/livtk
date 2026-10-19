@@ -156,9 +156,6 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     if node.blocked {
         facts.push("blocked".into());
     }
-    if livtk_core::replanned(&node) {
-        facts.push("plan changed since acknowledged".into());
-    }
     println!("{}", facts.join(" · "));
     for (label, briefs) in [
         ("part of", &part_of),
@@ -235,17 +232,6 @@ pub fn moved(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Res
             None => {}
         }
         if let Some(props) = &data.props
-            && let Some(mark) = props.get("replanned")
-        {
-            if mark.as_bool() == Some(true) {
-                println!(
-                    "{key}: the plan changed since it was acknowledged; the developer acknowledges it again (`livtk ack {key}`) before it can be done"
-                );
-            } else {
-                println!("{key}: the changed plan is acknowledged");
-            }
-        }
-        if let Some(props) = &data.props
             && let Some(scope) = props.get("scope")
         {
             if scope.as_str() == Some("always") {
@@ -293,7 +279,6 @@ pub fn inbox(items: &[Summary], gates: &[Gate], json: bool) -> Result<()> {
         let moves;
         let action = match t.kind {
             Kind::Task if t.state == State::Planned => "ack",
-            Kind::Task if t.replanned => "ack the changed plan",
             Kind::Lesson if t.state == State::Proposed => "ratify or reject",
             Kind::Decision if t.state == State::Proposed => "accept or reject",
             _ => {

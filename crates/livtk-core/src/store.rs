@@ -140,8 +140,6 @@ pub struct Summary {
     pub blocked: bool,
     /// A ratified lesson marked as a standing rule.
     pub standing: bool,
-    /// A task whose plan changed after the human acknowledged it.
-    pub replanned: bool,
     /// The task this one is a sub-task of.
     pub parent: Option<Uuid>,
 }
@@ -325,33 +323,17 @@ impl Store {
     }
 
     /// Nodes of a kind in the given states (all states when empty), work in hand first.
-    /// Tasks whose plan changed after the human acknowledged it, in any state.
-    pub fn replanned(&self) -> Result<Vec<Summary>> {
-        self.summaries(Kind::Task, &[], true)
-    }
-
     pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
-        self.summaries(kind, states, false)
-    }
-
-    /// Nodes of `kind` in `states` (any, when empty), only those marked replanned if `replanned`.
-    fn summaries(&self, kind: Kind, states: &[State], replanned: bool) -> Result<Vec<Summary>> {
         let wanted: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
         let sql = format!(
             "SELECT n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, {BLOCKED}, \
              coalesce(json_extract(n.props, '$.scope'), '') = 'always', \
-             (SELECT e.dst FROM edges e WHERE e.src = n.id AND e.rel = 'parent' LIMIT 1), \
-             coalesce(json_extract(n.props, '$.replanned'), 0) = 1 \
+             (SELECT e.dst FROM edges e WHERE e.src = n.id AND e.rel = 'parent' LIMIT 1) \
              FROM nodes n WHERE n.kind = ?1 \
-             AND (?2 = '[]' OR n.state IN (SELECT value FROM json_each(?2))) \
-             AND (?3 = 0 OR coalesce(json_extract(n.props, '$.replanned'), 0) = 1)"
+             AND (?2 = '[]' OR n.state IN (SELECT value FROM json_each(?2)))"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
-        let mut rows = stmt.query(params![
-            kind.as_str(),
-            serde_json::to_string(&wanted)?,
-            replanned
-        ])?;
+        let mut rows = stmt.query(params![kind.as_str(), serde_json::to_string(&wanted)?])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let text = |i: usize| -> Result<&str> {
@@ -373,7 +355,6 @@ impl Store {
                     .map_err(rusqlite::Error::from)?
                     .map(parse_uuid)
                     .transpose()?,
-                replanned: row.get(10)?,
             });
         }
         // Sorting here rather than in SQL keeps SQLite from copying rows through its sorter.

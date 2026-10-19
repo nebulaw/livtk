@@ -222,11 +222,6 @@ pub enum Command {
         node: String,
         to: State,
     },
-    /// The human acknowledges a task's plan: a planned task moves to acked; a task whose plan
-    /// changed after it was acknowledged keeps its state and has the change acknowledged.
-    Ack {
-        node: String,
-    },
     SetPriority {
         node: String,
         priority: u8,
@@ -726,8 +721,6 @@ impl Workspace {
     /// accept.
     pub fn inbox(&self) -> Result<Vec<Summary>> {
         let mut out = self.store.list(Kind::Task, &[State::Planned])?;
-        // Plans changed under way wait on the human too.
-        out.extend(self.store.replanned()?);
         out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
         // What waits on a gate the config adds; a gate from any state guards a move but makes
@@ -1127,25 +1120,6 @@ impl Workspace {
                 }
                 // The human approved the text as it was; changed text needs approving again.
                 patch.state = n.kind.on_edit(n.state);
-                // A plan changed under way keeps its state, but not its approval: marked until
-                // the human acknowledges it again. A change of spacing or case is no change.
-                let material = patch
-                    .title
-                    .as_ref()
-                    .is_some_and(|t| plain(t) != plain(&n.title))
-                    || patch
-                        .body
-                        .as_ref()
-                        .is_some_and(|b| plain(b) != plain(&n.body));
-                if n.kind == Kind::Task
-                    && matches!(n.state, State::Doing | State::Review)
-                    && material
-                    && !replanned(&n)
-                {
-                    let mut props = serde_json::Map::new();
-                    props.insert(REPLANNED.into(), serde_json::Value::Bool(true));
-                    patch.props = Some(props);
-                }
                 Ok(vec![Op::NodeSet {
                     node: n.id,
                     data: patch,
@@ -1155,25 +1129,6 @@ impl Workspace {
                 let n = self.node(&node)?;
                 self.check_move(&n, to, by)?;
                 self.move_ops(&n, to, by)
-            }
-            Command::Ack { node } => {
-                let n = self.node(&node)?;
-                if n.kind == Kind::Task && replanned(&n) && n.state != State::Planned {
-                    if !by.is_human() {
-                        return Err(Error::Refused(human_only_reason(&n)));
-                    }
-                    let mut props = serde_json::Map::new();
-                    props.insert(REPLANNED.into(), serde_json::Value::Null);
-                    return Ok(vec![Op::NodeSet {
-                        node: n.id,
-                        data: NodePatch {
-                            props: Some(props),
-                            ..NodePatch::default()
-                        },
-                    }]);
-                }
-                self.check_move(&n, State::Acked, by)?;
-                self.move_ops(&n, State::Acked, by)
             }
             Command::Ratify { node, always } => {
                 let n = self.node(&node)?;
@@ -1359,12 +1314,6 @@ impl Workspace {
                 n.kind, n.key
             )));
         }
-        if to == State::Done && replanned(n) {
-            return Err(Error::Refused(format!(
-                "{key}'s plan changed after the developer acknowledged it; it is done only once they acknowledge the plan again (`livtk ack {key}`, or Acknowledge in the app)",
-                key = n.key
-            )));
-        }
         if to == State::Doing {
             let (deps, _) = self.store.links(n.id, Rel::DependsOn)?;
             let waiting: Vec<String> = deps
@@ -1395,18 +1344,6 @@ impl Workspace {
             },
         };
         let mut ops = vec![set(n.id, to)];
-        // Back to planning, a mark of a changed plan has nothing left to say.
-        if replanned(n) && matches!(to, State::Planned | State::Backlog) {
-            let mut props = serde_json::Map::new();
-            props.insert(REPLANNED.into(), serde_json::Value::Null);
-            ops.push(Op::NodeSet {
-                node: n.id,
-                data: NodePatch {
-                    props: Some(props),
-                    ..NodePatch::default()
-                },
-            });
-        }
         let replaced = match (n.kind, to) {
             (Kind::Lesson, State::Ratified) => Some((State::Ratified, State::Retired)),
             (Kind::Decision, State::Accepted) => Some((State::Accepted, State::Superseded)),
@@ -1422,22 +1359,6 @@ impl Workspace {
         }
         Ok(ops)
     }
-}
-
-/// The prop marking a task whose plan changed after it was acknowledged.
-pub const REPLANNED: &str = "replanned";
-
-/// Whether `n`'s plan changed after the human acknowledged it.
-pub fn replanned(n: &Node) -> bool {
-    n.props.get(REPLANNED).and_then(serde_json::Value::as_bool) == Some(true)
-}
-
-/// Text as it reads: case aside, every run of spacing one space.
-fn plain(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
 }
 
 /// Why Claude may not take a step that belongs to the human.

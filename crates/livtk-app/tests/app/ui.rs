@@ -3726,6 +3726,16 @@ fn the_detail_opens_as_a_side_peek_a_center_peek_or_a_full_page(cx: &mut TestApp
         cx.debug_bounds("dock").is_none(),
         "the list's dock gone with it"
     );
+    // Esc shuts a menu opened from the page first, the page after.
+    click_on(cx, "detail-mode");
+    assert!(cx.debug_bounds("detail-mode-menu").is_some());
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-mode-menu").is_none(),
+        "the menu shut"
+    );
+    assert!(cx.debug_bounds("full-page").is_some(), "the page stays");
     assert!(cx.debug_bounds("center-peek").is_none());
     assert!(cx.debug_bounds("detail-panel").is_none(), "no panel beside");
     cx.simulate_keystrokes("escape");

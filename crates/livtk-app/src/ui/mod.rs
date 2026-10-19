@@ -2047,16 +2047,15 @@ impl LivtkApp {
 
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
-        // The inbox and the feed first, under no heading; then the split's views, grouped,
-        // while there is one; then the views of the project's work; then the tools to work on
-        // it with. A view in the split is in its group, not in its usual place.
+        // The split's views first, grouped, while there is one; then the inbox and the feed,
+        // under no heading; then the views of the project's work; then the tools to work on it
+        // with. A view in the split is in its group, not in its usual place.
         let split = self.model.split_views();
-        let mut group = self.sidebar_split(&split, cx);
+        if let Some(group) = self.sidebar_split(&split, cx) {
+            side = side.child(group).child(div().h(px(10.)));
+        }
         for view in View::ALL {
             if view == View::Tasks {
-                if let Some(g) = group.take() {
-                    side = side.child(div().h(px(14.))).child(g);
-                }
                 side = side.child(div().h(px(14.))).child(section_label("Views"));
             }
             if view == View::Graph {

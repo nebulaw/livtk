@@ -27,8 +27,7 @@ list's place, behind a header bar, and Esc gives the list back.
 - One pane is focused: the keys, the sidebar and the dock are its, and its box's border is the
   stronger one. A press in another pane focuses it.
 - A split starts with a placeholder: the views to put in it, and a way to close it.
-- While there is a split, its views sit grouped in the sidebar, under the inbox and the feed and
-  above Views (sliding in as they join),
+- While there is a split, its views sit grouped at the sidebar's top (sliding in as they join),
   in the split's order, the focused one lit; each has an unsplit button that closes its pane
   and puts the view back in its usual place.
 - The sidebar picks a view the split has: its pane is focused. A view the split does not have

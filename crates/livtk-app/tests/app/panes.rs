@@ -225,3 +225,30 @@ fn a_view_in_none_of_the_splits_panes_shows_alone_and_the_split_comes_back() {
     assert!(!m.solo());
     assert_eq!(m.view(), View::Lessons);
 }
+
+#[test]
+fn unsplitting_a_pane_keeps_the_focus_and_a_view_alone_where_they_are() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+    let mut m = open(dir.path());
+    m.set_view(View::Terminal);
+    m.split_pane(Axis::Row);
+    m.set_view(View::Tasks);
+    m.split_pane(Axis::Row);
+    m.set_view(View::Findings);
+    let tasks = m.split.ids()[1];
+    assert_eq!(m.split_views().len(), 3);
+    // Out goes the tasks' pane; the findings keep the keys.
+    m.unsplit(tasks);
+    assert_eq!(views(&m), [Some(View::Terminal), Some(View::Findings)]);
+    assert_eq!(m.view(), View::Findings);
+    // Unsplit to one pane under a view shown alone: that view is the one view.
+    m.set_view(View::Docs);
+    assert!(m.solo());
+    let findings = m.split.ids()[1];
+    m.unsplit(findings);
+    assert!(!m.solo());
+    assert_eq!(m.view(), View::Docs);
+    assert!(m.split_views().is_empty(), "one pane: no split to group");
+    assert_eq!(m.panes().len(), 1);
+}

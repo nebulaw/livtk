@@ -3461,18 +3461,31 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
     click_on(cx, "view-Docs");
     redraw(cx);
     assert!(cx.debug_bounds("terminal").is_none(), "the docs alone");
-    click_on(cx, "view-Terminal");
+    // The split's views sit grouped at the sidebar's top, not in their usual place.
+    assert!(cx.debug_bounds("sidebar-split").is_some());
+    assert!(cx.debug_bounds("view-Terminal").is_none());
+    click_on(cx, "split-Terminal");
     redraw(cx);
     assert!(cx.debug_bounds("terminal").is_some(), "the split again");
     app.read_with(cx, |a, _| assert!(!a.model().solo()));
     cx.simulate_keystrokes("secondary-alt-]");
     redraw(cx);
-    cx.simulate_keystrokes("secondary-alt-w");
+    // Unsplit from the sidebar: the tasks' pane goes, the terminal is all there is, and the
+    // group with it.
+    let row = cx.debug_bounds("split-Tasks").unwrap();
+    cx.simulate_mouse_move(row.center(), None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    click_on(cx, "unsplit-Tasks");
     redraw(cx);
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().panes().len(), 1);
         assert_eq!(a.model().view(), View::Terminal);
     });
+    assert!(cx.debug_bounds("sidebar-split").is_none());
+    assert!(
+        cx.debug_bounds("view-Tasks").is_some(),
+        "back in its usual place"
+    );
     cx.update(|window, cx| assert!(app.read(cx).terminal_focused(window, cx)));
     cx.simulate_keystrokes("secondary-alt-w");
     redraw(cx);

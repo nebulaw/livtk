@@ -769,6 +769,56 @@ impl Model {
         }
     }
 
+    /// The split's panes in reading order, each with its view (none for a placeholder), while
+    /// there is a split: what the sidebar groups at its top.
+    pub fn split_views(&self) -> Vec<(u64, Option<View>)> {
+        let ids = self.split.ids();
+        if ids.len() < 2 {
+            return Vec::new();
+        }
+        ids.into_iter()
+            .filter_map(|id| {
+                let p = self.panes.iter().find(|p| p.id == id)?;
+                Some((id, (!p.placeholder).then_some(p.view)))
+            })
+            .collect()
+    }
+
+    /// Take pane `id` out of the split (its view goes back to standing alone in the sidebar),
+    /// the focus staying where it is, or, on that pane, going to the one before it.
+    pub fn unsplit(&mut self, id: u64) {
+        let order = self.split.ids();
+        let Some(here) = order.iter().position(|p| *p == id) else {
+            return;
+        };
+        if order.len() < 2 {
+            return;
+        }
+        let neighbour = if here > 0 { order[here - 1] } else { order[1] };
+        let focused = self.pane().id;
+        if !self.split.remove(id) {
+            return;
+        }
+        self.panes.retain(|p| p.id != id);
+        if self.split_focus == id {
+            self.split_focus = neighbour;
+        }
+        let keep = if focused == id { neighbour } else { focused };
+        self.at = self.pane_index(keep).unwrap_or(0);
+        // No split left under a view shown alone: that view is the one view.
+        if let (Some(solo), Split::Pane(left)) = (self.solo, self.split.clone()) {
+            self.panes.retain(|p| p.id != left);
+            self.split = Split::Pane(solo);
+            self.solo = None;
+            self.at = self.pane_index(solo).unwrap_or(0);
+        }
+    }
+
+    /// The pane the keys are in, by id.
+    pub fn focused_id(&self) -> u64 {
+        self.pane().id
+    }
+
     /// Whether a view shows alone over the split.
     pub fn solo(&self) -> bool {
         self.solo.is_some()

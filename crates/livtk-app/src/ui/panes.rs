@@ -395,6 +395,113 @@ impl LivtkApp {
         cx.notify();
     }
 
+    /// The split's group at the sidebar's top: each pane's view in the split's order, the
+    /// focused one lit; a click focuses its pane, its unsplit button closes it (the view goes
+    /// back to its usual place). Rows slide in as they join.
+    pub(super) fn sidebar_split(
+        &self,
+        split: &[(u64, Option<View>)],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if split.is_empty() {
+            return None;
+        }
+        let focused = (!self.model.solo()).then(|| self.model.focused_id());
+        let motion = if cx.reduce_motion() {
+            std::time::Duration::ZERO
+        } else {
+            super::SLIDE
+        };
+        let mut group = div()
+            .debug_selector(|| "sidebar-split".into())
+            .p_1()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .rounded_xl()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(BORDER))
+            .child(
+                div()
+                    .px_2()
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(TEXT_4))
+                    .child(icon(Icon::Grouping, 12., TEXT_4))
+                    .child("Split"),
+            );
+        for &(id, view) in split {
+            let Some(i) = self.model.pane_index(id) else {
+                continue;
+            };
+            let active = focused == Some(id);
+            let (glyph, label) = match view {
+                Some(v) => (view_icon(v), v.title()),
+                None => (Icon::Grouping, "Empty pane"),
+            };
+            let name = view.map_or("empty".to_owned(), |v| v.title().to_owned());
+            let row_id = format!("split-{name}");
+            let unsplit = format!("unsplit-{name}");
+            let row = super::nav_item(SharedString::from(row_id), glyph, label, active, 0)
+                .group("split-row")
+                .child(
+                    div()
+                        .id(SharedString::from(unsplit.clone()))
+                        .debug_selector(move || unsplit.clone())
+                        .group("unsplit")
+                        .size(px(22.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_lg()
+                        .invisible()
+                        .group_hover("split-row", |s| s.visible())
+                        .hover(|h| h.bg(color(HOVER)))
+                        .child(icon_hover(Icon::Close, 13., TEXT_4, "unsplit", TEXT))
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Unsplit: close this pane")
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.unsplit(id, window, cx);
+                        })),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.focus_pane(i, window, cx);
+                }));
+            group = group.child(div().child(row).with_animation(
+                SharedString::from(format!("split-in-{id}-{name}")),
+                Animation::new(motion).with_easing(super::ease_out_cubic),
+                |el, t| el.opacity(t).mt(px(-8. * (1. - t))),
+            ));
+        }
+        Some(
+            group
+                .with_animation(
+                    SharedString::from(format!("split-group-{}", split[0].0)),
+                    Animation::new(motion).with_easing(super::ease_out_cubic),
+                    |el, t| el.opacity(0.4 + 0.6 * t),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Pane `id` taken out of the split: closed, its view back in its usual place.
+    fn unsplit(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.unsplit(id);
+        self.glide = None;
+        self.sync_filter(window, cx);
+        self.focus_main(window, cx);
+        cx.notify();
+    }
+
     /// The focused pane's width, as drawn last; before that, `fallback`.
     pub(super) fn focused_width(&self, fallback: f32) -> f32 {
         if self.model.shown_split().ids().len() < 2 {

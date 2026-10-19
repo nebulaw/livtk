@@ -512,7 +512,11 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             output::edited(ws, &before, &events, json)
         }
         Cmd::Move { key, state } => moved(ws, &key, state, by, json),
-        Cmd::Ack { key } => moved(ws, &key, State::Acked, by, json),
+        Cmd::Ack { key } => {
+            let before = ws.node(&key)?;
+            let events = ws.execute(Command::Ack { node: key }, by)?;
+            output::moved(ws, &before, &events, json)
+        }
         Cmd::Start { key } => moved(ws, &key, State::Doing, by, json),
         Cmd::Done { key } => moved(ws, &key, State::Done, by, json),
         Cmd::Dep { action } => {

@@ -836,3 +836,91 @@ proptest! {
         prop_assert_eq!(replayed.snapshot().unwrap(), expected);
     }
 }
+
+// ---- a plan changed under way ------------------------------------------------------------------
+
+fn edit_body(ws: &mut Workspace, key: &str, body: &str) {
+    ws.execute(
+        Command::Edit {
+            node: key.into(),
+            title: None,
+            body: Some(body.into()),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_plan_changed_under_way_loses_its_acknowledgement_until_the_human_gives_it_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let t = task(&mut ws, "import the board");
+    edit_body(&mut ws, &t, "Import 133 tasks.");
+    ack(&mut ws, &t);
+    mv(&mut ws, &t, State::Doing, &CLAUDE).unwrap();
+    // Spacing and case are no change.
+    edit_body(&mut ws, &t, "import  133 tasks.\n");
+    assert!(
+        !livtk_core::replanned(&ws.node(&t).unwrap()),
+        "spacing and case"
+    );
+    // A different plan: the task keeps working, marked.
+    edit_body(&mut ws, &t, "Import 139 tasks and 60 lessons.");
+    let n = ws.node(&t).unwrap();
+    assert_eq!(n.state, State::Doing, "the work is not interrupted");
+    assert!(livtk_core::replanned(&n));
+    assert!(
+        ws.inbox()
+            .unwrap()
+            .iter()
+            .any(|s| s.key == t && s.replanned),
+        "it waits on the human"
+    );
+    // It goes to review, but not to done, while marked.
+    mv(&mut ws, &t, State::Review, &CLAUDE).unwrap();
+    let refused = mv(&mut ws, &t, State::Done, &HUMAN).unwrap_err();
+    assert!(refused.to_string().contains("plan changed"), "{refused}");
+    // Claude cannot clear the mark; the human can, and the state stays.
+    let claude = ws.execute(Command::Ack { node: t.clone() }, &CLAUDE);
+    assert!(claude.is_err(), "the human's to give");
+    ws.execute(Command::Ack { node: t.clone() }, &HUMAN)
+        .unwrap();
+    let n = ws.node(&t).unwrap();
+    assert_eq!(n.state, State::Review);
+    assert!(!livtk_core::replanned(&n));
+    assert!(!ws.inbox().unwrap().iter().any(|s| s.key == t));
+    mv(&mut ws, &t, State::Done, &CLAUDE).unwrap();
+    // The log shows the change and the acknowledgement as their own events.
+    let marks = ws
+        .history(Some(&t))
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(&e.op, Op::NodeSet { data, .. } if data.props.as_ref().is_some_and(|p| p.contains_key("replanned"))))
+        .count();
+    assert_eq!(marks, 2, "marked, then acknowledged");
+}
+
+#[test]
+fn an_acked_task_still_goes_back_to_planned_and_ack_still_acknowledges_a_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let t = task(&mut ws, "plan");
+    ack(&mut ws, &t);
+    edit_body(&mut ws, &t, "a new plan");
+    let n = ws.node(&t).unwrap();
+    assert_eq!(n.state, State::Planned, "as before");
+    assert!(
+        !livtk_core::replanned(&n),
+        "not marked: it waits for its ack anyway"
+    );
+    ws.execute(Command::Ack { node: t.clone() }, &HUMAN)
+        .unwrap();
+    assert_eq!(state(&ws, &t), State::Acked, "ack moves a planned task");
+    // A marked task sent back to planning loses its mark with it.
+    mv(&mut ws, &t, State::Doing, &CLAUDE).unwrap();
+    edit_body(&mut ws, &t, "yet another plan");
+    mv(&mut ws, &t, State::Acked, &CLAUDE).unwrap();
+    mv(&mut ws, &t, State::Planned, &CLAUDE).unwrap();
+    assert!(!livtk_core::replanned(&ws.node(&t).unwrap()));
+}

@@ -23,6 +23,7 @@ fn summary(n: u64, kind: Kind) -> Summary {
         updated: String::new(),
         blocked: false,
         standing: false,
+        replanned: false,
         parent: None,
     }
 }

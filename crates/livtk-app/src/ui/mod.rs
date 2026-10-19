@@ -4692,11 +4692,15 @@ impl LivtkApp {
         if blocked {
             row = row.child(icon_tag(Icon::Blocked, "Blocked", TEXT_3));
         }
+        if r.replanned {
+            row = row.child(tag("Plan changed", PROGRESS));
+        }
         if r.standing {
             row = row.child(icon_tag(Icon::Standing, "Standing rule", DONE));
         }
         if inbox {
             let label = match r.kind {
+                Kind::Task if r.replanned => "",
                 Kind::Task => "Acknowledge",
                 Kind::Lesson => "Ratify",
                 Kind::Decision => "Accept",
@@ -5165,6 +5169,7 @@ impl LivtkApp {
                     .flex_col()
                     .gap_5()
                     .child(title)
+                    .children(livtk_core::replanned(n).then(|| self.replanned_notice(cx)))
                     .when(has_flow(n.kind), |d| d.child(flow))
                     .child(props)
                     // What it waits for and what it blocks come before what it says.
@@ -5190,6 +5195,49 @@ impl LivtkApp {
                                 &self.note,
                             )),
                     ),
+            )
+    }
+
+    /// In the panel of a task whose plan changed after it was acknowledged: so, and the way to
+    /// acknowledge it again.
+    fn replanned_notice(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .debug_selector(|| "replanned".into())
+            .p_3()
+            .flex()
+            .items_center()
+            .gap_3()
+            .rounded_lg()
+            .bg(with_alpha(PROGRESS, 0.08))
+            .border_1()
+            .border_color(with_alpha(PROGRESS, 0.3))
+            .child(icon(Icon::Error, 14., PROGRESS))
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(color(TEXT_2))
+                    .child("The plan changed after you acknowledged it. It can't be done until you acknowledge it again."),
+            )
+            .child(
+                div()
+                    .id("ack-plan")
+                    .debug_selector(|| "ack-plan".into())
+                    .h(px(28.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(color(ACCENT))
+                    .text_color(color(TEXT))
+                    .font_weight(FontWeight::MEDIUM)
+                    .hover(|h| h.bg(color(ACCENT_HOVER)))
+                    .child("Acknowledge")
+                    .child(div().text_xs().text_color(with_alpha(TEXT, 0.6)).child("A"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.ack_plan();
+                        cx.notify();
+                    })),
             )
     }
 

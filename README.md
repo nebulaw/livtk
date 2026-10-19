@@ -150,8 +150,11 @@ recall use keywords only. With it, a prompt costs about 5 ms: livtk reads only t
 model the prompt needs, and keeps a sorted copy of its vocabulary (`livtk-vocab.txt`) beside it.
 
 States: `backlog → planned → acked → doing → review → done`, plus `parked` and `canceled`.
-Only a human can acknowledge (`planned → acked`); editing an acknowledged plan sends it back to
-`planned`. A command run by Claude Code (which sets `CLAUDECODE=1`) acts as Claude; anything else
+Only a human can acknowledge (`planned → acked`). An acknowledgement covers the plan as it was,
+in every state: editing an `acked` plan sends it back to `planned`, and a real change to the plan
+of a task already `doing` or in `review` (not spacing or case) marks it *plan changed*. The work
+goes on, but the task waits in the inbox and cannot be `done` until the human acknowledges the
+plan again (`livtk ack KEY`, or A in the app). A command run by Claude Code (which sets `CLAUDECODE=1`) acts as Claude; anything else
 acts as the human. Refusals by a rule exit with code 3.
 
 ## The app

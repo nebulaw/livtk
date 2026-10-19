@@ -1300,6 +1300,7 @@ impl Model {
             updated: n.updated.clone(),
             blocked: n.blocked,
             standing: n.props.get("scope").and_then(|v| v.as_str()) == Some("always"),
+            replanned: n.props.get("replanned").and_then(|v| v.as_bool()) == Some(true),
             parent: self
                 .pane()
                 .all
@@ -1381,8 +1382,25 @@ impl Model {
         self.run(cmd, Some(row));
     }
 
+    /// Acknowledge the plan of the node acted on again, its plan having changed under way.
+    pub fn ack_plan(&mut self) {
+        if let Some(row) = self.acted_on().filter(|r| r.replanned) {
+            self.run(
+                Command::Ack {
+                    node: row.id.to_string(),
+                },
+                Some(row),
+            );
+        }
+    }
+
     /// The first choice that decides (acknowledge, ratify, accept), for the one-key shortcut.
     pub fn decide(&mut self) {
+        // A plan changed under way is acknowledged first.
+        if self.acted_on().is_some_and(|r| r.replanned) {
+            self.ack_plan();
+            return;
+        }
         let choice = self
             .acted_on()
             .map(|r| self.choices(r.kind, r.state))

@@ -232,3 +232,17 @@ fn the_reading_settings_are_kept() {
     back.restore(&Saved::load(&path));
     assert_eq!(back.reading, m.reading);
 }
+
+#[test]
+fn the_way_a_detail_opens_comes_back_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    livtk_core::Workspace::init(dir.path(), Some("LIV")).unwrap();
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.detail_mode = livtk_app::model::DetailMode::Center;
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = Model::open(&[dir.path().to_path_buf()]);
+    back.restore(&Saved::load(&path));
+    assert_eq!(back.detail_mode, livtk_app::model::DetailMode::Center);
+}

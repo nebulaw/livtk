@@ -15,6 +15,10 @@ with their chats, terminals and the rest. When that comes, it changes here first
   it, no floating fields of its own. The middle can be split into panes (below).
 - **Right: what is open.** The panel shows the one thing chosen in the focused pane: a task, a
   doc. Its properties, its links, its history. Metadata lives here, not in the middle.
+  A node's detail can open three ways, as Notion opens a page (the button beside its close):
+  side peek (this panel), center peek (a large card over the dimmed window; Esc or a press
+  outside closes it, the list behind keeps the keys) or full page (in the list's place in the
+  pane it was opened from; Esc gives the list back). The choice sticks.
 
 The flow is always the same: a list in the middle → open one → its details in the panel. A
 thing that wants the whole middle (the terminal, a doc being read, a doc being edited) takes the

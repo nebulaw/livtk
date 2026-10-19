@@ -387,6 +387,15 @@ impl LivtkApp {
     /// A pane not focused: its view as it stands (the terminal's screen, the doc's editor, the
     /// list), its keys left to the focused one.
     fn unfocused_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let id = self.model.focused_id();
+        let width = self
+            .pane_bounds
+            .borrow()
+            .get(&id)
+            .map_or(480., |b| f32::from(b.size.width));
+        if let Some(page) = self.full_page(width, false, cx) {
+            return page;
+        }
         if self.model.view() == View::Docs
             && let Some(editor) = self.doc_editor(cx)
         {

@@ -13,6 +13,7 @@ mod docs;
 pub mod icons;
 pub mod menus;
 mod panes;
+mod peek;
 pub mod state_flow;
 pub mod terminal;
 mod terminals;
@@ -482,6 +483,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", Up, nav),
         KeyBinding::new("enter", Open, nav),
         KeyBinding::new("escape", Close, nav),
+        KeyBinding::new("escape", Close, Some(peek::DETAIL)),
         KeyBinding::new("a", Decide, nav),
         KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
@@ -1111,6 +1113,7 @@ impl LivtkApp {
             Menu::Standing => "standing",
             Menu::Projects => "projects",
             Menu::GridWhat => "grid-what",
+            Menu::DetailMode => "detail-mode",
         })
     }
 
@@ -2930,7 +2933,8 @@ impl LivtkApp {
 
     /// Whether the panel is open: on a node, or on the doc being read.
     fn panel_open(&self) -> bool {
-        self.model.detail.is_some() || self.doc_panel_open()
+        (self.model.detail.is_some() && self.model.detail_mode == crate::model::DetailMode::Side)
+            || self.doc_panel_open()
     }
 
     /// Whether the panel shows the doc being read: nothing else open in it, and not put away.
@@ -4982,7 +4986,20 @@ impl LivtkApp {
     /// The detail panel, sliding in when it opens and out when it closes. Its width animates,
     /// so the list beside it makes room smoothly instead of jumping.
     fn detail(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // A node's detail opened another way is not the panel's: the panel keeps only a doc's.
+        let side = self.model.detail_mode == crate::model::DetailMode::Side;
         let (d, closing) = match (&self.model.detail, &self.detail_leaving) {
+            (Some(_), _) | (None, Some(_)) if !side => {
+                return self.doc_panel_open().then(|| {
+                    div()
+                        .debug_selector(|| "detail-panel".into())
+                        .flex_none()
+                        .h_full()
+                        .overflow_hidden()
+                        .child(self.doc_panel(width, cx))
+                        .into_any_element()
+                });
+            }
             (Some(d), _) => (d.clone(), false),
             (None, Some(d)) => (d.clone(), true),
             // A doc being read: its details, when nothing else is open in the panel.
@@ -5104,6 +5121,7 @@ impl LivtkApp {
                     .border_color(color(BORDER))
                     .child(div().text_color(color(TEXT_3)).child(n.key.clone()))
                     .child(div().flex_1())
+                    .child(self.detail_mode_button(cx))
                     .child(
                         div()
                             .id("close-detail")
@@ -5116,7 +5134,11 @@ impl LivtkApp {
                             .rounded_lg()
                             .hover(|s| s.bg(color(HOVER)))
                             .child(icon_hover(
-                                Icon::DockRight,
+                                if self.model.detail_mode == crate::model::DetailMode::Side {
+                                    Icon::DockRight
+                                } else {
+                                    Icon::Close
+                                },
                                 16.,
                                 TEXT_4,
                                 "close-detail",
@@ -6283,6 +6305,7 @@ impl Render for LivtkApp {
         let about = self.about_overlay(cx);
         let settings = self.settings_overlay(cx);
         let palette = self.palette_overlay(cx);
+        let peek = self.center_peek(window, cx);
         let notice = self.notice(cx);
         let list_area = div()
             .flex_1()
@@ -6410,7 +6433,10 @@ impl Render for LivtkApp {
         let editing = (self.model.view() == View::Docs)
             .then(|| self.doc_editor(cx))
             .flatten();
+        // A detail opened as a full page from this pane: in the list's place.
+        let full = self.full_page(self.content_width(window), true, cx);
         let main = match (self.terminal_view(cx), editing) {
+            _ if full.is_some() => full.unwrap_or_else(|| div().into_any_element()),
             (_, Some(e)) => e,
             (Some(t), None) => self.terminal_element(t, cx),
             (None, None) => list_area.into_any_element(),
@@ -6618,6 +6644,7 @@ impl Render for LivtkApp {
                     .children(detail),
             )
             .children(form)
+            .children(peek)
             .children(palette)
             .children(help)
             .children(about)
@@ -6707,6 +6734,8 @@ enum Menu {
     Projects,
     /// The activity grid's range, and what it counts.
     GridWhat,
+    /// How a node's detail opens: side peek, center peek, full page.
+    DetailMode,
 }
 
 /// The selection's highlight gliding between two neighbouring lines, named as `spot` names them.

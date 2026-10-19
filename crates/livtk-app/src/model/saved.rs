@@ -38,6 +38,8 @@ pub struct Saved {
     /// How docs read: "small", "regular" or "large", and compact or not.
     pub reading_size: Option<String>,
     pub reading_compact: bool,
+    /// How a node's detail opens: "side", "center" or "full".
+    pub detail_mode: Option<String>,
     /// The panes: how they are laid out, what each shows, and the one focused.
     pub panes: Option<SavedPanes>,
     pub window: SavedWindow,
@@ -237,6 +239,7 @@ impl Model {
             told_no_notifications: self.told_no_notifications,
             reading_size: Some(self.reading.size.name().to_lowercase()),
             reading_compact: self.reading.compact,
+            detail_mode: Some(self.detail_mode.key().to_owned()),
             window: SavedWindow::default(),
         }
     }
@@ -293,6 +296,10 @@ impl Model {
                 .unwrap_or_default(),
             compact: saved.reading_compact,
         };
+        self.detail_mode = super::DetailMode::ALL
+            .into_iter()
+            .find(|m| Some(m.key()) == saved.detail_mode.as_deref())
+            .unwrap_or_default();
         self.pane_mut().layout = match saved.layout.as_deref() {
             Some("board") => Layout::Board,
             _ => Layout::List,

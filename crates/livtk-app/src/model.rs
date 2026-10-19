@@ -97,6 +97,37 @@ impl View {
     }
 }
 
+/// How a node's detail opens, as Notion opens a page from a database: in a panel beside the
+/// list (side peek), in a large card over the window (center peek), or in the list's place
+/// (full page).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DetailMode {
+    #[default]
+    Side,
+    Center,
+    Full,
+}
+
+impl DetailMode {
+    pub const ALL: [DetailMode; 3] = [DetailMode::Side, DetailMode::Center, DetailMode::Full];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            DetailMode::Side => "Side peek",
+            DetailMode::Center => "Center peek",
+            DetailMode::Full => "Full page",
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            DetailMode::Side => "side",
+            DetailMode::Center => "center",
+            DetailMode::Full => "full",
+        }
+    }
+}
+
 /// How docs read, as Settings sets it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reading {
@@ -439,6 +470,10 @@ pub struct Model {
     pub told_no_notifications: bool,
     /// How docs read: their text's size, and how close their lines sit.
     pub reading: Reading,
+    /// How a node's detail opens: beside, centred over the window, or in its pane's place; and
+    /// the pane it was opened from (where a full page shows it).
+    pub detail_mode: DetailMode,
+    pub detail_pane: Option<u64>,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
     /// What came into an inbox from someone else since the view last took it.
@@ -653,6 +688,8 @@ impl Model {
             wrote: Vec::new(),
             told_no_notifications: false,
             reading: Reading::default(),
+            detail_mode: DetailMode::default(),
+            detail_pane: None,
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,
@@ -1289,7 +1326,14 @@ impl Model {
             return;
         };
         match load_detail(&project.ws, id) {
-            Ok(d) => self.detail = Some(d),
+            Ok(d) => {
+                // A detail opened afresh opens in this pane; one followed (the selection moved
+                // with it open) stays where it is shown.
+                if self.detail.is_none() {
+                    self.detail_pane = Some(self.pane().id);
+                }
+                self.detail = Some(d);
+            }
             Err(e) => self.warn(e.to_string()),
         }
     }

@@ -3660,3 +3660,107 @@ fn a_view_joining_the_split_slides_from_its_place_into_the_group_and_back(cx: &m
         "home: {home:?}"
     );
 }
+
+/// The detail opens three ways, picked from the button beside its close: side peek (the panel),
+/// center peek (a card over the window; Esc or a press outside closes it, J moves on and it
+/// follows), full page (in the list's place; Esc gives the list back). The choice sticks.
+#[gpui_kit::test]
+fn the_detail_opens_as_a_side_peek_a_center_peek_or_a_full_page(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    cx.simulate_keystrokes("g t enter");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-body-panel").is_some(),
+        "a side peek first"
+    );
+    // Center peek, from the bar's menu: the open detail moves there at once.
+    click_on(cx, "detail-mode");
+    click_on(cx, "detail-mode-center-peek");
+    settle(cx);
+    assert!(cx.debug_bounds("center-peek").is_some(), "over the window");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().detail_mode, livtk_app::model::DetailMode::Center)
+    });
+    let first = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().map(|d| d.node.key.clone())
+    });
+    cx.simulate_keystrokes("j");
+    settle(cx);
+    let next = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().map(|d| d.node.key.clone())
+    });
+    assert!(
+        next.is_some() && next != first,
+        "it follows the list behind"
+    );
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(cx.debug_bounds("center-peek").is_none(), "Esc closes it");
+    app.read_with(cx, |a, _| assert!(a.model().detail.is_none()));
+    // A press outside closes it too.
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    cx.simulate_click(
+        gpui_kit::point(gpui_kit::px(20.), gpui_kit::px(500.)),
+        gpui_kit::Modifiers::default(),
+    );
+    settle(cx);
+    assert!(
+        cx.debug_bounds("center-peek").is_none(),
+        "a press outside closes it"
+    );
+    // Full page: in the list's place; Esc gives the list back.
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    click_on(cx, "detail-mode");
+    click_on(cx, "detail-mode-full-page");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("full-page").is_some(),
+        "in the list's place"
+    );
+    assert!(cx.debug_bounds("center-peek").is_none());
+    assert!(cx.debug_bounds("detail-panel").is_none(), "no panel beside");
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("full-page").is_none(),
+        "Esc gives the list back"
+    );
+    // The next detail opens the same way.
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    assert!(cx.debug_bounds("full-page").is_some(), "the choice sticks");
+}
+
+/// A full page opened in a split shows in its own pane only; the pane beside stays as it is.
+#[gpui_kit::test]
+fn a_full_page_in_a_split_stays_in_its_pane(cx: &mut TestAppContext) {
+    let dir = project();
+    cx.update(|cx| cx.set_global(livtk_app::ui::terminal::Headless));
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1600., 1000.);
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full
+    });
+    cx.simulate_keystrokes("g x secondary-\\");
+    redraw(cx);
+    click_on(cx, "place-tasks");
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    let page = cx.debug_bounds("full-page").expect("the full page");
+    let terminal = cx.debug_bounds("terminal").expect("the terminal beside");
+    assert!(
+        page.left() > terminal.right(),
+        "in the tasks' pane: {page:?}"
+    );
+    // Focusing the terminal leaves the page in its pane.
+    click_on(cx, "pane-0");
+    redraw(cx);
+    let still = cx.debug_bounds("full-page").expect("still shown");
+    assert!((f32::from(still.left()) - f32::from(page.left())).abs() < 1.);
+}

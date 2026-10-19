@@ -159,34 +159,44 @@ impl Config {
     }
 }
 
-/// What the Claude Code hooks run for this project. Every field is optional.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The `[hooks]` table of a project's config. livtk runs no project's commands any more:
+/// formatting and build checks belong to the project's own hooks. The old fields are still read,
+/// for one release, only to say so; they do nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Hooks {
-    /// Formatter run on a file Claude edited; `{file}` is replaced by its path.
+    /// Deprecated, ignored: was a formatter run on files Claude edited.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub format: Vec<String>,
-    /// File extensions the formatter applies to, without the dot.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub format_extensions: Vec<String>,
-    /// Check run before an agent in `check_agents` may stop, such as `cargo check`.
+    /// Deprecated, ignored: was a check run before an agent stopped.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub check: Vec<String>,
-    /// Agent types the check applies to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub check_agents: Vec<String>,
-}
-
-impl Default for Hooks {
-    fn default() -> Self {
-        Hooks {
-            format: Vec::new(),
-            format_extensions: Vec::new(),
-            check: Vec::new(),
-            check_agents: vec!["livtk:implementer".to_owned()],
-        }
-    }
 }
 
 impl Hooks {
     fn is_default(&self) -> bool {
         *self == Hooks::default()
+    }
+
+    /// What the config still asks of livtk that it no longer does, and where it went.
+    pub fn deprecated(&self) -> Option<String> {
+        let mut gone = Vec::new();
+        if !self.format.is_empty() || !self.format_extensions.is_empty() {
+            gone.push("format");
+        }
+        if !self.check.is_empty() || !self.check_agents.is_empty() {
+            gone.push("check");
+        }
+        (!gone.is_empty()).then(|| {
+            format!(
+                "[hooks] {} in .livtk/config.toml is ignored: livtk no longer runs a project's formatter or build check. Run them from the project's own Claude Code hooks (PostToolUse to format, SubagentStop or Stop to check), and remove the field; it becomes an error in the next release",
+                gone.join(" and ")
+            )
+        })
     }
 }
 
@@ -378,6 +388,7 @@ impl Workspace {
     /// Open a `.livtk/` directory directly.
     pub fn open_dir(dir: &Path) -> Result<Workspace> {
         let config = load_config(dir)?;
+        let deprecated = config.hooks.deprecated();
         let store = Store::open(&dir.join("livtk.db"))?;
         // Checked as the config loaded.
         let gates = config.gates.parse().unwrap_or_default();
@@ -387,7 +398,7 @@ impl Workspace {
             gates,
             log: Log::new(dir.join("events.jsonl")),
             store,
-            warnings: Vec::new(),
+            warnings: deprecated.into_iter().collect(),
             models_dir: models_dir(),
             model: None,
             embedded: 0,

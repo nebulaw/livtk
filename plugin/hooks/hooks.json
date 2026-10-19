@@ -61,22 +61,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "livtk",
-            "args": [
-              "hook",
-              "post-tool-use"
-            ],
-            "timeout": 120
-          }
-        ]
-      }
-    ],
     "SubagentStop": [
       {
         "hooks": [
@@ -87,7 +71,7 @@
               "hook",
               "subagent-stop"
             ],
-            "timeout": 600
+            "timeout": 10
           }
         ]
       }

@@ -39,15 +39,16 @@ scripts/release [--quick] ["what changed"]   # commit first: a release is number
 ```
 
 The plugin is silent in any project without a `.livtk/` directory, so it can stay enabled
-everywhere. Optional per-project hook settings live in `.livtk/config.toml`:
+everywhere. Its hooks only do what livtk alone knows: brief Claude at session start and before a
+prompt, guard the human's commands and `.livtk/`, and refuse the implementer's stop while a task
+in progress has nothing recorded about it. **Formatting and build checks are not livtk's:** run
+your formatter from your own `PostToolUse` hook and your check from your own `SubagentStop` or
+`Stop` hook (see Claude Code's hooks documentation). A `[hooks] format` or `check` left in
+`.livtk/config.toml` is ignored with a warning, and becomes an error in the next release.
+
+Optional per-project settings live in `.livtk/config.toml`:
 
 ```toml
-[hooks]
-format = ["rustfmt", "--edition", "2024", "{file}"]   # after Claude edits a matching file
-format_extensions = ["rs"]
-check = ["cargo", "check", "--quiet"]                 # before the implementer agent may stop
-check_agents = ["livtk:implementer"]
-
 [gates]
 human = ["task: review -> done", "task: -> canceled"]  # more moves only you may make
 ```

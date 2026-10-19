@@ -286,40 +286,38 @@ fn a_signed_command_really_signs_the_event() {
     assert!(log.contains(r#""by":"claude:refuter""#), "{log}");
 }
 
-// ---- format and check ---------------------------------------------------------------------------
+// ---- no project commands; the stop that leaves no record ------------------------------------------
 
 #[test]
-fn edited_files_are_formatted_when_configured() {
+fn a_config_still_naming_a_formatter_or_a_check_runs_neither_and_says_where_they_went() {
     let dir = project();
     with_hooks(
         dir.path(),
-        "format = [\"touch\", \"{file}.formatted\"]\nformat_extensions = [\"rs\"]\n",
+        "format = [\"touch\", \"{file}.formatted\"]\nformat_extensions = [\"rs\"]\ncheck = [\"sh\", \"-c\", \"exit 1\"]\n",
     );
     fs::create_dir(dir.path().join("src")).unwrap();
-    let edit = |name: &str| {
-        let file = dir.path().join("src").join(name);
-        fs::write(&file, "x").unwrap();
-        answer(
-            "post-tool-use",
-            &json!({ "tool_name": "Edit", "tool_input": { "file_path": file } }),
-        )
-    };
-    assert_eq!(edit("main.rs"), None);
-    assert!(dir.path().join("src/main.rs.formatted").exists());
-    assert_eq!(edit("notes.md"), None);
+    let file = dir.path().join("src/main.rs");
+    fs::write(&file, "x").unwrap();
+    let edit = json!({ "tool_name": "Edit", "tool_input": { "file_path": file } });
+    assert_eq!(answer("post-tool-use", &edit), None);
     assert!(
-        !dir.path().join("src/notes.md.formatted").exists(),
-        "other extensions are left alone"
+        !dir.path().join("src/main.rs.formatted").exists(),
+        "no formatter runs"
     );
+    let stop =
+        json!({ "cwd": dir.path(), "agent_type": "livtk:implementer", "stop_hook_active": false });
+    assert_eq!(answer("subagent-stop", &stop), None, "no check runs");
+    // The session start says so, naming where they went.
+    let start = answer("session-start", &json!({ "cwd": dir.path() })).unwrap();
+    let text = start["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("PostToolUse"), "{text}");
 }
 
 #[test]
-fn the_check_blocks_an_implementer_once() {
+fn an_implementer_may_not_stop_leaving_work_in_progress_unrecorded() {
     let dir = project();
-    with_hooks(
-        dir.path(),
-        "check = [\"sh\", \"-c\", \"echo boom; exit 1\"]\n",
-    );
     let stop = |agent: &str, active: bool| {
         answer(
             "subagent-stop",
@@ -329,28 +327,26 @@ fn the_check_blocks_an_implementer_once() {
             }),
         )
     };
+    assert_eq!(stop("livtk:implementer", false), None, "a clean board");
+    livtk(dir.path(), true, &["new", "build it"]);
+    livtk(dir.path(), true, &["move", "LIV-1", "planned"]);
+    livtk(dir.path(), true, &["ack", "LIV-1"]);
+    livtk(dir.path(), true, &["start", "LIV-1"]);
     let v = stop("livtk:implementer", false).unwrap();
     assert_eq!(v["decision"], "block");
-    assert!(v["reason"].as_str().unwrap().contains("boom"), "{v}");
+    assert!(v["reason"].as_str().unwrap().contains("LIV-1"), "{v}");
     assert_eq!(
         stop("livtk:implementer", true),
         None,
         "never twice in a row"
     );
+    assert_eq!(stop("livtk:refuter", false), None, "only the implementer");
+    livtk(dir.path(), true, &["note", "LIV-1", "built the thing"]);
     assert_eq!(
-        stop("livtk:refuter", false),
+        stop("livtk:implementer", false),
         None,
-        "only the configured agents"
+        "recorded: it may stop"
     );
-}
-
-#[test]
-fn a_passing_check_lets_the_agent_stop() {
-    let dir = project();
-    with_hooks(dir.path(), "check = [\"true\"]\n");
-    let input =
-        json!({ "cwd": dir.path(), "agent_type": "livtk:implementer", "stop_hook_active": false });
-    assert_eq!(answer("subagent-stop", &input), None);
 }
 
 // ---- memory ------------------------------------------------------------------------------------

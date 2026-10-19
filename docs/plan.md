@@ -396,22 +396,16 @@ An internal error never blocks a session: it exits 0 and stays silent.
 | SubagentStart | A shorter brief for the subagent: the task in progress and the rules it must follow |
 | PreToolUse (Bash) | Denies a command that runs a human-only livtk step (`ack`, `move .. acked`) or touches `CLAUDECODE`. When a subagent runs `livtk`, rewrites the command to sign its events: livtk's own hidden `--agent <name>` flag goes right after each `livtk` the shell runs, so the command still starts with `livtk`, the user's permission rules still match it, and no permission decision is returned. (A first version put `LIVTK_AGENT=<name>` in front; the live check showed that breaks `livtk *` allow rules, and subagent shells carry no variable naming the agent, so the hook must pass it.) |
 | PreToolUse (Edit, Write) | Denies hand edits to anything inside `.livtk/`: the log changes only through livtk |
-| PostToolUse (Edit, Write) | Runs the project's format command on the edited file, if configured |
-| SubagentStop | Runs the project's check command before a configured agent (by default the implementer) may stop; blocks with the failing output, once (no loop: `stop_hook_active`) |
+| SubagentStop | Refuses the implementer's stop while a task is in progress with nothing recorded about it (no note), once (no loop: `stop_hook_active`). Since TAS-55 livtk runs no project's own check or formatter: those belong to the project's hooks |
 
 The Bash guard matches text, so it is a guard rail, not security: a command that merely mentions
 `livtk ack` in quotes is also denied, and Claude is told to use the Grep tool instead. The human
 stays the root of trust.
 
-**Project settings**, all optional, in `.livtk/config.toml`:
-
-```toml
-[hooks]
-format = ["rustfmt", "--edition", "2024", "{file}"]
-format_extensions = ["rs"]
-check = ["cargo", "check", "--quiet"]
-check_agents = ["livtk:implementer"]
-```
+**Project settings**: livtk ran a project's formatter and check from `[hooks]` until TAS-55
+(2026-10-19). It no longer does: formatting a file and running a build are the project's
+business, done from its own Claude Code hooks; the old fields are read only to warn, for one
+release.
 
 **Skills** (namespaced `livtk:`)
 
@@ -437,8 +431,8 @@ logs keep their exact bytes and an older livtk skips a note with an "update livt
 2. The guard denies `livtk ack 1`, `cd x && livtk --json move 2 acked`, `env -u CLAUDECODE
    livtk list`, a nested `sh -c "livtk ack 1"`, and an Edit of `.livtk/events.jsonl`; it allows
    `livtk list`, `git add .livtk`, and edits elsewhere.
-3. SubagentStop blocks on a failing check, not when `stop_hook_active` is set, and never for an
-   agent outside `check_agents`.
+3. SubagentStop blocks the implementer while a task in progress has no note, not when
+   `stop_hook_active` is set, and never for another agent.
 4. Outside a project every hook is silent.
 5. Each hook under 20 ms.
 6. `claude plugin validate` passes.

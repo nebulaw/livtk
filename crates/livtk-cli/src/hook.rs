@@ -8,10 +8,10 @@
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 
 use livtk_core::event::Op;
-use livtk_core::{Config, Kind, State, Workspace, find_dir};
+use livtk_core::{Kind, State, Workspace};
 use serde_json::{Value, json};
 
 use crate::guard;
@@ -19,7 +19,8 @@ use crate::guard;
 const BRIEF_MAX: usize = 1500;
 const LIST_MAX: usize = 5;
 const TITLE_SHOWN: usize = 80;
-const CHECK_LINES: usize = 40;
+/// The agent that carries a task's work, and so must leave a note of it.
+const IMPLEMENTER: &str = "livtk:implementer";
 /// Prompts longer than this are usually pastes: no correction nudge, and recall reads the start.
 const PROMPT_MAX: usize = 4000;
 const RECALL_INPUT: usize = 2000;
@@ -70,7 +71,8 @@ pub fn run(event: &str) -> ExitCode {
         "user-prompt-submit" => user_prompt_submit(&input),
         "subagent-start" => subagent_start(&input),
         "pre-tool-use" => pre_tool_use(&input),
-        "post-tool-use" => post_tool_use(&input),
+        // Formatting is the project's own hooks' to do; an older hooks.json still calls this.
+        "post-tool-use" => None,
         "subagent-stop" => subagent_stop(&input),
         // A hooks.json newer than this binary: stay out of the way.
         _ => None,
@@ -84,8 +86,13 @@ pub fn run(event: &str) -> ExitCode {
 // ---- events -----------------------------------------------------------------------------------
 
 fn session_start(input: &Value) -> Option<Value> {
-    let ws = Workspace::open(&cwd(input)).ok()?;
-    Some(context("SessionStart", brief(&ws, false)?))
+    let mut ws = Workspace::open(&cwd(input)).ok()?;
+    let mut text = brief(&ws, false)?;
+    // What the project's config asks that livtk no longer does: said where Claude reads it.
+    for w in ws.take_warnings() {
+        let _ = writeln!(text, "livtk warning: {w}");
+    }
+    Some(context("SessionStart", text))
 }
 
 fn user_prompt_submit(input: &Value) -> Option<Value> {
@@ -176,61 +183,36 @@ fn pre_tool_use(input: &Value) -> Option<Value> {
     guard::refuse_path(path).map(|reason| deny(&reason))
 }
 
-fn post_tool_use(input: &Value) -> Option<Value> {
-    let file = PathBuf::from(input.get("tool_input")?.get("file_path")?.as_str()?);
-    let dir = find_dir(file.parent()?).ok()?;
-    let hooks = Config::load(&dir).ok()?.hooks;
-    let ext = file.extension()?.to_str()?;
-    if hooks.format.is_empty() || !hooks.format_extensions.iter().any(|e| e == ext) {
-        return None;
-    }
-    let args: Vec<String> = hooks
-        .format
-        .iter()
-        .map(|a| a.replace("{file}", &file.to_string_lossy()))
-        .collect();
-    let (program, rest) = args.split_first()?;
-    // A formatter that fails leaves the file as Claude wrote it; the check will speak up.
-    let _ = Command::new(program)
-        .args(rest)
-        .current_dir(dir.parent()?)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    None
-}
-
+/// A stop that would leave the work unrecorded: an implementer stopping while a task it may
+/// be carrying is in progress with nothing written about it. What only livtk can know, so the
+/// one thing it refuses at a stop; a project's own checks run from its own hooks.
 fn subagent_stop(input: &Value) -> Option<Value> {
     // Once blocked already: let it stop rather than loop.
     if input.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
         return None;
     }
-    let agent = input.get("agent_type")?.as_str()?;
-    let dir = find_dir(&cwd(input)).ok()?;
-    let hooks = Config::load(&dir).ok()?.hooks;
-    if hooks.check.is_empty() || !hooks.check_agents.iter().any(|a| a == agent) {
+    if input.get("agent_type")?.as_str()? != IMPLEMENTER {
         return None;
     }
-    let (program, rest) = hooks.check.split_first()?;
-    let out = Command::new(program)
-        .args(rest)
-        .current_dir(dir.parent()?)
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if out.status.success() {
+    let ws = Workspace::open(&cwd(input)).ok()?;
+    let silent: Vec<String> = ws
+        .tasks(&[State::Doing])
+        .ok()?
+        .into_iter()
+        .filter(|t| {
+            !ws.history(Some(&t.key))
+                .is_ok_and(|h| h.iter().any(|e| matches!(e.op, Op::NodeNote { .. })))
+        })
+        .map(|t| t.key)
+        .collect();
+    if silent.is_empty() {
         return None;
     }
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    let lines: Vec<&str> = text.lines().collect();
-    let tail = lines[lines.len().saturating_sub(CHECK_LINES)..].join("\n");
     Some(json!({
         "decision": "block",
         "reason": format!(
-            "The project check `{}` fails. Fix it before finishing:\n{tail}",
-            hooks.check.join(" ")
+            "{} is in progress with nothing recorded about it. Before stopping, note what you did, tried or found: `livtk note KEY \"...\"`.",
+            silent.join(", ")
         ),
     }))
 }

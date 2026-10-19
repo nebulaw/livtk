@@ -339,7 +339,11 @@ impl Model {
         let mut theirs: Vec<u64> = saved.panes.iter().map(|p| p.id).collect();
         ids.sort_unstable();
         theirs.sort_unstable();
-        if ids.is_empty() || ids != theirs || ids.windows(2).any(|w| w[0] == w[1]) {
+        if ids.is_empty()
+            || ids != theirs
+            || ids.windows(2).any(|w| w[0] == w[1])
+            || !well_split(&saved.split)
+        {
             return false;
         }
         let mut shown: Vec<View> = Vec::new();
@@ -377,5 +381,18 @@ impl Model {
             self.with_pane(i, Model::enter_activity);
         }
         true
+    }
+}
+
+/// Whether every split has two parts or more, each with a share above nothing.
+fn well_split(split: &Split) -> bool {
+    match split {
+        Split::Pane(_) => true,
+        Split::Split { parts, .. } => {
+            parts.len() >= 2
+                && parts
+                    .iter()
+                    .all(|(p, f)| f.is_finite() && *f > 0. && well_split(p))
+        }
     }
 }

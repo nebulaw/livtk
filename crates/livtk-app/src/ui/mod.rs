@@ -2985,6 +2985,10 @@ impl LivtkApp {
     /// zoom; none in a view with nothing for it. Labels show where there is room; else the icons
     /// stand alone, named by their tooltips. Menus open upwards from it.
     fn dock(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
+        // A placeholder has no view yet, nothing to filter or shape.
+        if self.model.placeholder() {
+            return None;
+        }
         let view = self.model.view();
         let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
@@ -6274,7 +6278,7 @@ impl Render for LivtkApp {
                     this.escape(window, cx);
                 } else if this.help || this.about || this.form.is_some() {
                     this.close_top(window, cx);
-                } else if this.reader.finding {
+                } else if this.reader.finding && this.model.view() == View::Docs {
                     this.close_find(window, cx);
                 } else if this.model.view() == View::Docs
                     && this.model.docs.reading

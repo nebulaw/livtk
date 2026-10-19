@@ -543,3 +543,28 @@ fn a_day_picked_in_the_grid_filters_the_feed() {
     let cell = drawn.weeks.iter().flatten().find(|c| c.day == today);
     assert!(cell.unwrap().count >= 1, "today counted");
 }
+
+#[test]
+fn the_feed_in_a_pane_not_focused_marks_another_projects_work_new() {
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    drop(app(a.path()));
+    drop(app(b.path()));
+    let mut m = Model::open(&[a.path().to_path_buf(), b.path().to_path_buf()]);
+    m.set_models_dir(None);
+    // A's feed seen once, then the tasks focused in a pane beside it.
+    m.set_view(View::Activity);
+    m.set_view(View::Tasks);
+    m.set_view(View::Activity);
+    m.split_pane(livtk_app::model::Axis::Row);
+    m.set_view(View::Tasks);
+    let other = 1 - m.current;
+    m.select_project(other);
+    let feed = m.with_pane(0, |m| m.view());
+    assert_eq!(feed, View::Activity);
+    assert_eq!(m.activity.len(), 3);
+    assert!(
+        m.activity.iter().all(|a| m.is_new(a)),
+        "all of the other project's work is new on this visit"
+    );
+}

@@ -844,13 +844,23 @@ impl Model {
     pub fn select_project(&mut self, index: usize) {
         if index < self.projects.len() && index != self.current {
             self.current = index;
-            self.pane_mut().selected = None;
-            self.pane_mut().band = None;
+            // Every pane starts afresh in the other project.
+            for p in &mut self.panes {
+                p.selected = None;
+                p.band = None;
+                p.leaving.clear();
+            }
             self.detail = None;
             self.grid.pick.clear();
-            self.pane_mut().leaving.clear();
             self.flashed.clear();
-            self.enter_activity();
+            // The feed, wherever it shows, marks what is new since its own last visit.
+            if let Some(i) = self
+                .panes
+                .iter()
+                .position(|p| !p.placeholder && p.view == View::Activity)
+            {
+                self.with_pane(i, Model::enter_activity);
+            }
             self.enter_graph();
             self.reload();
             self.note_recent();

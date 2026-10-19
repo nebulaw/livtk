@@ -3421,6 +3421,10 @@ fn panes_split_hold_a_view_each_and_the_keys_are_the_focused_ones(cx: &mut TestA
         "a placeholder beside"
     );
     assert!(
+        cx.debug_bounds("dock").is_none(),
+        "no dock: nothing to shape yet"
+    );
+    assert!(
         cx.debug_bounds("terminal").is_some(),
         "the terminal still drawn"
     );

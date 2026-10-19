@@ -718,10 +718,9 @@ fn json_rows_carry_the_fields_asked_for_and_show_carries_everything() {
     // Only the fields asked for, a node's own too.
     let rows = json(d, &["list", "--fields", "key,state,body,props"]);
     let row = rows[0].as_object().unwrap();
-    assert_eq!(
-        row.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["body", "key", "props", "state"]
-    );
+    let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["body", "key", "props", "state"]);
     assert_eq!(row["body"], "Match on board_id.");
     let bad = livtk(d, As::Claude, &["--json", "list", "--fields", "key,nope"]);
     assert!(!bad.status.success());
@@ -780,4 +779,154 @@ fn export_mirrors_every_node_as_markdown_and_check_says_when_it_is_stale() {
         json(d, &["show", "LIV-1"])["node"]["title"],
         "import the board"
     );
+}
+
+// ---- a project's own kinds -------------------------------------------------------------------------
+
+fn declare(dir: &Path, toml: &str) {
+    let path = dir.join(".livtk/config.toml");
+    let mut config = std::fs::read_to_string(&path).unwrap();
+    config.push('\n');
+    config.push_str(toml);
+    std::fs::write(path, config).unwrap();
+}
+
+const INCIDENT: &str = "[[kinds]]\nname = \"incident\"\nstates = [\"open\", \"mitigated\", \"closed\"]\nhuman = [\"mitigated -> closed\"]\nkey = \"INC\"\n";
+
+#[test]
+fn a_declared_kind_is_created_listed_moved_gated_and_found() {
+    let dir = project();
+    let d = dir.path();
+    declare(d, INCIDENT);
+    let out = ok(
+        d,
+        As::Claude,
+        &["new", "--kind", "incident", "checkout is down"],
+    );
+    assert!(out.contains("INC-1"), "its own key: {out}");
+    let rows = json(d, &["list", "--kind", "incident"]);
+    assert_eq!(rows[0]["key"], "INC-1");
+    assert_eq!(rows[0]["state"], "open", "starts at its first state");
+    assert_eq!(rows[0]["kind"], "incident");
+    // Any move between its states; the ones it keeps for the human are the human's.
+    ok(d, As::Claude, &["move", "INC-1", "mitigated"]);
+    let refused = livtk(d, As::Claude, &["move", "INC-1", "closed"]);
+    assert_eq!(refused.status.code(), Some(3), "the human's move");
+    ok(d, As::Human, &["move", "INC-1", "closed"]);
+    // Closed is over: out of the active list, in --all.
+    assert_eq!(
+        json(d, &["list", "--kind", "incident"])
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        json(d, &["list", "--kind", "incident", "--all"])
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Found by search.
+    let hits = json(d, &["search", "checkout"]);
+    assert!(
+        hits.as_array().unwrap().iter().any(|h| h["key"] == "INC-1"),
+        "{hits}"
+    );
+    // A gate in [gates] can name it too.
+    declare(d, "[gates]\nhuman = [\"incident: -> mitigated\"]\n");
+    ok(d, As::Human, &["move", "INC-1", "open"]);
+    let gated = livtk(d, As::Claude, &["move", "INC-1", "mitigated"]);
+    assert_eq!(gated.status.code(), Some(3));
+}
+
+#[test]
+fn a_project_declaring_nothing_is_as_before_and_a_kind_in_use_cannot_be_dropped() {
+    let dir = project();
+    let d = dir.path();
+    // Nothing declared: the built-in kinds and their keys, as always.
+    let out = ok(d, As::Claude, &["new", "a task"]);
+    assert!(out.contains("LIV-1"));
+    assert!(
+        livtk(d, As::Claude, &["new", "--kind", "incident", "x"])
+            .status
+            .code()
+            != Some(0)
+    );
+    // Declared, used, then taken out of the config: refused, naming the nodes.
+    let config = std::fs::read_to_string(d.join(".livtk/config.toml")).unwrap();
+    declare(d, INCIDENT);
+    ok(
+        d,
+        As::Claude,
+        &["new", "--kind", "incident", "checkout is down"],
+    );
+    std::fs::write(d.join(".livtk/config.toml"), config).unwrap();
+    let out = livtk(d, As::Claude, &["list"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("incident") && err.contains("INC-1"), "{err}");
+}
+
+#[test]
+fn a_bad_declaration_stops_livtk_with_its_reason() {
+    for (toml, says) in [
+        (
+            "[[kinds]]\nname = \"task\"\nstates = [\"a\"]\nkey = \"TK\"\n",
+            "exists already",
+        ),
+        (
+            "[[kinds]]\nname = \"bug\"\nstates = []\nkey = \"BUG\"\n",
+            "at least one state",
+        ),
+        (
+            "[[kinds]]\nname = \"bug\"\nstates = [\"open\"]\nhuman = [\"open -> gone\"]\nkey = \"BUG\"\n",
+            "not a move",
+        ),
+        (
+            "[[kinds]]\nname = \"bug\"\nstates = [\"open\"]\nkey = \"LES\"\n",
+            "another kind",
+        ),
+    ] {
+        let dir = project();
+        declare(dir.path(), toml);
+        let out = livtk(dir.path(), As::Claude, &["list"]);
+        assert!(!out.status.success(), "{toml}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(says), "{toml}: {err}");
+    }
+}
+
+#[test]
+fn a_declared_relation_is_added_shown_from_both_ends_and_removed() {
+    let dir = project();
+    let d = dir.path();
+    declare(
+        d,
+        "[[relations]]\nname = \"implements\"\ninverse = \"implemented_by\"\n",
+    );
+    ok(d, As::Claude, &["new", "the importer"]);
+    ok(d, As::Claude, &["decision", "Import in one pass"]);
+    ok(d, As::Claude, &["link", "LIV-1", "implements", "DEC-1"]);
+    let from = ok(d, As::Claude, &["show", "LIV-1"]);
+    assert!(from.contains("implements  DEC-1"), "{from}");
+    let back = ok(d, As::Claude, &["show", "DEC-1"]);
+    assert!(
+        back.contains("implemented_by  LIV-1"),
+        "the inverse from the other end: {back}"
+    );
+    // From the other end, by the inverse: the same link.
+    ok(
+        d,
+        As::Claude,
+        &["unlink", "DEC-1", "implemented_by", "LIV-1"],
+    );
+    assert!(
+        !ok(d, As::Claude, &["show", "LIV-1"]).contains("implements  DEC-1"),
+        "unlinked"
+    );
+    // An unknown word names the ones there are.
+    let out = livtk(d, As::Claude, &["link", "LIV-1", "implementz", "DEC-1"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("implemented_by"));
 }

@@ -432,7 +432,7 @@ impl LivtkApp {
             .justify_center()
             .gap_2()
             .max_w(px(420.));
-        for view in View::ALL {
+        for view in self.model.views() {
             let id = format!("place-{}", view.title().to_lowercase());
             let elsewhere = shown.contains(&view);
             grid = grid.child(
@@ -741,7 +741,7 @@ fn side_key(id: u64, view: Option<View>) -> String {
 /// Where each line of the sidebar (or of the rail) sits from its top, as it lays them out with
 /// `split`'s views grouped: the group (a box, its header on the sidebar), then each view not
 /// in it, the spaces and headings between. Only the differences between two layouts are used.
-fn side_ys(split: &[(u64, Option<View>)], rail: bool) -> HashMap<String, f32> {
+fn side_ys(views: &[View], split: &[(u64, Option<View>)], rail: bool) -> HashMap<String, f32> {
     let gap = 2.;
     let (row, pad, header) = if rail {
         (36., 3., 0.)
@@ -766,7 +766,7 @@ fn side_ys(split: &[(u64, Option<View>)], rail: bool) -> HashMap<String, f32> {
         }
         place(10., &mut y);
     }
-    for view in View::ALL {
+    for &view in views {
         if matches!(view, View::Tasks | View::Graph) {
             place(14., &mut y);
             if !rail {
@@ -792,7 +792,8 @@ impl LivtkApp {
         if was == now || cx.reduce_motion() {
             return;
         }
-        let (before, after) = (side_ys(&was, rail), side_ys(&now, rail));
+        let views = self.model.views();
+        let (before, after) = (side_ys(&views, &was, rail), side_ys(&views, &now, rail));
         self.side_moves = after
             .iter()
             .filter_map(|(key, y)| match before.get(key) {

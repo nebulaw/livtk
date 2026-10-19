@@ -1823,3 +1823,69 @@ fn sub_tasks_nest_under_their_parent_within_a_group() {
     assert_eq!(m.depth().get(&child.id), None, "flat");
     assert_eq!(m.parent_key(&child), Some(parent.key.as_str()));
 }
+
+#[test]
+fn a_declared_kind_has_its_own_view_list_board_and_flow() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = project(dir.path());
+    drop(ws);
+    let config = dir.path().join(".livtk/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("\n[[kinds]]\nname = \"outage\"\nstates = [\"open\", \"mitigated\", \"closed\"]\nkey = \"OUT\"\n");
+    std::fs::write(&config, text).unwrap();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    for t in ["checkout down", "search slow"] {
+        ws.execute(
+            Command::Create {
+                kind: "outage".parse().unwrap(),
+                title: t.into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    ws.execute(
+        Command::Move {
+            node: "OUT-2".into(),
+            to: "mitigated".parse().unwrap(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_models_dir(None);
+    let kind: Kind = "outage".parse().unwrap();
+    let view = View::Of(kind);
+    // In the sidebar after the findings, titled as a heading.
+    let views = m.views();
+    let at = views
+        .iter()
+        .position(|v| *v == view)
+        .expect("in the sidebar");
+    assert_eq!(views[at - 1], View::Findings);
+    assert_eq!(view.title(), "Outages");
+    // Its own list, grouped by its states.
+    m.set_view(view);
+    assert_eq!(keys(&m), ["OUT-1", "OUT-2"]);
+    let groups: Vec<String> = m.groups().iter().map(|g| format!("{:?}", g.key)).collect();
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    // A board with its states as columns.
+    m.toggle_layout();
+    assert!(m.on_board());
+    let columns: Vec<GroupKey> = m.columns().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(
+        columns,
+        [
+            GroupKey::State("open".parse().unwrap()),
+            GroupKey::State("mitigated".parse().unwrap())
+        ]
+    );
+    // Its moves: any of its other states.
+    let open: State = "open".parse().unwrap();
+    let to: Vec<State> = choices(kind, open).iter().map(|c| c.to).collect();
+    assert_eq!(to.len(), 2);
+}

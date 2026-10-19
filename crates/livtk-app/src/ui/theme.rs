@@ -105,12 +105,15 @@ pub fn state_color(state: State) -> u32 {
         State::Recorded => TEXT_3,
         State::Rejected => RED,
         State::Parked | State::Canceled | State::Retired | State::Superseded => CANCELED,
+        // A declared state: settled when closed, else in hand.
+        s if s.is_closed() => DONE,
+        _ => PROGRESS,
     }
 }
 
 /// A status icon in Linear's manner: a faint ring for backlog, a ring for what is ready, half
 /// filled in hand, filled once settled.
-pub fn state_mark(_kind: Kind, state: State) -> Div {
+pub fn state_mark(kind: Kind, state: State) -> Div {
     let c = state_color(state);
     let ring = div()
         .size(px(14.))
@@ -138,8 +141,18 @@ pub fn state_mark(_kind: Kind, state: State) -> Div {
             .flex_none()
             .rounded_full()
             .bg(with_alpha(c, 0.7)),
+        // A declared kind's: a ring where it starts, filled once closed, half filled between.
+        s if s.is_declared() && s.is_closed() => {
+            div().size(px(14.)).flex_none().rounded_full().bg(color(c))
+        }
+        s if s.is_declared() && s == kind.initial_state() => ring.border_color(color(TODO)),
         State::Retired | State::Superseded => ring.opacity(0.4),
         State::Planned | State::Proposed => ring,
+        _ => ring
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(div().size(px(6.)).rounded_full().bg(color(c))),
     }
 }
 

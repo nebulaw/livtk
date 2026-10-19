@@ -48,6 +48,8 @@ pub enum View {
     Terminal,
     /// The project's docs: its markdown files.
     Docs,
+    /// A kind the project declares (`[[kinds]]` in its config), listed as the built-in kinds are.
+    Of(Kind),
 }
 
 impl View {
@@ -63,8 +65,9 @@ impl View {
         View::Terminal,
     ];
 
-    pub const fn title(self) -> &'static str {
+    pub fn title(self) -> &'static str {
         match self {
+            View::Of(kind) => kind_title(kind),
             View::Inbox => "Inbox",
             View::Activity => "Activity",
             View::Tasks => "Tasks",
@@ -75,6 +78,11 @@ impl View {
             View::Terminal => "Terminal",
             View::Docs => "Docs",
         }
+    }
+
+    /// Whether the view lays its nodes out as a board too: the tasks, and a declared kind.
+    pub const fn has_board(self) -> bool {
+        matches!(self, View::Tasks | View::Of(_))
     }
 
     /// Whether the view can show dismissed work: the lists of one kind, and the graph.
@@ -88,6 +96,7 @@ impl View {
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {
+            View::Of(kind) => Some(kind),
             View::Inbox | View::Activity | View::Graph | View::Terminal | View::Docs => None,
             View::Tasks => Some(Kind::Task),
             View::Lessons => Some(Kind::Lesson),
@@ -95,6 +104,31 @@ impl View {
             View::Findings => Some(Kind::Finding),
         }
     }
+}
+
+/// A declared kind's view's name: its name, plural, as a heading (`incident` → `Incidents`).
+pub fn kind_title(kind: Kind) -> &'static str {
+    static TITLES: std::sync::LazyLock<std::sync::Mutex<HashMap<Kind, &'static str>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut titles = TITLES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    titles.entry(kind).or_insert_with(|| {
+        let name = kind.as_str().replace('_', " ");
+        let mut c = name.chars();
+        let title: String = c
+            .next()
+            .map(|f| f.to_uppercase().chain(c).collect())
+            .unwrap_or_default();
+        let plural = if title.ends_with('s') {
+            format!("{title}es")
+        } else if let Some(stem) = title.strip_suffix('y') {
+            format!("{stem}ies")
+        } else {
+            format!("{title}s")
+        };
+        Box::leak(plural.into_boxed_str())
+    })
 }
 
 /// How a node's detail opens, as Notion opens a page from a database: in a panel beside the
@@ -408,7 +442,44 @@ pub struct LinkChoice {
 }
 
 /// The links a node of `kind` can gain, as the panel and the palette offer them.
-pub fn link_choices(kind: Kind) -> Vec<LinkChoice> {
+/// The relations a project declares (`[[relations]]`), in its order.
+pub fn declared_rels(ws: &Workspace) -> Vec<Rel> {
+    ws.config()
+        .relations
+        .iter()
+        .filter_map(|r| Rel::named(&r.name))
+        .collect()
+}
+
+/// A declared relation's name as a heading: `implemented_by` reads `Implemented by`; with
+/// `…` after it, as a menu's choice.
+pub fn heading(name: &'static str) -> &'static str {
+    titled_as(name, false)
+}
+
+/// `heading`, once per name and form: the text lives for the process, made once.
+fn titled_as(name: &'static str, choice: bool) -> &'static str {
+    type Cache = HashMap<(&'static str, bool), &'static str>;
+    static HEADINGS: std::sync::LazyLock<std::sync::Mutex<Cache>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut cache = HEADINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.entry((name, choice)).or_insert_with(|| {
+        let mut text = name.replace('_', " ");
+        if choice {
+            text.push('…');
+        }
+        let mut c = text.chars();
+        let t: String = c
+            .next()
+            .map(|f| f.to_uppercase().chain(c).collect())
+            .unwrap_or_default();
+        Box::leak(t.into_boxed_str())
+    })
+}
+
+pub fn link_choices(kind: Kind, declared: &[Rel]) -> Vec<LinkChoice> {
     let c = |label, rel, outgoing| LinkChoice {
         label,
         rel,
@@ -425,9 +496,21 @@ pub fn link_choices(kind: Kind) -> Vec<LinkChoice> {
             c("Learned from…", Rel::LearnedFrom, true),
             c("Supersedes…", Rel::Supersedes, true),
         ],
-        Kind::Finding => vec![c("Learned from…", Rel::LearnedFrom, true)],
+        _ => vec![c("Learned from…", Rel::LearnedFrom, true)],
     };
     out.push(c("Related to…", Rel::Relates, true));
+    // The project's own relations, from this end and, by its inverse, from the other.
+    for &rel in declared {
+        let choice = |name: &'static str, outgoing| LinkChoice {
+            label: titled_as(name, true),
+            rel,
+            outgoing,
+        };
+        out.push(choice(rel.as_str(), true));
+        if let Some(inverse) = rel.inverse() {
+            out.push(choice(inverse, false));
+        }
+    }
     out
 }
 
@@ -966,6 +1049,37 @@ impl Model {
         &self.pane().progress
     }
 
+    /// The sidebar's views for the open project: the built-in ones, with the kinds it declares
+    /// after the findings.
+    pub fn views(&self) -> Vec<View> {
+        let declared: Vec<View> = self
+            .project()
+            .map(|p| {
+                p.ws.config()
+                    .kinds
+                    .iter()
+                    .filter_map(|k| Kind::named(&k.name))
+                    .map(View::Of)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut out = Vec::with_capacity(View::ALL.len() + declared.len());
+        for v in View::ALL {
+            out.push(v);
+            if v == View::Findings {
+                out.extend(declared.iter().copied());
+            }
+        }
+        out
+    }
+
+    /// The relations the open project declares.
+    pub fn declared_rels(&self) -> Vec<Rel> {
+        self.project()
+            .map(|p| declared_rels(&p.ws))
+            .unwrap_or_default()
+    }
+
     pub fn project(&self) -> Option<&Project> {
         self.projects.get(self.current)
     }
@@ -1144,7 +1258,7 @@ impl Model {
 
     /// Whether the view is the tasks' board.
     pub fn on_board(&self) -> bool {
-        self.pane().view == View::Tasks && self.pane().layout == Layout::Board
+        self.pane().view.has_board() && self.pane().layout == Layout::Board
     }
 
     /// Move the selection by `delta`, stopping at the ends: in a list through its group bands
@@ -2130,10 +2244,13 @@ impl Model {
         let keys: Vec<GroupKey> = if d.grouping == Grouping::Priority {
             (1..=4u8).map(GroupKey::Priority).collect()
         } else {
-            // The task's states in their own order, as the list's groups; dismissed ones only
+            // The kind's states in their own order, as the list's groups; dismissed ones only
             // while shown. The filter says what the board is about: no column for a state it
             // leaves out.
-            Kind::Task
+            self.pane()
+                .view
+                .kind()
+                .unwrap_or(Kind::Task)
                 .states()
                 .iter()
                 .copied()
@@ -2314,6 +2431,19 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         group("Taught", Rel::LearnedFrom, false, &taught),
     ]
     .into_iter()
+    // The project's own relations, each from either end: by its name, and by its inverse.
+    .chain(declared_rels(ws).into_iter().flat_map(|rel| {
+        let (to, from) = ws.related(&key, rel).unwrap_or_default();
+        [
+            group(heading(rel.as_str()), rel, true, &to),
+            group(
+                heading(rel.inverse().unwrap_or(rel.as_str())),
+                rel,
+                false,
+                &from,
+            ),
+        ]
+    }))
     .filter(|g| !g.briefs.is_empty())
     .collect();
     Ok(Detail {

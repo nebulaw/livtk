@@ -20,7 +20,7 @@ mod workspace;
 
 pub use error::{Error, Result};
 pub use event::{Event, Op};
-pub use model::{Actor, Kind, Rel, State};
+pub use model::{Actor, Kind, KindSpec, Rel, RelSpec, State};
 pub use search::Hit;
 pub use store::{Brief, DayEvents, Node, Snapshot, Summary};
 pub use workspace::{

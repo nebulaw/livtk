@@ -323,6 +323,23 @@ impl Store {
     }
 
     /// Nodes of a kind in the given states (all states when empty), work in hand first.
+    /// Each kind nodes are of, as stored, with their keys.
+    pub fn kinds_in_use(&self) -> Result<Vec<(String, Vec<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT kind, key FROM nodes ORDER BY kind, key")?;
+        let mut rows = stmt.query([])?;
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let (kind, key): (String, String) = (row.get(0)?, row.get(1)?);
+            match out.last_mut() {
+                Some((k, keys)) if *k == kind => keys.push(key),
+                _ => out.push((kind, vec![key])),
+            }
+        }
+        Ok(out)
+    }
+
     pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
         let wanted: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
         let sql = format!(

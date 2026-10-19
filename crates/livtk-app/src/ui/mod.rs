@@ -1513,7 +1513,7 @@ impl LivtkApp {
                 let i = self.model.docs.index;
                 Some((self.model.docs.rows().get(i)?.path().to_owned(), i))
             }
-            View::Tasks if self.model.layout() == Layout::Board => None,
+            v if v.has_board() && self.model.layout() == Layout::Board => None,
             View::Activity => {
                 let i = self.model.activity_index;
                 let at = self
@@ -2073,7 +2073,7 @@ impl LivtkApp {
         if let Some(group) = self.sidebar_split(&split, cx) {
             side = side.child(group).child(div().h(px(10.)));
         }
-        for view in View::ALL {
+        for view in self.model.views() {
             if view == View::Tasks {
                 side = side.child(div().h(px(14.))).child(section_label("Views"));
             }
@@ -2415,7 +2415,7 @@ impl LivtkApp {
         if let Some(group) = self.rail_split(&split, cx) {
             rail = rail.child(group).child(div().h(px(10.)));
         }
-        for view in View::ALL {
+        for view in self.model.views() {
             // The inbox and the feed, the views of the work, the tools, as the sidebar groups
             // them.
             if matches!(view, View::Tasks | View::Graph) {
@@ -3038,7 +3038,7 @@ impl LivtkApp {
         let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
             view,
-            View::Tasks | View::Lessons | View::Decisions | View::Findings
+            View::Tasks | View::Lessons | View::Decisions | View::Findings | View::Of(_)
         );
         let mut groups: Vec<Vec<AnyElement>> = Vec::new();
         if view == View::Tasks {
@@ -3315,7 +3315,7 @@ impl LivtkApp {
     fn grouping_menu(&self, cx: &mut Context<Self>) -> Div {
         let current = self.model.display().grouping;
         // A board needs columns: as in Linear, it is never ungrouped.
-        let board = self.model.view() == View::Tasks && self.model.layout() == Layout::Board;
+        let board = self.model.view().has_board() && self.model.layout() == Layout::Board;
         let mut panel = menu_panel(180.).debug_selector(|| "grouping-menu".into());
         for &(id, label, g) in GROUPINGS {
             if board && g == Grouping::None {
@@ -3340,7 +3340,7 @@ impl LivtkApp {
     fn view_menu(&self, cx: &mut Context<Self>) -> Div {
         let d = self.model.display();
         let mut panel = menu_panel(232.).debug_selector(|| "view-menu".into());
-        if self.model.view() == View::Tasks {
+        if self.model.view().has_board() {
             for (id, glyph, label, layout) in [
                 ("view-layout-list", Icon::List, "List", Layout::List),
                 ("view-layout-board", Icon::Board, "Board", Layout::Board),
@@ -3696,7 +3696,10 @@ impl LivtkApp {
             );
         div().relative().child(button).when(open, |d| {
             let mut panel = menu_panel(200.).debug_selector(|| "add-link-menu".into());
-            for (i, choice) in link_choices(kind).into_iter().enumerate() {
+            for (i, choice) in link_choices(kind, &self.model.declared_rels())
+                .into_iter()
+                .enumerate()
+            {
                 let row_id = format!("link-choice-{i}");
                 panel = panel.child(
                     option_row(SharedString::from(row_id.clone()))
@@ -4700,7 +4703,7 @@ impl LivtkApp {
                 Kind::Task => "Acknowledge",
                 Kind::Lesson => "Ratify",
                 Kind::Decision => "Accept",
-                Kind::Finding => "",
+                _ => "",
             };
             row = row.child(tag(label, ACCENT));
             if selected {
@@ -6388,7 +6391,7 @@ impl Render for LivtkApp {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleLayout, _, cx| {
-                if this.model.view() == View::Tasks {
+                if this.model.view().has_board() {
                     this.model.toggle_layout();
                     cx.notify();
                 }
@@ -6990,6 +6993,7 @@ fn kind_slot(kind: Kind) -> Div {
         Kind::Lesson => Icon::Lessons,
         Kind::Decision => Icon::Decisions,
         Kind::Finding => Icon::Findings,
+        _ => Icon::Grouping,
     };
     div()
         .w(px(LEAD))
@@ -7004,6 +7008,7 @@ fn kind_slot(kind: Kind) -> Div {
 /// A view's icon, as the sidebar and the palette show it.
 fn view_icon(view: View) -> Icon {
     match view {
+        View::Of(_) => Icon::Grouping,
         View::Inbox => Icon::Inbox,
         View::Activity => Icon::Activity,
         View::Tasks => Icon::Tasks,

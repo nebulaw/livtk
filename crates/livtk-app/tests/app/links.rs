@@ -69,7 +69,7 @@ fn select(m: &mut Model, dir: &Path, key: &str) {
 
 #[test]
 fn each_kind_offers_the_links_it_can_have() {
-    let labels = |k| -> Vec<&str> { link_choices(k).iter().map(|c| c.label).collect() };
+    let labels = |k| -> Vec<&str> { link_choices(k, &[]).iter().map(|c| c.label).collect() };
     assert_eq!(
         labels(Kind::Task),
         [
@@ -97,7 +97,7 @@ fn links_are_added_both_ways_shown_in_groups_and_removed() {
     let d = dir.path();
     let mut m = app(d);
     select(&mut m, d, "LIV-2");
-    let [waits, blocks, _, _, related] = link_choices(Kind::Task)[..] else {
+    let [waits, blocks, _, _, related] = link_choices(Kind::Task, &[])[..] else {
         panic!()
     };
     m.link(id(d, "LIV-2"), waits, id(d, "LIV-1"));
@@ -143,7 +143,7 @@ fn sub_tasks_are_linked_from_either_end_and_removed() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let mut m = app(d);
-    let [_, _, part_of, add_sub, related] = link_choices(Kind::Task)[..] else {
+    let [_, _, part_of, add_sub, related] = link_choices(Kind::Task, &[])[..] else {
         panic!()
     };
     m.link(id(d, "LIV-2"), part_of, id(d, "LIV-1"));
@@ -205,7 +205,7 @@ fn the_other_end_sees_the_link_and_a_cycle_is_refused_with_the_reason() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let mut m = app(d);
-    let waits = link_choices(Kind::Task)[0];
+    let waits = link_choices(Kind::Task, &[])[0];
     m.link(id(d, "LIV-2"), waits, id(d, "LIV-1"));
     select(&mut m, d, "LIV-1");
     let g = &m.detail.as_ref().unwrap().link_groups;
@@ -268,13 +268,13 @@ fn the_palette_picks_a_links_other_end_from_what_can_join() {
     assert_eq!(edges(d), [("LIV-2".into(), Rel::DependsOn, "LIV-1".into())]);
 
     select(&mut m, d, "LES-2");
-    m.open_link_picker(link_choices(Kind::Lesson)[1]);
+    m.open_link_picker(link_choices(Kind::Lesson, &[])[1]);
     assert_eq!(
         keys(&m),
         ["LES-1"],
         "a lesson supersedes only another lesson"
     );
-    m.open_link_picker(link_choices(Kind::Lesson)[0]);
+    m.open_link_picker(link_choices(Kind::Lesson, &[])[0]);
     assert_eq!(keys(&m).len(), 5, "learned from anything but itself");
 }
 

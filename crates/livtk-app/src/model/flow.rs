@@ -51,15 +51,29 @@ impl Step {
 
 /// The main path and the states off it, in order.
 pub fn flow_of(kind: Kind) -> (&'static [State], &'static [State]) {
-    use State::*;
     match kind {
         Kind::Task => (
-            &[Backlog, Planned, Acked, Doing, Review, Done],
-            &[Parked, Canceled],
+            &[
+                State::Backlog,
+                State::Planned,
+                State::Acked,
+                State::Doing,
+                State::Review,
+                State::Done,
+            ],
+            &[State::Parked, State::Canceled],
         ),
-        Kind::Lesson => (&[Proposed, Ratified, Retired], &[Rejected]),
-        Kind::Decision => (&[Proposed, Accepted, Superseded], &[Rejected]),
-        Kind::Finding => (&[Recorded], &[]),
+        Kind::Lesson => (
+            &[State::Proposed, State::Ratified, State::Retired],
+            &[State::Rejected],
+        ),
+        Kind::Decision => (
+            &[State::Proposed, State::Accepted, State::Superseded],
+            &[State::Rejected],
+        ),
+        Kind::Finding => (&[State::Recorded], &[]),
+        // A declared kind's states, in the order it declares them.
+        _ => (kind.states(), &[]),
     }
 }
 
@@ -156,7 +170,28 @@ pub fn state_name(state: State) -> &'static str {
         State::Accepted => "Accepted",
         State::Superseded => "Superseded",
         State::Recorded => "Recorded",
+        // A declared state's own name, as a heading.
+        _ => titled(state.as_str()),
     }
+}
+
+/// `name` with a capital, spaces for underscores: a declared state's name as people say it.
+fn titled(name: &'static str) -> &'static str {
+    static TITLES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<&'static str, &'static str>>,
+    > = std::sync::LazyLock::new(Default::default);
+    let mut titles = TITLES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    titles.entry(name).or_insert_with(|| {
+        let text = name.replace('_', " ");
+        let mut c = text.chars();
+        let t: String = c
+            .next()
+            .map(|f| f.to_uppercase().chain(c).collect())
+            .unwrap_or_default();
+        Box::leak(t.into_boxed_str())
+    })
 }
 
 /// A state's name where room is short: the flow in the detail panel.

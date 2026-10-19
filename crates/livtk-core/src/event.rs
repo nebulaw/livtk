@@ -10,7 +10,7 @@ use crate::model::{Actor, Kind, Priority, Rel, State};
 /// The newest format version this livtk reads. Each event carries the version its operation
 /// needs, so adding an operation never changes the bytes of older events, and an older livtk
 /// skips the new operation with a clear "update livtk" warning.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -64,6 +64,10 @@ impl Op {
     pub fn min_version(&self) -> u32 {
         let task_state = |s: State| Kind::Task.states().contains(&s);
         match self {
+            // A project's own kind or state: an older livtk knows neither.
+            Op::NodeCreate { data, .. } if data.kind.is_declared() => 5,
+            Op::EdgeAdd { data } | Op::EdgeRemove { data } if data.rel.is_declared() => 5,
+            Op::NodeSet { data, .. } if data.state.is_some_and(State::is_declared) => 5,
             Op::NodeCreate { data, .. } if data.kind != Kind::Task => 3,
             Op::NodeSet { data, .. } if data.state.is_some_and(|s| !task_state(s)) => 3,
             Op::NodeNote { .. } => 2,

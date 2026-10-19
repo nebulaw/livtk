@@ -79,6 +79,32 @@ project that already briefs Claude at session start gets two overlapping blocks.
     '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
   ```
 
+**A project's own kinds and relations.** livtk ships four kinds (task, lesson, decision,
+finding) and five relations (waits for, relates, supersedes, learned from, part of). A project
+that needs its own words declares them in `.livtk/config.toml`; one that declares nothing gets
+exactly the built-in set.
+
+```toml
+[[kinds]]
+name   = "incident"
+states = ["open", "mitigated", "closed"]   # in order; it starts at the first unless `start`
+closed = ["closed"]                        # what counts as over (the last state unless given)
+human  = ["mitigated -> closed"]           # moves only you may make
+key    = "INC"                             # its keys: INC-1, INC-2
+memory = false                             # true: recalled like lessons and findings
+
+[[relations]]
+name    = "implements"
+inverse = "implemented_by"                 # how it reads from the other end
+```
+
+A declared kind moves between any two of its states, is created with `livtk new --kind incident`,
+listed with `livtk list --kind incident`, gated by `[gates]` like any other, found by search, and
+has its own view in the app with its states as groups and board columns. A declared relation is
+linked with `livtk link A implements B` (or `livtk link B implemented_by A`) and shows from both
+ends. A kind cannot be taken out of the config while nodes of it exist: livtk stops and names
+them. A name livtk already uses is refused.
+
 Other optional per-project settings in `.livtk/config.toml`:
 
 ```toml

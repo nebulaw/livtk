@@ -60,6 +60,9 @@ enum Cmd {
         /// The task this one is part of: a sub-task.
         #[arg(long, value_name = "KEY")]
         parent: Option<String>,
+        /// Another kind than a task: one the project declares (`[[kinds]]` in its config).
+        #[arg(long)]
+        kind: Option<String>,
     },
     /// Propose a lesson: a rule learned from experience. It binds once the human ratifies it.
     Lesson {
@@ -114,12 +117,12 @@ enum Cmd {
     /// List nodes of a kind grouped by state; the active ones unless told otherwise.
     #[command(visible_alias = "ls", visible_alias = "board")]
     List {
-        /// task (default), lesson, decision or finding.
+        /// task (default), lesson, decision, finding, or a kind the project declares.
         #[arg(long, short, default_value = "task")]
-        kind: Kind,
+        kind: String,
         /// Only these states. Repeatable.
         #[arg(long, short)]
-        state: Vec<State>,
+        state: Vec<String>,
         /// Include what is over: done, canceled, rejected, retired, superseded.
         #[arg(long, short)]
         all: bool,
@@ -166,7 +169,7 @@ enum Cmd {
         priority: Option<u8>,
     },
     /// Move a task to another state.
-    Move { key: String, state: State },
+    Move { key: String, state: String },
     /// Acknowledge a planned task. Human only.
     Ack { key: String },
     /// Start an acknowledged task.
@@ -182,13 +185,15 @@ enum Cmd {
     /// of or has as a part OTHER.
     Link {
         key: String,
-        rel: LinkRel,
+        /// waits-for, blocks, relates, learned-from, supersedes, part-of, has-part, or a
+        /// relation the project declares (by its name, or by its inverse from the other end).
+        rel: String,
         other: String,
     },
     /// Remove a link: the same words as `link`.
     Unlink {
         key: String,
-        rel: LinkRel,
+        rel: String,
         other: String,
     },
     /// The project's docs (the markdown files under docs/, or the folder config.toml names),
@@ -222,7 +227,7 @@ enum Cmd {
         signals: Vec<String>,
         /// Only signals about this kind.
         #[arg(long)]
-        kind: Option<Kind>,
+        kind: Option<String>,
         /// Only signals about this node.
         #[arg(long)]
         node: Option<String>,
@@ -276,9 +281,11 @@ enum DepAction {
 }
 
 /// A link as `livtk link` names it, read from KEY's side: `blocks` and `has-part` are
-/// `waits-for` and `part-of` seen from the other end.
-#[derive(Clone, Copy, clap::ValueEnum)]
+/// `waits-for` and `part-of` seen from the other end; a declared relation by its name, or by its
+/// inverse from the other end.
+#[derive(Clone, Copy)]
 enum LinkRel {
+    Declared(Rel, bool),
     WaitsFor,
     Blocks,
     Relates,
@@ -289,9 +296,48 @@ enum LinkRel {
 }
 
 impl LinkRel {
+    /// The word as `livtk link` reads it: a built-in one, else a declared relation's name (from
+    /// KEY) or its inverse (from OTHER).
+    fn parse(word: &str) -> Result<LinkRel> {
+        Ok(match word {
+            "waits-for" => LinkRel::WaitsFor,
+            "blocks" => LinkRel::Blocks,
+            "relates" => LinkRel::Relates,
+            "learned-from" => LinkRel::LearnedFrom,
+            "supersedes" => LinkRel::Supersedes,
+            "part-of" => LinkRel::PartOf,
+            "has-part" => LinkRel::HasPart,
+            w => {
+                if let Some(r) = Rel::named(w).filter(|r| r.is_declared()) {
+                    LinkRel::Declared(r, true)
+                } else if let Some(r) = Rel::declared_all()
+                    .into_iter()
+                    .find(|r| r.inverse() == Some(w))
+                {
+                    LinkRel::Declared(r, false)
+                } else {
+                    let declared: Vec<String> = Rel::declared_all()
+                        .into_iter()
+                        .flat_map(|r| std::iter::once(r.as_str()).chain(r.inverse()))
+                        .map(str::to_owned)
+                        .collect();
+                    anyhow::bail!(
+                        "no link `{w}`: waits-for, blocks, relates, learned-from, supersedes, part-of, has-part{}",
+                        declared
+                            .iter()
+                            .map(|d| format!(", {d}"))
+                            .collect::<String>()
+                    );
+                }
+            }
+        })
+    }
+
     /// The core's link: its source, relation and destination.
     fn edge(self, key: String, other: String) -> (String, Rel, String) {
         match self {
+            LinkRel::Declared(rel, true) => (key, rel, other),
+            LinkRel::Declared(rel, false) => (other, rel, key),
             LinkRel::WaitsFor => (key, Rel::DependsOn, other),
             LinkRel::Blocks => (other, Rel::DependsOn, key),
             LinkRel::Relates => (key, Rel::Relates, other),
@@ -304,6 +350,8 @@ impl LinkRel {
 
     fn word(self) -> &'static str {
         match self {
+            LinkRel::Declared(rel, true) => rel.as_str(),
+            LinkRel::Declared(rel, false) => rel.inverse().unwrap_or(rel.as_str()),
             LinkRel::WaitsFor => "waits-for",
             LinkRel::Blocks => "blocks",
             LinkRel::Relates => "relates",
@@ -430,6 +478,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             priority,
             after,
             parent,
+            kind,
         } => {
             let links = after
                 .into_iter()
@@ -437,7 +486,8 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 .chain(parent.map(|k| (Rel::Parent, k)))
                 .collect();
             let body = read_body(body)?.unwrap_or_default();
-            create(ws, Kind::Task, title, body, priority, links, by, json)
+            let kind = kind.as_deref().map_or(Ok(Kind::Task), str::parse)?;
+            create(ws, kind, title, body, priority, links, by, json)
         }
         Cmd::Lesson {
             rule,
@@ -486,6 +536,11 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             all,
             fields,
         } => {
+            let kind: Kind = kind.parse()?;
+            let state = state
+                .iter()
+                .map(|s| s.parse::<State>())
+                .collect::<Result<Vec<_>, _>>()?;
             let states: Vec<State> = if !state.is_empty() {
                 state
             } else if all {
@@ -536,7 +591,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             }
             output::edited(ws, &before, &events, json)
         }
-        Cmd::Move { key, state } => moved(ws, &key, state, by, json),
+        Cmd::Move { key, state } => moved(ws, &key, state.parse()?, by, json),
         Cmd::Ack { key } => moved(ws, &key, State::Acked, by, json),
         Cmd::Start { key } => moved(ws, &key, State::Doing, by, json),
         Cmd::Done { key } => moved(ws, &key, State::Done, by, json),
@@ -595,8 +650,12 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 output::doc_links(ws, &of, json)
             }
         },
-        Cmd::Link { key, rel, other } => link(ws, key, rel, other, true, by, json),
-        Cmd::Unlink { key, rel, other } => link(ws, key, rel, other, false, by, json),
+        Cmd::Link { key, rel, other } => {
+            link(ws, key, LinkRel::parse(&rel)?, other, true, by, json)
+        }
+        Cmd::Unlink { key, rel, other } => {
+            link(ws, key, LinkRel::parse(&rel)?, other, false, by, json)
+        }
         Cmd::Note { key, text } => {
             let text = read_body(Some(text))?.unwrap_or_default();
             let events = ws.execute(
@@ -629,7 +688,10 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             signals,
             kind,
             node,
-        } => events(ws, since, follow, &signals, kind, node.as_deref()),
+        } => {
+            let kind = kind.as_deref().map(str::parse).transpose()?;
+            events(ws, since, follow, &signals, kind, node.as_deref())
+        }
         Cmd::Rebuild => {
             ws.rebuild()?;
             output::rebuilt(ws, json)

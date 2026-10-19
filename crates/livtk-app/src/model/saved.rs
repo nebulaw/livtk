@@ -115,6 +115,19 @@ impl Saved {
     }
 }
 
+/// Every view there is: the built-in ones, and one for each kind a project declares.
+fn known_views() -> Vec<View> {
+    View::ALL
+        .into_iter()
+        .chain(
+            livtk_core::Kind::all()
+                .into_iter()
+                .filter(|k| k.is_declared())
+                .map(View::Of),
+        )
+        .collect()
+}
+
 fn view_name(view: View) -> String {
     view.title().to_lowercase()
 }
@@ -152,7 +165,7 @@ impl Model {
     /// The model's part of what is remembered; the window's part is left for the view.
     pub fn saved(&self) -> Saved {
         let mut views = BTreeMap::new();
-        for view in View::ALL {
+        for view in known_views() {
             let d = self.displays.get(&view).cloned();
             let collapsed: Vec<String> = self
                 .collapsed
@@ -247,7 +260,7 @@ impl Model {
     /// Bring back what `saved` remembers. What no longer applies (a project gone, a view or
     /// group renamed) is passed over.
     pub fn restore(&mut self, saved: &Saved) {
-        for view in View::ALL {
+        for view in known_views() {
             let Some(s) = saved.views.get(&view_name(view)) else {
                 continue;
             };
@@ -334,7 +347,7 @@ impl Model {
             self.reload();
             return;
         }
-        let view = View::ALL
+        let view = known_views()
             .into_iter()
             .find(|v| Some(view_name(*v)) == saved.view);
         match view {
@@ -364,7 +377,7 @@ impl Model {
             .panes
             .iter()
             .map(|sp| {
-                let view = View::ALL
+                let view = known_views()
                     .into_iter()
                     .find(|v| sp.view.as_deref() == Some(view_name(*v).as_str()))
                     .filter(|v| !shown.contains(v));

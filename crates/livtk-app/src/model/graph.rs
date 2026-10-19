@@ -356,6 +356,7 @@ fn sort_key(n: &GraphNode) -> (u8, u64, String) {
         Kind::Decision => 1,
         Kind::Lesson => 2,
         Kind::Finding => 3,
+        _ => 4,
     };
     let number = n
         .key

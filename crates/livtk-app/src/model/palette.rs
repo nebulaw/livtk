@@ -466,6 +466,7 @@ impl Model {
             Kind::Lesson => View::Lessons,
             Kind::Decision => View::Decisions,
             Kind::Finding => View::Findings,
+            k => View::Of(k),
         };
         // The inbox shows it already, if it waits for the human.
         let in_view = self.pane().all.iter().any(|r| r.id == found.id);
@@ -563,7 +564,7 @@ impl Model {
                 }
             }
         }
-        for choice in link_choices(row.kind) {
+        for choice in link_choices(row.kind, &self.declared_rels()) {
             out.push(Action {
                 label: format!("Add link: {}", choice.label.to_lowercase()),
                 context: key.clone(),
@@ -616,6 +617,16 @@ impl Model {
                 ));
             }
         }
+        // The kinds the project declares, as views of their own.
+        for v in self
+            .views()
+            .into_iter()
+            .filter(|v| matches!(v, View::Of(_)))
+        {
+            if v != self.pane().view {
+                out.push(plain(&format!("Go to {}", v.title()), None, Run::Go(v)));
+            }
+        }
         for (i, p) in self.projects.iter().enumerate() {
             if i != self.current {
                 out.push(plain(
@@ -630,7 +641,7 @@ impl Model {
             Some("O"),
             Run::Ask(Ask::OpenFolder),
         ));
-        if self.pane().view == View::Tasks {
+        if self.pane().view.has_board() {
             let label = match self.pane().layout {
                 Layout::List => "Switch to board",
                 Layout::Board => "Switch to list",
@@ -638,7 +649,7 @@ impl Model {
             out.push(plain(label, Some("B"), Run::ToggleLayout));
         }
         let d = self.display();
-        let board = self.pane().view == View::Tasks && self.pane().layout == Layout::Board;
+        let board = self.pane().view.has_board() && self.pane().layout == Layout::Board;
         for (label, g) in [
             ("Group by state", Grouping::State),
             ("Group by priority", Grouping::Priority),

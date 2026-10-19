@@ -59,6 +59,12 @@ pub struct Config {
     /// What is added before each prompt, by section; everything unless given.
     #[serde(default, skip_serializing_if = "Sections::is_default")]
     pub user_prompt_submit: Sections,
+    /// Kinds the project declares beside the built-in four (`[[kinds]]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<crate::KindSpec>,
+    /// Relations the project declares beside the built-in five (`[[relations]]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<crate::RelSpec>,
 }
 
 /// The hooks a project may switch off with `[hooks] disable`. The guard (pre-tool-use) is not
@@ -427,6 +433,8 @@ impl Workspace {
             docs: None,
             session_start: Sections::default(),
             user_prompt_submit: Sections::default(),
+            kinds: Vec::new(),
+            relations: Vec::new(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -477,8 +485,28 @@ impl Workspace {
             }
             ws.catch_up()?;
         }
+        ws.check_kinds()?;
         ws.refresh()?;
         Ok(ws)
+    }
+
+    /// Every kind the project's nodes are of is still declared: a kind taken out of the config
+    /// while nodes of it exist would orphan them, so livtk refuses and names them.
+    fn check_kinds(&self) -> Result<()> {
+        for (kind, keys) in self.store.kinds_in_use()? {
+            if Kind::named(&kind).is_none() {
+                let shown: Vec<&str> = keys.iter().take(5).map(String::as_str).collect();
+                return Err(Error::Config {
+                    path: self.dir.join("config.toml"),
+                    msg: format!(
+                        "nodes of kind `{kind}` exist ({}{}) but no [[kinds]] declares it; declare it again",
+                        shown.join(", "),
+                        if keys.len() > 5 { ", ..." } else { "" }
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -1462,7 +1490,8 @@ pub fn link_allowed(kind: Kind, rel: Rel, dst: Kind) -> bool {
     match rel {
         Rel::DependsOn | Rel::Parent => kind == Kind::Task && dst == Kind::Task,
         Rel::Supersedes => matches!(kind, Kind::Lesson | Kind::Decision) && dst == kind,
-        Rel::LearnedFrom | Rel::Relates => true,
+        // Learned from, related to, and a project's own relations: anything to anything.
+        _ => true,
     }
 }
 
@@ -1492,6 +1521,15 @@ fn load_config(dir: &Path) -> Result<Config> {
         )));
     }
     validate_project_prefix(&config.prefix).map_err(|e| bad(e.to_string()))?;
+    // The project's own kinds, known before its gates and its log are read.
+    crate::model::declare_kinds(&config.kinds).map_err(|e| bad(e.to_string()))?;
+    crate::model::declare_relations(&config.relations).map_err(|e| bad(e.to_string()))?;
+    if let Some(k) = config.kinds.iter().find(|k| k.key == config.prefix) {
+        return Err(bad(format!(
+            "[[kinds]] `{}`: key `{}` is the project's own prefix",
+            k.name, k.key
+        )));
+    }
     config
         .gates
         .parse()

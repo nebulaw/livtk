@@ -50,6 +50,7 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
                     Kind::Task => "created",
                     Kind::Lesson | Kind::Decision => "proposed",
                     Kind::Finding => "recorded",
+                    _ => "created",
                 };
                 println!("{key} {verb}: {}", data.title);
                 match data.kind {
@@ -68,6 +69,7 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
                         Rel::LearnedFrom => "learned from",
                         Rel::Relates => "relates to",
                         Rel::Parent => "is part of",
+                        r => r.as_str(),
                     };
                     println!("  {what} {dst}");
                 }
@@ -216,6 +218,19 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     ] {
         for b in briefs {
             println!("{label:>11}  {} ({}) {}", b.key, b.state, b.title);
+        }
+    }
+    // The project's own relations, from either end.
+    for rel in livtk_core::Rel::declared_all() {
+        if !ws.config().relations.iter().any(|r| r.name == rel.as_str()) {
+            continue;
+        }
+        let (to, from) = ws.related(key, rel)?;
+        let back = rel.inverse().unwrap_or(rel.as_str());
+        for (label, briefs) in [(rel.as_str(), &to), (back, &from)] {
+            for b in briefs {
+                println!("{label:>11}  {} ({}) {}", b.key, b.state, b.title);
+            }
         }
     }
     for (path, title) in &docs {

@@ -490,6 +490,114 @@ impl Workspace {
         Ok(ws)
     }
 
+    /// Change the project's config through `edit`, which works on the file as written (comments
+    /// and order kept): the result is checked as a config loads, and written only if it holds.
+    /// The workspace then reads it again.
+    pub fn edit_config(
+        &mut self,
+        edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
+    ) -> Result<()> {
+        let path = self.dir.join("config.toml");
+        let text = fs::read_to_string(&path)?;
+        let mut doc: toml_edit::DocumentMut =
+            text.parse()
+                .map_err(|e: toml_edit::TomlError| Error::Config {
+                    path: path.clone(),
+                    msg: e.to_string(),
+                })?;
+        edit(&mut doc)?;
+        let new = doc.to_string();
+        let config = parse_config(&path, &new)?;
+        let tmp = path.with_extension("toml.tmp");
+        fs::write(&tmp, &new)?;
+        fs::rename(&tmp, &path)?;
+        self.gates = config.gates.parse().unwrap_or_default();
+        self.config = config;
+        Ok(())
+    }
+
+    /// Switch the hook `name` (one of `HOOK_NAMES`) on or off for this project.
+    pub fn set_hook(&mut self, name: &str, on: bool) -> Result<()> {
+        if !HOOK_NAMES.contains(&name) {
+            return Err(Error::Invalid(format!("no hook `{name}`")));
+        }
+        let mut disabled = self.config.hooks.disable.clone();
+        disabled.retain(|h| h != name);
+        if !on {
+            disabled.push(name.to_owned());
+        }
+        self.edit_config(|doc| {
+            let hooks = table(doc, "hooks")?;
+            if disabled.is_empty() {
+                hooks.remove("disable");
+            } else {
+                hooks["disable"] = toml_edit::value(string_array(&disabled));
+            }
+            Ok(())
+        })
+    }
+
+    /// Say `section` of what the hook `table` (`session_start` or `user_prompt_submit`) says,
+    /// or leave it out. All sections said, the table's `include` goes: the default.
+    pub fn set_section(&mut self, table_name: &str, section: &str, on: bool) -> Result<()> {
+        let (current, known) = match table_name {
+            "session_start" => (&self.config.session_start, &SESSION_SECTIONS[..]),
+            "user_prompt_submit" => (&self.config.user_prompt_submit, &PROMPT_SECTIONS[..]),
+            _ => return Err(Error::Invalid(format!("no table `{table_name}`"))),
+        };
+        if !known.contains(&section) {
+            return Err(Error::Invalid(format!("no section `{section}`")));
+        }
+        let kept: Vec<String> = known
+            .iter()
+            .filter(|s| if **s == section { on } else { current.has(s) })
+            .map(|s| (*s).to_owned())
+            .collect();
+        let all = kept.len() == known.len();
+        self.edit_config(|doc| {
+            let t = table(doc, table_name)?;
+            if all {
+                t.remove("include");
+            } else {
+                t["include"] = toml_edit::value(string_array(&kept));
+            }
+            if t.is_empty() {
+                doc.remove(table_name);
+            }
+            Ok(())
+        })
+    }
+
+    /// The project's own gates (`[gates] human`), replaced by `gates`, each checked.
+    pub fn set_gates(&mut self, gates: &[String]) -> Result<()> {
+        self.edit_config(|doc| {
+            let t = table(doc, "gates")?;
+            if gates.is_empty() {
+                t.remove("human");
+            } else {
+                t["human"] = toml_edit::value(string_array(gates));
+            }
+            if t.is_empty() {
+                doc.remove("gates");
+            }
+            Ok(())
+        })
+    }
+
+    /// The project's docs folder, from its folder; `None` for the default (`docs`).
+    pub fn set_docs_dir(&mut self, dir: Option<&str>) -> Result<()> {
+        let dir = dir.map(str::trim).filter(|d| !d.is_empty() && *d != "docs");
+        self.edit_config(|doc| {
+            match dir {
+                Some(d) => doc["docs"] = toml_edit::value(d),
+                None => {
+                    doc.remove("docs");
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Every kind the project's nodes are of is still declared: a kind taken out of the config
     /// while nodes of it exist would orphan them, so livtk refuses and names them.
     fn check_kinds(&self) -> Result<()> {
@@ -1508,12 +1616,17 @@ fn check_link(kind: Kind, rel: Rel, dst: &Node) -> Result<()> {
 
 fn load_config(dir: &Path) -> Result<Config> {
     let path = dir.join("config.toml");
+    let text = fs::read_to_string(&path)?;
+    parse_config(&path, &text)
+}
+
+/// `text` as a project's config, checked as `load_config` checks it.
+fn parse_config(path: &Path, text: &str) -> Result<Config> {
     let bad = |msg: String| Error::Config {
-        path: path.clone(),
+        path: path.to_path_buf(),
         msg,
     };
-    let text = fs::read_to_string(&path)?;
-    let config: Config = toml::from_str(&text).map_err(|e| bad(e.to_string()))?;
+    let config: Config = toml::from_str(text).map_err(|e| bad(e.to_string()))?;
     if config.version > CONFIG_VERSION {
         return Err(bad(format!(
             "version {} is newer than this livtk understands; update livtk",
@@ -1584,4 +1697,18 @@ fn clean_title(title: &str) -> Result<String> {
         )));
     }
     Ok(t.to_owned())
+}
+
+/// The table `name` of `doc`, made if it is not there.
+fn table<'a>(doc: &'a mut toml_edit::DocumentMut, name: &str) -> Result<&'a mut toml_edit::Table> {
+    if !doc.contains_key(name) {
+        doc[name] = toml_edit::table();
+    }
+    doc[name]
+        .as_table_mut()
+        .ok_or_else(|| Error::Invalid(format!("`{name}` in config.toml is not a table")))
+}
+
+fn string_array(items: &[String]) -> toml_edit::Array {
+    items.iter().map(String::as_str).collect()
 }

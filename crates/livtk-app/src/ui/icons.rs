@@ -47,6 +47,8 @@ icons! {
     /// A project, and a shut folder in the docs' list; an open one.
     Project => "folder",
     FolderOpen => "folder-open",
+    /// The settings.
+    Settings => "gear",
     /// A doc, in the docs' list.
     Article => "article",
     /// A detail opened in a card over the window.

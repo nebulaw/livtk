@@ -1073,6 +1073,31 @@ impl Model {
         out
     }
 
+    /// Change the open project's settings through `edit` (which writes its config, checked);
+    /// everything shown read again after. What went wrong, as the human should read it.
+    pub fn edit_project(
+        &mut self,
+        edit: impl FnOnce(&mut Workspace) -> livtk_core::Result<()>,
+    ) -> Result<(), String> {
+        let Some(p) = self.projects.get_mut(self.current) else {
+            return Err("no project is open".into());
+        };
+        edit(&mut p.ws).map_err(|e| e.to_string())?;
+        self.reload();
+        Ok(())
+    }
+
+    /// The open project's config, as it was last read.
+    pub fn config(&self) -> Option<&livtk_core::Config> {
+        self.project().map(|p| p.ws.config())
+    }
+
+    /// Write the open project's markdown export to its default folder.
+    pub fn export(&self) -> Option<livtk_core::Result<livtk_core::export::Report>> {
+        let p = self.project()?;
+        Some(livtk_core::export::export(&p.ws, None, &p.dir, false))
+    }
+
     /// The relations the open project declares.
     pub fn declared_rels(&self) -> Vec<Rel> {
         self.project()

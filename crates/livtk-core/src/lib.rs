@@ -7,6 +7,7 @@
 pub mod docs;
 mod error;
 pub mod event;
+pub mod export;
 mod log;
 pub mod model;
 pub mod on;

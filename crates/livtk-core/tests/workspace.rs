@@ -864,3 +864,39 @@ fn a_plan_edited_under_way_or_in_review_goes_back_to_planned() {
         );
     }
 }
+
+// ---- settings written through the core -----------------------------------------------------------
+
+#[test]
+fn settings_are_written_checked_and_keep_the_files_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let path = dir.path().join(".livtk/config.toml");
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str("# the team's own note\n");
+    std::fs::write(&path, text).unwrap();
+    ws.set_hook("session-start", false).unwrap();
+    ws.set_section("session_start", "protocol", false).unwrap();
+    ws.set_gates(&["task: review -> done".into()]).unwrap();
+    ws.set_docs_dir(Some("handbook")).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("# the team's own note"), "{written}");
+    let back = Workspace::open(dir.path()).unwrap();
+    let c = back.config();
+    assert!(!c.hook_on("session-start"));
+    assert!(!c.session_start.has("protocol") && c.session_start.has("tasks"));
+    assert_eq!(c.gates.human, ["task: review -> done"]);
+    assert_eq!(c.docs.as_deref(), Some("handbook"));
+    // A bad gate is refused, and the file left as it was.
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(ws.set_gates(&["task: nowhere -> done".into()]).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    // Everything on again: the tables go, the defaults are back.
+    ws.set_hook("session-start", true).unwrap();
+    ws.set_section("session_start", "protocol", true).unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !written.contains("disable") && !written.contains("session_start"),
+        "{written}"
+    );
+}

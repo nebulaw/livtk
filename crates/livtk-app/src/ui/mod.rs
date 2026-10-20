@@ -14,6 +14,7 @@ pub mod icons;
 pub mod menus;
 mod panes;
 mod peek;
+mod settings;
 pub mod state_flow;
 pub mod terminal;
 mod terminals;
@@ -484,6 +485,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Open, nav),
         KeyBinding::new("escape", Close, nav),
         KeyBinding::new("escape", Close, Some(peek::DETAIL)),
+        KeyBinding::new("escape", Close, Some(settings::SETTINGS)),
         KeyBinding::new("a", Decide, nav),
         KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
@@ -737,7 +739,7 @@ pub struct LivtkApp {
     /// The About modal is open.
     about: bool,
     /// Settings, open.
-    settings: bool,
+    settings: settings::Settings,
     /// What the menu bar and the Dock menu were last made from.
     menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
@@ -786,11 +788,13 @@ impl LivtkApp {
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
         let reader = docs::Reader::new(window, cx);
+        let settings = settings::Settings::new(window, cx);
         let subscriptions = vec![
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
             cx.subscribe_in(&reader.find, window, Self::on_find),
+            cx.subscribe_in(&settings.gate, window, Self::on_gate_input),
             // Focus can end up nowhere: the focused input was in a panel that closed, or an
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
@@ -955,7 +959,7 @@ impl LivtkApp {
             form: None,
             help: false,
             about: false,
-            settings: false,
+            settings,
             menu_state: None,
             editing: None,
             last_detail: None,
@@ -1187,7 +1191,7 @@ impl LivtkApp {
     /// Give the keys to what is in front: the new-task form, the palette, the find bar, else the
     /// list.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.help || self.about || self.settings {
+        if self.help || self.about {
             self.modal_focus.focus(window, cx);
         } else if let Some(form) = &self.form {
             form.title.read(cx).focus_handle(cx).focus(window, cx);
@@ -1965,9 +1969,7 @@ impl LivtkApp {
     /// Close the overlay on top, and only it (About, the shortcuts, the palette, then the form),
     /// and give the keys to what is now on top.
     fn close_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings {
-            self.settings = false;
-        } else if self.about {
+        if self.about {
             self.about = false;
         } else if self.help {
             self.help = false;
@@ -1987,7 +1989,6 @@ impl LivtkApp {
         self.form = None;
         self.help = false;
         self.about = false;
-        self.settings = false;
         self.focus_main(window, cx);
         cx.notify();
     }
@@ -2048,6 +2049,10 @@ impl LivtkApp {
     // ---- rendering: the frame -----------------------------------------------------------------
 
     fn sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // Settings open: the sidebar lists their sections, and the way back.
+        if self.settings.open.is_some() {
+            return self.settings_sidebar(cx);
+        }
         if self.rail(window) {
             return self.rail_bar(cx);
         }
@@ -2144,6 +2149,28 @@ impl LivtkApp {
                     .on_click(
                         cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx)),
                     ),
+            )
+            .child(
+                div()
+                    .id("open-settings")
+                    .debug_selector(|| "open-settings".into())
+                    .group("nav")
+                    .px_2()
+                    .h(px(NAV_ROW))
+                    .text_size(px(NAV_TEXT))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_lg()
+                    .text_color(color(TEXT_4))
+                    .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
+                    .child(icon_hover(Icon::Settings, NAV_ICON, TEXT_4, "nav", TEXT_3))
+                    .child(div().flex_1().child("Settings"))
+                    .child(kbd(keys::MOD))
+                    .child(kbd(","))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings(settings::Section::Appearance, window, cx)
+                    })),
             )
             .child(self.edge(Edge::Sidebar, window, cx).right_0())
             .into_any_element()
@@ -2449,6 +2476,18 @@ impl LivtkApp {
                     format!("Shortcuts · {}", keys::HELP).into(),
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx))),
+            )
+            .child(
+                rail_button(
+                    "rail-settings".into(),
+                    Icon::Settings,
+                    false,
+                    false,
+                    format!("Settings · {} ,", keys::MOD).into(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_settings(settings::Section::Appearance, window, cx)
+                })),
             )
             .into_any_element()
     }
@@ -2910,6 +2949,10 @@ impl LivtkApp {
     /// Whether the sidebar shows as the rail: as the human chose, or because the window is too
     /// narrow for it, unless they opened it there by hand.
     fn rail(&self, window: &Window) -> bool {
+        // The settings list their sections in the full sidebar, whatever the window.
+        if self.settings.open.is_some() {
+            return false;
+        }
         if Self::window_width(window) < RAIL_BELOW {
             !self.sidebar_peek
         } else {
@@ -5775,103 +5818,6 @@ impl LivtkApp {
 
     /// About livtk: its name, which build this is, what it is for, where it lives.
     /// Settings: how docs read (their text's size, how close their lines sit).
-    fn settings_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.settings {
-            return None;
-        }
-        let reading = self.model.reading;
-        let choice = |id: String, label: &'static str, on: bool| {
-            div()
-                .id(SharedString::from(id.clone()))
-                .debug_selector(move || id.clone())
-                .h(px(26.))
-                .px_3()
-                .flex()
-                .items_center()
-                .rounded_md()
-                .text_sm()
-                .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
-                .when(!on, |d| {
-                    d.text_color(color(TEXT_3))
-                        .hover(|h| h.text_color(color(TEXT_2)))
-                })
-                .child(label)
-        };
-        let segmented = || {
-            div()
-                .flex()
-                .p(px(2.))
-                .gap(px(2.))
-                .rounded_lg()
-                .bg(color(SURFACE))
-                .border_1()
-                .border_color(color(BORDER))
-        };
-        let mut sizes = segmented();
-        for size in crate::model::ReadingSize::ALL {
-            sizes = sizes.child(
-                choice(
-                    format!("reading-size-{}", size.name().to_lowercase()),
-                    size.name(),
-                    reading.size == size,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model.reading.size = size;
-                    cx.notify();
-                })),
-            );
-        }
-        let mut density = segmented();
-        for (compact, label) in [(false, "Comfortable"), (true, "Compact")] {
-            density = density.child(
-                choice(
-                    format!("reading-density-{}", label.to_lowercase()),
-                    label,
-                    reading.compact == compact,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model.reading.compact = compact;
-                    cx.notify();
-                })),
-            );
-        }
-        let row = |label: &'static str, control: Div| {
-            div()
-                .flex()
-                .items_center()
-                .child(div().flex_1().text_color(color(TEXT_2)).child(label))
-                .child(control)
-        };
-        let card = div()
-            .debug_selector(|| "settings".into())
-            .w(px(480.))
-            .p_5()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(color(TEXT_3))
-                    .child("livtk")
-                    .child("›")
-                    .child("Settings"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(color(TEXT_4))
-                    .child("Reading docs"),
-            )
-            .child(row("Text size", sizes))
-            .child(row("Density", density));
-        Some(self.modal("settings-modal", true, true, card, cx))
-    }
-
     fn about_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.about {
             return None;
@@ -6307,7 +6253,6 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
-        let settings = self.settings_overlay(cx);
         let palette = self.palette_overlay(cx);
         let peek = self.center_peek(window, cx);
         let notice = self.notice(cx);
@@ -6467,7 +6412,21 @@ impl Render for LivtkApp {
             )
             .children(find_bar)
             .into_any_element();
-        let panes = self.pane_tree(focused, window, cx);
+        // Settings open: their page in the middle, one box, the panes behind as they were.
+        let panes = if self.settings.open.is_some() {
+            div()
+                .size_full()
+                .flex()
+                .rounded_xl()
+                .border_1()
+                .border_color(color(BORDER))
+                .bg(color(CONTENT))
+                .overflow_hidden()
+                .child(self.settings_page(cx))
+                .into_any_element()
+        } else {
+            self.pane_tree(focused, window, cx)
+        };
 
         div()
             .size_full()
@@ -6515,10 +6474,11 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
-                this.show_over_form(window, cx);
-                this.settings = true;
-                this.modal_focus.focus(window, cx);
-                cx.notify();
+                if this.settings.open.is_some() {
+                    this.close_settings(window, cx);
+                } else {
+                    this.open_settings(settings::Section::Appearance, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.show_over_form(window, cx);
@@ -6652,7 +6612,6 @@ impl Render for LivtkApp {
             .children(palette)
             .children(help)
             .children(about)
-            .children(settings)
             .children(notice)
             .children(drag)
     }

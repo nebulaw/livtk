@@ -2119,15 +2119,15 @@ fn a_doc_is_edited_in_place_and_saved(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| assert!(a.model().docs.editing.is_none()));
 }
 
-/// Settings: Cmd-comma opens it; the docs' text size and density change the reader and are
-/// the model's to remember; Esc shuts it.
+/// Settings: Cmd-comma opens them on Appearance; the docs' text size and density change the
+/// reader and are the model's to remember; Esc leaves.
 #[gpui_kit::test]
 fn settings_set_how_docs_read(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.simulate_keystrokes("secondary-,");
     redraw(cx);
-    assert!(cx.debug_bounds("settings").is_some());
+    assert!(cx.debug_bounds("settings-page").is_some());
     click_on(cx, "reading-size-large");
     click_on(cx, "reading-density-compact");
     app.read_with(cx, |a, _| {
@@ -2139,7 +2139,7 @@ fn settings_set_how_docs_read(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("escape");
     redraw(cx);
-    assert!(cx.debug_bounds("settings").is_none());
+    assert!(cx.debug_bounds("settings-page").is_none());
 }
 
 /// A project without docs offers to start them: a README in docs/, opened.
@@ -3925,4 +3925,44 @@ fn probe_stale_menu(cx: &mut TestAppContext) {
         a.model().detail.as_ref().map(|d| d.node.key.clone())
     });
     eprintln!("PROBE6 reopened detail={sel:?} menu_still_open={menu}");
+}
+
+/// Cmd-, opens the settings: the sidebar lists their sections and the way back, the middle the
+/// section. A project setting is written to its config; a bad one says why. Esc leaves.
+#[gpui_kit::test]
+fn settings_take_the_sidebar_and_write_the_projects_config(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("settings-sidebar").is_some(),
+        "the sections in the sidebar"
+    );
+    assert!(cx.debug_bounds("settings-page").is_some());
+    assert!(
+        cx.debug_bounds("view-Tasks").is_none(),
+        "the views give way"
+    );
+    // What Claude is told: switching the session-start hook off writes the project's config.
+    click_on(cx, "settings-what-claude-is-told");
+    redraw(cx);
+    click_on(cx, "settings-hook-session-start-on");
+    redraw(cx);
+    let config = std::fs::read_to_string(dir.path().join(".livtk/config.toml")).unwrap();
+    assert!(config.contains("disable = [\"session-start\"]"), "{config}");
+    assert!(cx.debug_bounds("settings-hook-session-start-off").is_some());
+    // A gate that names no move is refused, with its reason.
+    click_on(cx, "settings-your-gates");
+    redraw(cx);
+    app.update(cx, |a, cx| a.type_gate("task: nowhere -> done", cx));
+    redraw(cx);
+    assert!(cx.debug_bounds("settings-error").is_some(), "says why");
+    // Esc: back to the app.
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(cx.debug_bounds("settings-sidebar").is_none());
+    assert!(cx.debug_bounds("view-Tasks").is_some());
 }

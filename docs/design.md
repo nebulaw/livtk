@@ -42,6 +42,15 @@ list's place, behind a header bar, and Esc gives the list back.
 - The terminal is one view holding several terminals, as VS Code does: a list beside it once
   there are two, a click shows one, its × kills it.
 
+## Settings
+
+Settings are a place, not a modal (⌘, or the Settings row under Shortcuts): the sidebar becomes
+their list of sections, with the way back at its top, and the middle shows the section, behind
+a header bar; Esc goes back. Sections are yours (this app's, private) or this project's
+(`.livtk/config.toml`, committed and shared), and each page says which. A project setting is
+written through the core, checked, comments kept; one that does not hold says why and changes
+nothing.
+
 ## Parts
 
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the

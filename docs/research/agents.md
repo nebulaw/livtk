@@ -18,7 +18,8 @@ local, not committed).
   - livtk writes that as a needs-you note with **Allow / Deny**.
   - Allow resumes the run with exactly those commands permitted, each simple command of a compound
     one separately.
-  - A turn that ends on a question waits for your note the same way.
+  - A turn that ends on a question waits for your note the same way. A headless session has no
+    AskUserQuestion, so its questions come as the turn's final text.
 - **Writing…** shows from a turn's start to its result. For sessions livtk did not start, the
   UserPromptSubmit and Stop hooks set and clear it.
 - **Quitting.**
@@ -28,6 +29,9 @@ local, not committed).
     and the session can resume later.
 - **Agents.** A plugin agent runs as the session's own agent (`--agent livtk:implementer`). Its
   hooks know it, and an environment variable naming the task reaches them.
+- **Permissions per stage.** Plan mode does not work headless: the session cannot leave it.
+  - Planning and review runs use the default mode with read-only tools allowed.
+  - Builds use the default mode, or acceptEdits inside a worktree.
 - **Claude Code's `--bg` sessions** still show in the Agents place, read from `claude agents
   --json`, with Open and Stop. livtk does not start its runs that way.
 

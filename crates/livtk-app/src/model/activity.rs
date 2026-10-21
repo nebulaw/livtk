@@ -49,6 +49,7 @@ impl Model {
         let Some(p) = self.projects.get(self.current) else {
             return;
         };
+        self.flow = p.ws.flow(None, jiff::Timestamp::now()).ok();
         let want = self.activity.len().max(PAGE);
         let page = match self.grid.pick.span.and_then(super::grid::pick_bounds) {
             Some((from, to)) => p.ws.activity_in(&from, &to, None, want),

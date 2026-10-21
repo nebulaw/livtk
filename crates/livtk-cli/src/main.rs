@@ -115,6 +115,13 @@ enum Cmd {
     Accept { key: String },
     /// Everything waiting for the human: plans, lessons, decisions.
     Inbox,
+    /// Time in each state, what waits on you and for how long, a project's lead time: measured
+    /// from the log.
+    Flow {
+        /// Only the tasks of this project (nested ones too), with its lead time.
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Projects: an outcome above tasks, its progress counted from the tasks part of it.
     Project {
         #[command(subcommand)]
@@ -555,6 +562,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
         Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
         Cmd::Project { cmd } => project::run(ws, cmd, by, json),
+        Cmd::Flow { project } => project::flow(ws, project.as_deref(), json),
         Cmd::Export { dir, check } => export::run(ws, dir.as_deref(), check),
         Cmd::List {
             kind,

@@ -1152,3 +1152,110 @@ fn an_active_project_without_an_update_for_a_week_reads_update_missing() {
     );
     assert!(bad.is_err());
 }
+
+// ---- flow -----------------------------------------------------------------------------------------
+
+#[test]
+fn flow_numbers_match_a_hand_built_log() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    // Hour by hour, from 2026-01-01T00:00:00Z: ids in time order.
+    let at = |h: u32| format!("2026-01-01T{h:02}:00:00.000Z");
+    let id = |n: u32| format!("01900000-0000-7000-8000-{n:012x}");
+    let node = |n: u32| format!("01800000-0000-7000-8000-{n:012x}");
+    let mut lines = Vec::new();
+    let mut seq = 0;
+    let mut ev = |h: u32, by: &str, op: &str, n: u32, data: String| {
+        seq += 1;
+        lines.push(format!(
+            r#"{{"v":1,"id":"{}","at":"{}","by":"{by}","op":"{op}","node":"{}","data":{data}}}"#,
+            id(seq),
+            at(h),
+            node(n)
+        ));
+    };
+    let create = |kind: &str, key: &str, state: &str| {
+        format!(
+            r#"{{"kind":"{kind}","key":"{key}","title":"{key}","state":"{state}","priority":3}}"#
+        )
+    };
+    let set = |s: &str| format!(r#"{{"state":"{s}"}}"#);
+    // LIV-1: backlog 0-1, planned 1-3, acked 3-4, doing 4-7, review 7-8, done at 8.
+    ev(
+        0,
+        "claude",
+        "node.create",
+        1,
+        create("task", "LIV-1", "backlog"),
+    );
+    // LIV-2: backlog 0-2, planned 2-? (still planned at 10: 8 hours waiting).
+    ev(
+        0,
+        "claude",
+        "node.create",
+        2,
+        create("task", "LIV-2", "backlog"),
+    );
+    ev(1, "claude", "node.set", 1, set("planned"));
+    ev(2, "claude", "node.set", 2, set("planned"));
+    ev(3, "human", "node.set", 1, set("acked"));
+    ev(4, "claude", "node.set", 1, set("doing"));
+    ev(7, "claude", "node.set", 1, set("review"));
+    ev(8, "human", "node.set", 1, set("done"));
+    fs::write(log_path(dir.path()), lines.join("\n") + "\n").unwrap();
+    let mut ws = Workspace::open(dir.path()).unwrap();
+    ws.rebuild().unwrap();
+    let now: jiff::Timestamp = at(10).parse().unwrap();
+    let f = ws.flow(None, now).unwrap();
+    let h = 3600;
+    let of = |s: State| f.states.iter().find(|t| t.state == s).cloned().unwrap();
+    // Backlog: LIV-1 1h, LIV-2 2h; median of two is the upper, 2h; total 3h.
+    assert_eq!(
+        (of(State::Backlog).tasks, of(State::Backlog).total_secs),
+        (2, 3 * h)
+    );
+    // Planned: LIV-1 2h, LIV-2 8h (still there at 10).
+    assert_eq!(of(State::Planned).total_secs, 10 * h);
+    assert_eq!(of(State::Doing).median_secs, 3 * h);
+    assert_eq!(of(State::Review).total_secs, h);
+    assert!(
+        f.states.iter().all(|t| t.state != State::Done),
+        "done counts no time"
+    );
+    // The ack queue: LIV-2, 8 hours.
+    assert_eq!(f.queues.len(), 1);
+    assert_eq!(
+        (
+            f.queues[0].state,
+            f.queues[0].count,
+            f.queues[0].oldest.as_str(),
+            f.queues[0].oldest_secs
+        ),
+        (State::Planned, 1, "LIV-2", 8 * h)
+    );
+    assert_eq!(f.lead, None, "lead time is a project's");
+}
+
+#[test]
+fn a_projects_flow_counts_its_own_tasks_and_its_lead_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let p = create(&mut ws, Kind::Project, "outcome", &[]);
+    let a = create(&mut ws, Kind::Task, "a", &[(Rel::Parent, &p)]);
+    task(&mut ws, "elsewhere");
+    let now = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
+    assert_eq!(
+        ws.flow(Some(&p), now).unwrap().lead,
+        None,
+        "nothing started"
+    );
+    ack(&mut ws, &a);
+    mv(&mut ws, &a, State::Doing, &CLAUDE).unwrap();
+    let f = ws.flow(Some(&p), now).unwrap();
+    let lead = f.lead.unwrap();
+    assert!(lead.finished.is_none());
+    assert!(lead.secs >= 3500, "about an hour to now: {}", lead.secs);
+    // Only its own task: one in backlog, not two.
+    let backlog = f.states.iter().find(|t| t.state == State::Backlog).unwrap();
+    assert_eq!(backlog.tasks, 1);
+}

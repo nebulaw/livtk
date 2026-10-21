@@ -166,6 +166,11 @@ livtk project update PRJ-1 --health at_risk "parsing is slow; next: batch it"
 livtk project set PRJ-1 --target "" # an empty value clears it
 ```
 
+**Flow, measured.** `livtk flow` reads the log for how long tasks spend in each state (the
+median per task, and all together), what waits on you now and the longest wait, and with
+`--project PRJ-1` that project's tasks alone and its lead time, from its first task started to
+done. The app shows the waits above the activity feed, and a project's in its panel.
+
 More than three active at once, and `project list` says so: fewer at a time finish sooner. Lists
 name a task's project (`[PRJ-1]`, and `"project"` in `--json` rows) once there is one. Project
 events are format 6: an older livtk skips them and asks to be updated.

@@ -4077,6 +4077,13 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("project-waits-planned").is_some());
     assert!(cx.debug_bounds("project-waits-review").is_some());
     assert!(cx.debug_bounds("project-update-0").is_some());
+    // Its flow: the lead time and a bar per state.
+    assert!(cx.debug_bounds("project-lead").is_some());
+    assert!(cx.debug_bounds("flow-time-review").is_some());
+    assert!(
+        cx.debug_bounds("flow-time-done").is_none(),
+        "done takes no time"
+    );
     // Grouping by project: offered in Tasks, not in Projects.
     app.update(cx, |a, cx| {
         a.model_mut().close_detail();
@@ -4099,4 +4106,8 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
         app.read_with(cx, |a, _| a.model().display().grouping),
         livtk_app::model::Grouping::Project
     );
+    // The activity view says what waits and for how long.
+    cx.simulate_keystrokes("g a");
+    redraw(cx);
+    assert!(cx.debug_bounds("flow-strip").is_some());
 }

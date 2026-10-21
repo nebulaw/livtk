@@ -4317,6 +4317,7 @@ impl LivtkApp {
             .size_full()
             .flex()
             .flex_col()
+            .children(self.model.flow.as_ref().and_then(flow_strip))
             .children(chip)
             .child(div().flex_1().min_h_0().child(feed))
             .into_any_element()
@@ -5229,7 +5230,7 @@ impl LivtkApp {
                 icon_tag(Icon::Standing, "Standing rule", DONE),
             ));
         }
-        if let Some((g, _)) = &d.project {
+        if let Some((g, _, _)) = &d.project {
             if let Some(o) = &g.owner {
                 props = props.child(prop_row("Owner", div().child(o.clone())));
             }
@@ -7024,7 +7025,7 @@ enum Item {
 /// A project's own section in its panel: how far it has come, what waits on the human, and
 /// how it stands, from its updates, newest first.
 fn project_section(d: &Detail) -> Option<Div> {
-    let (g, updates) = d.project.as_ref()?;
+    let (g, updates, flow) = d.project.as_ref()?;
     let share = if g.total == 0 {
         0.
     } else {
@@ -7093,6 +7094,7 @@ fn project_section(d: &Detail) -> Option<Div> {
                 .child("Update missing: none for a week while active."),
         );
     }
+    out = out.children(flow_section(flow));
     if !updates.is_empty() {
         out = out.child(section_label("Updates"));
         for (i, u) in updates.iter().enumerate() {
@@ -7125,6 +7127,130 @@ fn project_section(d: &Detail) -> Option<Div> {
         }
     }
     Some(out)
+}
+
+/// The flow above the activity feed, in one quiet line: what waits on the human and for how
+/// long, and the median time in review.
+fn flow_strip(f: &livtk_core::Flow) -> Option<Div> {
+    let mut parts: Vec<String> = f
+        .queues
+        .iter()
+        .map(|q| {
+            format!(
+                "{} {} waiting on you, the longest {} ({})",
+                q.count,
+                state_name(q.state).to_lowercase(),
+                q.oldest,
+                span(q.oldest_secs)
+            )
+        })
+        .collect();
+    if let Some(r) = f.states.iter().find(|t| t.state == State::Review) {
+        parts.push(format!("median in review {}", span(r.median_secs)));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .debug_selector(|| "flow-strip".into())
+            .h(px(ROW))
+            .flex_none()
+            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(color(BORDER))
+            .text_xs()
+            .text_color(color(TEXT_3))
+            .child(icon(Icon::You, 12., TEXT_4))
+            .child(parts.join(" · ")),
+    )
+}
+
+/// A project's flow in its panel: its lead time, and the median time its tasks spend in each
+/// state, as one quiet bar per state (one series, one hue; the numbers in text).
+fn flow_section(f: &livtk_core::Flow) -> Option<Div> {
+    if f.states.is_empty() && f.lead.is_none() {
+        return None;
+    }
+    let longest = f
+        .states
+        .iter()
+        .map(|t| t.median_secs)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let mut out = div()
+        .debug_selector(|| "project-flow".into())
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(section_label("Flow"));
+    if let Some(l) = &f.lead {
+        out = out.child(
+            div()
+                .debug_selector(|| "project-lead".into())
+                .text_sm()
+                .text_color(color(TEXT_2))
+                .child(format!(
+                    "Lead time {}{}",
+                    span(l.secs),
+                    if l.finished.is_some() { "" } else { " so far" }
+                )),
+        );
+    }
+    for t in &f.states {
+        let state = t.state;
+        let share = t.median_secs as f32 / longest as f32;
+        out = out.child(
+            div()
+                .debug_selector(move || format!("flow-time-{}", state.as_str()))
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .child(
+                    div()
+                        .w(px(80.))
+                        .flex_none()
+                        .text_color(color(TEXT_3))
+                        .child(state_name(state)),
+                )
+                .child(
+                    div().flex_1().h(px(6.)).child(
+                        div()
+                            .h_full()
+                            .w(relative(share.max(0.02)))
+                            .rounded_r(px(4.))
+                            .bg(color(ACCENT)),
+                    ),
+                )
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_none()
+                        .flex()
+                        .justify_end()
+                        .text_color(color(TEXT_2))
+                        .child(span(t.median_secs)),
+                ),
+        );
+    }
+    Some(out)
+}
+
+/// A duration as people say it: `3d 4h`, `5h 20m`, `12m`, `40s`.
+fn span(secs: i64) -> String {
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
+    match (d, h, m) {
+        (0, 0, 0) => format!("{secs}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
 }
 
 fn section_label(text: &str) -> Div {

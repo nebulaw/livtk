@@ -435,6 +435,25 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every state change of nodes of `kind`, in the log's order: the node, the state it
+    /// entered, and when (its creation counts as entering its first state).
+    pub fn state_changes(&self, kind: Kind) -> Result<Vec<(Uuid, State, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT e.node, json_extract(e.line, '$.data.state'), e.at FROM events e \
+             JOIN nodes n ON n.id = e.node WHERE n.kind = ?1 \
+             AND e.op IN ('node.create', 'node.set') \
+             AND json_extract(e.line, '$.data.state') IS NOT NULL ORDER BY e.id",
+        )?;
+        let mut rows = stmt.query([kind.as_str()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let node: String = row.get(0)?;
+            let state: String = row.get(1)?;
+            out.push((parse_uuid(&node)?, state.parse()?, row.get(2)?));
+        }
+        Ok(out)
+    }
+
     /// When a node last changed state, or was created if it never has.
     pub fn entered(&self, id: Uuid) -> Result<Option<String>> {
         let at: Option<String> = self

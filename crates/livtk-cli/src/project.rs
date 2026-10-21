@@ -258,3 +258,70 @@ fn waiting_line(g: &Progress) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// `livtk flow`: time in each state, what waits on the human and for how long, a project's lead
+/// time. Measured from the log.
+pub fn flow(ws: &Workspace, project: Option<&str>, json: bool) -> Result<()> {
+    let f = ws.flow(project, Timestamp::now())?;
+    if json {
+        return crate::output::print_json(&f);
+    }
+    let mut text = String::new();
+    if f.states.is_empty() {
+        text.push_str("No task has moved yet.\n");
+    } else {
+        writeln!(
+            text,
+            "Time in each state (median per task, then all together):"
+        )?;
+        for t in &f.states {
+            writeln!(
+                text,
+                "  {:<9} {:>3} task(s)  {:>8}  {:>8}",
+                t.state.as_str(),
+                t.tasks,
+                span(t.median_secs),
+                span(t.total_secs)
+            )?;
+        }
+    }
+    if !f.queues.is_empty() {
+        writeln!(text, "Waiting on the human:")?;
+        for q in &f.queues {
+            writeln!(
+                text,
+                "  {:<9} {:>3}  the longest {} ({})",
+                q.state.as_str(),
+                q.count,
+                q.oldest,
+                span(q.oldest_secs)
+            )?;
+        }
+    }
+    if let Some(l) = &f.lead {
+        let state = if l.finished.is_some() {
+            "done"
+        } else {
+            "so far"
+        };
+        writeln!(
+            text,
+            "Lead time: {} {state}, since {}",
+            span(l.secs),
+            l.started.get(..10).unwrap_or(&l.started)
+        )?;
+    }
+    print!("{text}");
+    Ok(())
+}
+
+/// A duration as people say it: `3d 4h`, `5h 20m`, `12m`, `40s`.
+pub fn span(secs: i64) -> String {
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
+    match (d, h, m) {
+        (0, 0, 0) => format!("{secs}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}

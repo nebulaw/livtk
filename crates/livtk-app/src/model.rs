@@ -448,8 +448,12 @@ pub struct Detail {
     pub choices: Vec<Choice>,
     /// The docs it is linked to, by path, each with its title (`None` once it is gone).
     pub docs: Vec<(String, Option<String>)>,
-    /// A project's progress and updates, newest first.
-    pub project: Option<(livtk_core::Progress, Vec<livtk_core::Update>)>,
+    /// A project's progress, its updates newest first, and its flow.
+    pub project: Option<(
+        livtk_core::Progress,
+        Vec<livtk_core::Update>,
+        livtk_core::Flow,
+    )>,
 }
 
 /// Links of one relation and direction, as the detail panel lists them.
@@ -596,6 +600,9 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
     pub activity: Vec<livtk_core::Activity>,
+    /// The project's flow, as the activity view shows it: what waits on the human and for how
+    /// long, and the time tasks spend in each state.
+    pub flow: Option<livtk_core::Flow>,
     /// Whether older events wait for "Show older".
     pub activity_more: bool,
     /// The highlighted event of the feed.
@@ -818,6 +825,7 @@ impl Model {
             arrivals: Vec::new(),
             palette: None,
             activity: Vec::new(),
+            flow: None,
             activity_more: false,
             activity_index: 0,
             activity_seen_before: None,
@@ -2602,9 +2610,11 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         vec![group("Sub-tasks", Rel::Parent, false, &parts)]
     };
     let project = if node.kind == Kind::Project {
+        let now = jiff::Timestamp::now();
         Some((
-            ws.progress(&key, jiff::Timestamp::now())?,
+            ws.progress(&key, now)?,
             ws.updates(&key)?,
+            ws.flow(Some(&key), now)?,
         ))
     } else {
         None

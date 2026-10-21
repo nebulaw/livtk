@@ -100,9 +100,23 @@ fn the_projects_view_lists_active_ones_first_with_their_progress() {
     m.select(id);
     m.open_detail();
     let d = m.detail.as_ref().unwrap();
-    let (g, updates) = d.project.as_ref().unwrap();
+    let (g, updates, flow) = d.project.as_ref().unwrap();
     assert_eq!((g.done, g.total), (1, 3));
     assert_eq!(updates.len(), 1);
+    // Its flow: started, so a lead time; a time for each state its tasks have been in.
+    assert!(flow.lead.is_some());
+    let states: Vec<State> = flow.states.iter().map(|t| t.state).collect();
+    assert_eq!(
+        states,
+        [
+            State::Backlog,
+            State::Planned,
+            State::Acked,
+            State::Doing,
+            State::Review
+        ]
+    );
+    assert_eq!(flow.states[4].tasks, 2, "two tasks reached review");
     let groups: Vec<(&str, usize)> = d
         .link_groups
         .iter()

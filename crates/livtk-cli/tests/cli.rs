@@ -1199,3 +1199,39 @@ fn more_than_three_active_projects_get_a_plain_line() {
     let list = ok(d, As::Claude, &["project", "list"]);
     assert!(list.contains("4 projects are active at once"), "{list}");
 }
+
+#[test]
+fn flow_gives_time_per_state_and_queue_ages_for_all_or_one_project() {
+    let dir = project();
+    let d = dir.path();
+    ok(d, As::Claude, &["project", "new", "outcome"]);
+    ok(d, As::Claude, &["new", "in it", "--parent", "PRJ-1"]);
+    ok(d, As::Claude, &["new", "elsewhere"]);
+    ok(d, As::Claude, &["move", "LIV-1", "planned"]);
+    ok(d, As::Claude, &["move", "LIV-2", "planned"]);
+    let all = json(d, &["flow"]);
+    let backlog = all["states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["state"] == "backlog")
+        .unwrap()
+        .clone();
+    assert_eq!(backlog["tasks"], 2);
+    assert!(backlog["median_secs"].is_i64() && backlog["total_secs"].is_i64());
+    assert_eq!(all["queues"][0]["state"], "planned");
+    assert_eq!(all["queues"][0]["count"], 2);
+    assert!(all["queues"][0]["oldest_secs"].is_i64());
+    assert!(all["lead"].is_null());
+    // One project: its own task only.
+    let one = json(d, &["flow", "--project", "PRJ-1"]);
+    assert_eq!(one["queues"][0]["count"], 1);
+    assert_eq!(one["queues"][0]["oldest"], "LIV-1");
+    assert!(ok(d, As::Claude, &["flow"]).contains("Waiting on the human:"));
+    assert!(
+        livtk(d, As::Claude, &["flow", "--project", "LIV-1"])
+            .status
+            .code()
+            != Some(0)
+    );
+}

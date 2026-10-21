@@ -17,6 +17,7 @@ use crate::model::{
     Actor, Health, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
 };
 
+mod flow;
 mod project;
 #[cfg(feature = "embed")]
 use crate::search::Model;
@@ -25,6 +26,7 @@ use crate::search::{
     matched_terms, models_dir, query_terms, text_hash,
 };
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
+pub use flow::{Flow, Lead, Queue, StateTime};
 pub use project::{ACTIVE_AT_ONCE, Progress, UPDATE_EVERY_DAYS, Update, Waiting, done_when};
 
 /// Recall injects at most this many items into a prompt.

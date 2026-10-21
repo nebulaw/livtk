@@ -196,11 +196,12 @@ pub fn sessions(root: &Path) -> Result<Vec<Session>, String> {
     Ok(all)
 }
 
-/// Stop background session `id`.
-pub fn stop(id: &str) -> Result<(), String> {
+/// Stop background session `id`, from the project's folder `root` as its sessions are listed.
+pub fn stop(root: &Path, id: &str) -> Result<(), String> {
     let claude = claude().ok_or("The claude command is not installed.")?;
     let out = Command::new(claude)
         .args(["stop", id])
+        .current_dir(root)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| e.to_string())?;

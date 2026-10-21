@@ -4122,33 +4122,51 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("flow-strip").is_some());
 }
 
+/// One stub `claude` and Claude home for the whole test binary (livtk is pointed at them once):
+/// `claude agents` answers with `.stub-agents.json` in the folder it runs in (the project), and
+/// `claude stop` writes `.stub-stopped` there, so each test's project answers for itself. The
+/// home has livtk's plugin with one agent, `implementer`.
+fn claude_stub() -> &'static std::path::Path {
+    use std::os::unix::fs::PermissionsExt;
+    static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let home = tempfile::tempdir().unwrap().keep();
+        let plugin = home.join("plugins/cache/livtk/livtk/0.4.0");
+        std::fs::create_dir_all(plugin.join("agents")).unwrap();
+        std::fs::write(
+            plugin.join("agents/implementer.md"),
+            "---\nname: implementer\ndescription: Implements a task.\ntools:\n  - Read\n  - Edit\ncolor: blue\n---\n\nYou implement.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("plugins/installed_plugins.json"),
+            format!(
+                r#"{{"version":2,"plugins":{{"livtk@livtk":[{{"installPath":"{}"}}]}}}}"#,
+                plugin.display()
+            ),
+        )
+        .unwrap();
+        let claude = home.join("claude");
+        std::fs::write(
+            &claude,
+            "#!/bin/sh\nif [ \"$1\" = agents ]; then cat .stub-agents.json 2>/dev/null || echo '[]'; fi\nif [ \"$1\" = stop ]; then echo \"$2\" >> .stub-stopped; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        livtk_app::agents::use_paths(claude, home.clone());
+        home
+    })
+}
+
 /// The Agents place, with a stub `claude`: this project's sessions only, Needs you first, Stop
 /// for a background one; the agents by place, livtk's copied, a copy saved and then removed
-/// after a second press. (The only test that points livtk at a `claude` and a Claude home.)
+/// after a second press.
 #[gpui_kit::test]
 fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestAppContext) {
-    use std::os::unix::fs::PermissionsExt;
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
-    let stub = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    // livtk's plugin, as Claude Code records it, with one agent.
-    let plugin = home.path().join("plugins/cache/livtk/livtk/0.4.0");
-    std::fs::create_dir_all(plugin.join("agents")).unwrap();
-    std::fs::write(
-        plugin.join("agents/implementer.md"),
-        "---\nname: implementer\ndescription: Implements a task.\ntools:\n  - Read\n  - Edit\ncolor: blue\n---\n\nYou implement.\n",
-    )
-    .unwrap();
-    std::fs::write(
-        home.path().join("plugins/installed_plugins.json"),
-        format!(
-            r#"{{"version":2,"plugins":{{"livtk@livtk":[{{"installPath":"{}"}}]}}}}"#,
-            plugin.display()
-        ),
-    )
-    .unwrap();
-    let sessions = stub.path().join("agents.json");
+    claude_stub();
+    let sessions = root.join(".stub-agents.json");
     let write_sessions = |waiting: &str| {
         std::fs::write(
             &sessions,
@@ -4164,18 +4182,6 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
         .unwrap();
     };
     write_sessions("waiting");
-    let claude = stub.path().join("claude");
-    std::fs::write(
-        &claude,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = agents ]; then cat '{}'; fi\nif [ \"$1\" = stop ]; then echo \"$2\" >> '{}'; fi\n",
-            sessions.display(),
-            stub.path().join("stopped").display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
-    livtk_app::agents::use_paths(claude.clone(), home.path().to_path_buf());
     let (app, cx) = open_app(cx, &root);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
@@ -4209,7 +4215,7 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
     assert!(cx.debug_bounds("session-page").is_some());
     click_on(cx, "session-stop");
     assert_eq!(
-        std::fs::read_to_string(stub.path().join("stopped"))
+        std::fs::read_to_string(root.join(".stub-stopped"))
             .unwrap()
             .trim(),
         "bg1"
@@ -4251,6 +4257,161 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
     redraw(cx);
     assert!(!copy.exists());
     let _ = app;
+}
+
+/// Sessions: a task's properties name the sessions that worked on it; a click reads one in
+/// Agents, at the task's first event in it; a call opens on a click; Esc gives the list back,
+/// where the session wears its transcript's title.
+#[gpui_kit::test]
+fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
+    let home = claude_stub();
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    // Claude worked on LIV-1 in session sess-x.
+    {
+        let mut ws = Workspace::open(&root).unwrap();
+        ws.set_session(Some("sess-x".into()));
+        ws.execute(
+            Command::Note {
+                node: "LIV-1".into(),
+                text: "on it".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    // Its transcript: a prompt long before, a call and its result, a reply long after.
+    let dir_t = livtk_core::claude::transcripts_in(home, &root);
+    std::fs::create_dir_all(&dir_t).unwrap();
+    let rec = |v: serde_json::Value| format!("{v}\n");
+    let mut t = String::new();
+    t += &rec(
+        serde_json::json!({"type": "user", "timestamp": "2000-01-01T00:00:00.000Z", "sessionId": "sess-x",
+        "message": {"role": "user", "content": "Start the importer"}}),
+    );
+    t += &rec(
+        serde_json::json!({"type": "assistant", "timestamp": "2000-01-01T00:00:01.000Z", "sessionId": "sess-x",
+        "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash",
+        "input": {"command": "livtk list", "description": "List the tasks"}}]}}),
+    );
+    t += &rec(
+        serde_json::json!({"type": "user", "timestamp": "2000-01-01T00:00:02.000Z", "sessionId": "sess-x",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "PLANNED LIV-1"}]}}),
+    );
+    t += &rec(
+        serde_json::json!({"type": "assistant", "timestamp": "2999-01-01T00:00:00.000Z", "sessionId": "sess-x",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "Noted on LIV-1."}]}}),
+    );
+    t += &rec(
+        serde_json::json!({"type": "custom-title", "customTitle": "Importer", "sessionId": "sess-x"}),
+    );
+    std::fs::write(dir_t.join("sess-x.jsonl"), t).unwrap();
+    // The subagent toolu_1 started, beside it.
+    let sub = dir_t.join("sess-x/subagents");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(
+        sub.join("agent-r1.jsonl"),
+        rec(serde_json::json!({"type": "user", "timestamp": "2000-01-01T00:00:01.500Z", "isSidechain": true,
+            "message": {"role": "user", "content": "Refute LIV-1"}})),
+    )
+    .unwrap();
+    std::fs::write(
+        sub.join("agent-r1.meta.json"),
+        serde_json::json!({"agentType": "livtk:refuter", "toolUseId": "toolu_1"}).to_string(),
+    )
+    .unwrap();
+    // A session the log knows whose transcript Claude Code no longer keeps.
+    {
+        let mut ws = Workspace::open(&root).unwrap();
+        ws.set_session(Some("sess-gone".into()));
+        ws.execute(
+            Command::Note {
+                node: "LIV-2".into(),
+                text: "earlier".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    let (app, cx) = open_app(cx, &root);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    // The transcripts are read with the sessions, in the Agents place.
+    cx.simulate_keystrokes("g e");
+    redraw(cx);
+    redraw(cx);
+    assert!(cx.debug_bounds("session-sess-x").is_some());
+    cx.simulate_keystrokes("g i");
+    redraw(cx);
+    open_detail(cx);
+    assert!(
+        cx.debug_bounds("task-session-sess-x").is_some(),
+        "in its properties"
+    );
+    click_on(cx, "task-session-sess-x");
+    redraw(cx);
+    redraw(cx);
+    assert_eq!(app.read_with(cx, |a, _| a.model().view()), View::Agents);
+    assert!(
+        cx.debug_bounds("session-reader").is_some(),
+        "read in the middle"
+    );
+    assert!(
+        cx.debug_bounds("reader-focus").is_some(),
+        "at the task's first event"
+    );
+    // A call is one line until opened.
+    click_on(cx, "call-toolu_1");
+    redraw(cx);
+    let open = app.read_with(cx, |a, _| {
+        a.model()
+            .agents
+            .reader
+            .as_ref()
+            .is_some_and(|r| r.open.contains("toolu_1"))
+    });
+    assert!(open);
+    // The subagent it started: its work, read; Esc goes back to the session.
+    click_on(cx, "subagent-toolu_1");
+    redraw(cx);
+    redraw(cx);
+    let reading = app.read_with(cx, |a, _| {
+        a.model()
+            .agents
+            .reader
+            .as_ref()
+            .map(|r| (r.path.ends_with("agent-r1.jsonl"), r.entries.len()))
+    });
+    assert_eq!(reading, Some((true, 1)), "the subagent's prompt");
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    let back = app.read_with(cx, |a, _| {
+        a.model()
+            .agents
+            .reader
+            .as_ref()
+            .map(|r| r.path.ends_with("sess-x.jsonl"))
+    });
+    assert_eq!(back, Some(true), "back to the session");
+    // Esc again: the list, the session by its title.
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    assert!(cx.debug_bounds("session-reader").is_none());
+    let rows = app.read_with(cx, |a, _| a.model().session_rows());
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.id == "sess-x")
+            .map(|r| r.name.as_str()),
+        Some("Importer")
+    );
+    // A session without a transcript still shows, from the log, and says so.
+    click_on(cx, "session-sess-gone");
+    redraw(cx);
+    assert!(cx.debug_bounds("session-gone").is_some());
+    assert!(
+        cx.debug_bounds("session-node-LIV-2").is_some(),
+        "what it worked on, from the log"
+    );
 }
 
 /// The sidebar: Agents in a section of its own, between the views and the tools.

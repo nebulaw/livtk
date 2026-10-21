@@ -478,6 +478,8 @@ pub struct Detail {
     pub choices: Vec<Choice>,
     /// The docs it is linked to, by path, each with its title (`None` once it is gone).
     pub docs: Vec<(String, Option<String>)>,
+    /// The Claude Code sessions that worked on it, each by actor.
+    pub sessions: Vec<livtk_core::SessionUse>,
     /// A project's progress, its updates newest first, and its flow.
     pub project: Option<(
         livtk_core::Progress,
@@ -2693,6 +2695,7 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         link_groups,
         node,
         project,
+        sessions: ws.sessions_of(&key).unwrap_or_default(),
     })
 }
 

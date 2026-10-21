@@ -556,6 +556,18 @@ impl Store {
             .collect()
     }
 
+    /// The last `limit` events session `session` wrote, newest first (claims aside).
+    pub fn session_events(&self, session: &str, limit: usize) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT line FROM events WHERE session = ?1 AND op != 'node.session' \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let lines: Vec<String> = stmt
+            .query_map(params![session, limit as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(readable(&lines))
+    }
+
     /// Events Claude wrote that name no session, in the log's order.
     pub fn unclaimed(&self) -> Result<Vec<Unclaimed>> {
         let mut stmt = self.conn.prepare_cached(

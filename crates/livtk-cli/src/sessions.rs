@@ -2,7 +2,7 @@
 //! credits work done before livtk recorded sessions to the session it came from.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -96,10 +96,11 @@ pub fn run(ws: &mut Workspace, cmd: SessionsCmd, by: &Actor, json: bool) -> Resu
     } = cmd;
     let dir = match transcripts {
         Some(d) => d,
-        None => transcripts_dir(ws.root())
+        None => livtk_core::claude::transcripts_dir(ws.root())
             .context("no home folder to find Claude Code's transcripts in")?,
     };
-    let calls = livtk_calls(&dir);
+    let calls =
+        livtk_core::claude::livtk_calls(&dir, |cmd| !crate::guard::invocations(cmd).is_empty());
     // Each unclaimed event to its session: the latest `livtk` call before it, close enough.
     let mut claims: BTreeMap<(Uuid, String), Vec<Uuid>> = BTreeMap::new();
     let (mut matched, mut defaulted, mut unplaced) = (0usize, 0usize, 0usize);
@@ -169,74 +170,4 @@ pub fn run(ws: &mut Workspace, cmd: SessionsCmd, by: &Actor, json: bool) -> Resu
         println!("  {}  {events} event(s) on {nodes} node(s)", short(s));
     }
     Ok(())
-}
-
-/// Where Claude Code keeps the transcripts of sessions run in `root`: its projects folder, under
-/// the folder's path with `/` and `.` as `-`.
-fn transcripts_dir(root: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let name: String = root
-        .display()
-        .to_string()
-        .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect();
-    Some(PathBuf::from(home).join(".claude/projects").join(name))
-}
-
-/// Every Bash call that ran `livtk`, in every transcript under `dir` (subagents' too, which name
-/// their parent session), by time.
-fn livtk_calls(dir: &Path) -> Vec<(Timestamp, String)> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let path = e.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|x| x == "jsonl") {
-                read_calls(&path, &mut out);
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-fn read_calls(path: &Path, out: &mut Vec<(Timestamp, String)>) {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    for line in text.lines() {
-        // Cheap first: most lines are not a livtk call.
-        if !line.contains("livtk") || !line.contains("tool_use") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let (Some(at), Some(session)) = (
-            v["timestamp"]
-                .as_str()
-                .and_then(|t| t.parse::<Timestamp>().ok()),
-            v["sessionId"].as_str(),
-        ) else {
-            continue;
-        };
-        let runs_livtk = v["message"]["content"].as_array().is_some_and(|c| {
-            c.iter().any(|b| {
-                b["type"] == "tool_use"
-                    && b["name"] == "Bash"
-                    && b["input"]["command"]
-                        .as_str()
-                        .is_some_and(|cmd| !crate::guard::invocations(cmd).is_empty())
-            })
-        });
-        if runs_livtk {
-            out.push((at, session.to_owned()));
-        }
-    }
 }

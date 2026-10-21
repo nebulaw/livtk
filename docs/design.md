@@ -55,6 +55,18 @@ The first of the agentic views. Agents is a place in the sidebar with the same t
 livtk's own agents can be copied, never changed or removed. Remove asks once, on the button
 itself, before it removes.
 
+**Reading a session.** Sessions are every session of the project, past and running, merged from
+three sources: Claude Code's transcripts (title, when), its live list (where it stands) and the
+log (who wrote what to which task).
+
+- **Read** (or a double click) takes the list's place with the conversation: what was asked, what
+  Claude said, each tool call one line until opened, its result under it. A call that started a
+  subagent offers its work, which takes the session's place until Esc brings it back.
+- It reads a page at a time, so a long transcript never stalls the window. Esc gives back the list.
+- **From a task.** Its properties name the sessions that worked on it, and a click reads one from
+  that task's first event in it.
+- **Read-only.** livtk never writes Claude Code's files.
+
 ## Settings
 
 Settings are a place, not a modal (⌘, or the Settings row under Shortcuts): the sidebar becomes

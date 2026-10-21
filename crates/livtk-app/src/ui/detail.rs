@@ -4,6 +4,58 @@ use super::*;
 
 impl LivtkApp {
     /// The open node's title: double-click to edit.
+    /// The Claude Code sessions that worked on a node, each a link: a click reads it in Agents,
+    /// from the node's first event in it.
+    fn task_sessions(&self, uses: &[livtk_core::SessionUse], cx: &mut Context<Self>) -> Div {
+        // One line a session: its actors together, from the first event of any of them.
+        let mut by_session: Vec<(String, Vec<String>, String)> = Vec::new();
+        for u in uses {
+            match by_session.iter_mut().find(|(s, _, _)| *s == u.session) {
+                Some((_, by, first)) => {
+                    by.push(who(&u.by).to_owned());
+                    if u.first < *first {
+                        first.clone_from(&u.first);
+                    }
+                }
+                None => by_session.push((
+                    u.session.clone(),
+                    vec![who(&u.by).to_owned()],
+                    u.first.clone(),
+                )),
+            }
+        }
+        let names = self.model.session_rows();
+        let mut list = div().flex().flex_col().gap_1();
+        for (session, by, first) in by_session {
+            let name = names.iter().find(|r| r.id == session).map_or_else(
+                || livtk_core::format::session(&session).to_owned(),
+                |r| r.name.clone(),
+            );
+            let id = session.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("task-session-{session}")))
+                    .debug_selector(move || format!("task-session-{id}"))
+                    .flex()
+                    .gap_2()
+                    .rounded_md()
+                    .hover(|h| h.bg(color(HOVER)))
+                    .child(div().text_color(color(TEXT)).child(name))
+                    .child(div().text_xs().text_color(color(TEXT_3)).child(format!(
+                        "{} · {}",
+                        by.join(", "),
+                        ago(&first)
+                    )))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.go(View::Agents, window, cx);
+                        this.model.read_session(&session, Some(first.clone()));
+                        cx.notify();
+                    })),
+            );
+        }
+        list
+    }
+
     pub(super) fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
         if let Some(Editing {
             node,
@@ -687,6 +739,9 @@ impl LivtkApp {
             "Created",
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
         ));
+        if !d.sessions.is_empty() {
+            props = props.child(prop_row("Sessions", self.task_sessions(&d.sessions, cx)));
+        }
         let mut links = div()
             .debug_selector(|| "detail-links".into())
             .flex()

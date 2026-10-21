@@ -736,6 +736,23 @@ impl Workspace {
         self.store.session_nodes(session)
     }
 
+    /// The last `limit` things session `session` did in livtk, newest first, each with the node
+    /// it was about.
+    pub fn session_activity(&self, session: &str, limit: usize) -> Result<Vec<Activity>> {
+        self.store
+            .session_events(session, limit)?
+            .into_iter()
+            .map(|event| {
+                let (node, other) = event.op.subjects();
+                Ok(Activity {
+                    node: self.store.brief(node)?,
+                    other: other.map(|o| self.store.brief(o)).transpose()?.flatten(),
+                    event,
+                })
+            })
+            .collect()
+    }
+
     /// Events Claude wrote that name no session yet.
     pub fn unclaimed(&self) -> Result<Vec<crate::store::Unclaimed>> {
         self.store.unclaimed()

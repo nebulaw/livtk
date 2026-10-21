@@ -15,9 +15,11 @@ use super::form::{button, chip, choice, field, segmented};
 use super::icons::{Icon, icon};
 use super::theme::*;
 use super::{LivtkApp, ago, event_line, section_label};
-use crate::agents::{self, Agent, MODELS, Place, Session, Standing, TOOLS};
+use crate::agents::{self, Agent, MODELS, Place, Standing, TOOLS};
 use crate::model::View;
 use crate::model::agents::Pick;
+use crate::model::agents::{PAGE, SessionRow};
+use livtk_core::claude::Entry;
 
 /// How often the sessions are asked for while the place is open.
 const POLL: Duration = Duration::from_secs(3);
@@ -35,6 +37,8 @@ pub(super) struct AgentForm {
     loaded: Option<Pick>,
     /// Sessions are being asked for.
     pub polling: bool,
+    /// Where the session being read is scrolled.
+    pub reader_scroll: ScrollHandle,
 }
 
 impl AgentForm {
@@ -55,6 +59,7 @@ impl AgentForm {
             place: Place::Project,
             loaded: None,
             polling: false,
+            reader_scroll: ScrollHandle::new(),
         }
     }
 }
@@ -75,11 +80,20 @@ impl LivtkApp {
             return;
         };
         self.agent_form.polling = true;
-        let read = cx.background_spawn(async move { agents::sessions(&root) });
+        let read = cx.background_spawn(async move {
+            let live = agents::sessions(&root);
+            let transcripts = agents::claude_home()
+                .map(|h| {
+                    livtk_core::claude::transcripts(&livtk_core::claude::transcripts_in(&h, &root))
+                })
+                .unwrap_or_default();
+            (live, transcripts)
+        });
         cx.spawn(async move |this, cx| {
-            let found = read.await;
+            let (live, transcripts) = read.await;
             let _ = this.update(cx, |app, cx| {
-                app.model.set_sessions(found);
+                app.model.set_sessions(live);
+                app.model.set_transcripts(transcripts);
                 cx.notify();
             });
             cx.background_executor().timer(POLL).await;
@@ -154,32 +168,26 @@ impl LivtkApp {
             .overflow_y_scroll()
             .flex()
             .flex_col();
-        // Sessions.
-        let sessions = self.model.agents.sessions.clone();
-        list = list.child(band(
-            "Sessions",
-            sessions.as_ref().map_or(0, Vec::len),
-            None,
-        ));
+        // A session being read takes the list's place.
+        if self.model.agents.reader.is_some() {
+            return self.reader_view(cx);
+        }
+        // Sessions: past and running, Needs you first.
+        let rows = self.model.session_rows();
+        list = list.child(band("Sessions", rows.len(), None));
         if let Some(e) = &self.model.agents.sessions_error {
             list = list.child(quiet_line("sessions-error", e));
         }
-        match &sessions {
-            None if self.model.agents.sessions_error.is_none() => {
-                list = list.child(quiet_line("sessions-reading", "Asking Claude Code…"));
-            }
-            Some(s) if s.is_empty() => {
-                list = list.child(quiet_line(
-                    "sessions-none",
-                    "No Claude session is working in this project.",
-                ));
-            }
-            _ => {}
+        if rows.is_empty() {
+            list = list.child(quiet_line(
+                "sessions-none",
+                "No Claude session has worked in this project yet.",
+            ));
         }
-        for s in sessions.iter().flatten() {
-            let pick = Pick::Session(s.key());
+        for row in &rows {
+            let pick = Pick::Session(row.id.clone());
             let on = open.as_ref() == Some(&pick);
-            list = list.child(self.session_row(s, on, pick, cx));
+            list = list.child(self.session_row(row, on, pick, cx));
         }
         // Agents, by place.
         let new = div()
@@ -271,12 +279,17 @@ impl LivtkApp {
         list.into_any_element()
     }
 
-    fn session_row(&self, s: &Session, on: bool, pick: Pick, cx: &mut Context<Self>) -> AnyElement {
-        let key = s.key();
-        let standing = s.standing();
-        let started = jiff::Timestamp::from_millisecond(s.started_at)
-            .map(|t| ago(&t.to_string()))
-            .unwrap_or_default();
+    /// A session in the list: where it stands (while it runs), its name, its agents, when.
+    fn session_row(
+        &self,
+        row: &SessionRow,
+        on: bool,
+        pick: Pick,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = row.id.clone();
+        let when = row.ended.as_deref().map(ago).unwrap_or_default();
+        let read = pick.clone();
         div()
             .id(SharedString::from(format!("session-{key}")))
             .debug_selector(move || format!("session-{key}"))
@@ -290,23 +303,26 @@ impl LivtkApp {
             .border_color(color(CONTENT))
             .when(on, |d| d.bg(color(SELECTED)))
             .when(!on, |d| d.hover(|h| h.bg(color(HOVER))))
-            .child(standing_tag(standing))
+            .child(match row.live {
+                Some(s) => standing_tag(s),
+                None => div().w(px(84.)).flex_none(),
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_color(color(TEXT))
-                    .child(s.title()),
+                    .child(row.name.clone()),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(color(TEXT_4))
-                    .child(if s.is_background() {
-                        "background"
+                    .child(if row.nodes > 0 {
+                        format!("{} node(s)", row.nodes)
                     } else {
-                        "interactive"
+                        String::new()
                     }),
             )
             .child(
@@ -317,10 +333,17 @@ impl LivtkApp {
                     .justify_end()
                     .text_xs()
                     .text_color(color(TEXT_4))
-                    .child(started),
+                    .child(when),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.model.pick_agent(Some(pick.clone()));
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                // A double click reads it.
+                if e.click_count() >= 2
+                    && let Pick::Session(id) = &read
+                {
+                    this.model.read_session(id, None);
+                } else {
+                    this.model.pick_agent(Some(pick.clone()));
+                }
                 cx.notify();
             }))
             .into_any_element()
@@ -389,34 +412,60 @@ impl LivtkApp {
         )
     }
 
+    /// A session's panel: its name, where it stands, the tasks it worked on, and what it did in
+    /// livtk; Read, and while it runs, Open and Stop.
     fn session_page(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        let s = self.model.picked_session()?.clone();
+        let row = self.model.picked_row()?;
+        let live = self.model.picked_session().cloned();
         let mut page = div()
             .debug_selector(|| "session-page".into())
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().text_lg().text_color(color(TEXT)).child(s.title()))
+            .child(
+                div()
+                    .text_lg()
+                    .text_color(color(TEXT))
+                    .child(row.name.clone()),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(standing_tag(s.standing()))
+                    .children(row.live.map(standing_tag))
                     .child(div().text_xs().text_color(color(TEXT_3)).child(format!(
-                        "{} · {}",
-                        if s.is_background() {
-                            "background"
+                        "{} · {}{}",
+                        livtk_core::format::session(&row.id),
+                        row.started.as_deref().map(ago).unwrap_or_default(),
+                        if row.by.is_empty() {
+                            String::new()
                         } else {
-                            "interactive"
-                        },
-                        s.cwd.display()
+                            format!(" · {}", row.by.join(", "))
+                        }
                     ))),
             );
         let mut actions = div().flex().gap_2();
-        if let Some(id) = s.session_id.clone() {
+        if row.transcript.is_some() {
+            let id = row.id.clone();
+            actions = actions.child(button("session-read", "Read", true).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.model.read_session(&id, None);
+                    cx.notify();
+                },
+            )));
+        } else {
+            page = page.child(
+                div()
+                    .debug_selector(|| "session-gone".into())
+                    .text_sm()
+                    .text_color(color(TEXT_3))
+                    .child("Claude Code no longer keeps this session's transcript."),
+            );
+        }
+        if let Some(id) = live.as_ref().and_then(|s| s.session_id.clone()) {
             actions = actions.child(
-                button("session-open", "Open in the terminal", true).on_click(cx.listener(
+                button("session-open", "Open in the terminal", false).on_click(cx.listener(
                     move |this, _, window, cx| {
                         // The one livtk found: the Finder's PATH is short.
                         let claude = agents::claude()
@@ -431,12 +480,13 @@ impl LivtkApp {
                 )),
             );
         }
-        if s.is_background()
-            && let Some(id) = s.id.clone()
-        {
+        if let Some(id) = live.filter(|s| s.is_background()).and_then(|s| s.id) {
             actions = actions.child(button("session-stop", "Stop", false).on_click(cx.listener(
                 move |this, _, _, cx| {
-                    match agents::stop(&id) {
+                    let Some(root) = this.model.project_root() else {
+                        return;
+                    };
+                    match agents::stop(&root, &id) {
                         Ok(()) => this.model.inform("Stopped."),
                         Err(e) => this.model.warn(e),
                     }
@@ -445,14 +495,30 @@ impl LivtkApp {
             )));
         }
         page = page.child(actions);
-        let seen = self.model.session_activity(&s);
+        let nodes = self.model.session_nodes(&row.id);
+        if !nodes.is_empty() {
+            page = page.child(section_label("Worked on"));
+            for b in &nodes {
+                let key = b.key.clone();
+                page = page.child(
+                    div()
+                        .debug_selector(move || format!("session-node-{key}"))
+                        .flex()
+                        .gap_2()
+                        .text_sm()
+                        .child(div().text_color(color(TEXT_3)).child(b.key.clone()))
+                        .child(div().text_color(color(TEXT_2)).child(b.title.clone())),
+                );
+            }
+        }
+        let seen = self.model.session_activity(&row.id);
         page = page.child(section_label("What it did in livtk"));
         if seen.is_empty() {
             page = page.child(
                 div()
                     .text_sm()
                     .text_color(color(TEXT_3))
-                    .child("Nothing yet since it started."),
+                    .child("Nothing on record."),
             );
         }
         for a in &seen {
@@ -460,6 +526,195 @@ impl LivtkApp {
             page = page.child(event_line(&a.event, &key));
         }
         Some(page)
+    }
+
+    /// The session being read, in the middle: what was asked, what Claude said, each call one
+    /// line until opened, its result under it; read a page at a time.
+    fn reader_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.read_pages(cx);
+        let Some(r) = self.model.agents.reader.clone() else {
+            return div().into_any_element();
+        };
+        let name = self
+            .model
+            .session_rows()
+            .into_iter()
+            .find(|row| row.id == r.session)
+            .map_or_else(|| r.session.clone(), |row| row.name);
+        let results = livtk_core::claude::results(&r.entries);
+        let mut body = div()
+            .id("session-reader-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.agent_form.reader_scroll)
+            .px_6()
+            .py_4()
+            .flex()
+            .flex_col()
+            .gap_3();
+        let focus = r
+            .focus
+            .as_deref()
+            .and_then(|f| r.entries.iter().position(|e| e.at() >= f));
+        for (i, e) in r.entries.iter().enumerate() {
+            let lit = focus == Some(i);
+            let el = match e {
+                Entry::Prompt { text, at } => said("You", text, at, ACCENT),
+                Entry::Reply { text, at } => said("Claude", text, at, TEXT_3),
+                Entry::Compacted { .. } => div()
+                    .text_xs()
+                    .text_color(color(TEXT_4))
+                    .child("The conversation was compacted here."),
+                Entry::Result { .. } => continue,
+                Entry::Tool {
+                    id,
+                    name,
+                    summary,
+                    input,
+                    ..
+                } => {
+                    let open = r.open.contains(id);
+                    let call = id.clone();
+                    let mut d = div().flex().flex_col().gap_1().child(
+                        div()
+                            .id(SharedString::from(format!("call-{id}")))
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("call-{id}")
+                            })
+                            .flex()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(color(TEXT_3))
+                            .hover(|h| h.text_color(color(TEXT_2)))
+                            .child(div().text_color(color(TEXT_2)).child(name.clone()))
+                            .child(div().truncate().child(summary.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.model.toggle_call(&call);
+                                cx.notify();
+                            })),
+                    );
+                    if open {
+                        // A call that started a subagent: its work, to read.
+                        if let Some(sub) = self.model.subagent_of(id) {
+                            let call = id.clone();
+                            let label = format!(
+                                "Read {}'s work",
+                                sub.agent_type.as_deref().unwrap_or("the subagent")
+                            );
+                            d = d.child(
+                                div()
+                                    .id(SharedString::from(format!("subagent-{id}")))
+                                    .debug_selector({
+                                        let id = id.clone();
+                                        move || format!("subagent-{id}")
+                                    })
+                                    .text_xs()
+                                    .text_color(color(ACCENT))
+                                    .hover(|h| h.text_color(color(ACCENT_HOVER)))
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.model.read_subagent(&call);
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                        d = d.child(code(input));
+                        if let Some((text, error)) = results.get(id.as_str()) {
+                            d = d.child(
+                                code(&clip(text)).when(*error, |c| c.text_color(color(RED))),
+                            );
+                        }
+                    }
+                    d
+                }
+            };
+            body = body.child(
+                div()
+                    .when(lit, |d| {
+                        d.debug_selector(|| "reader-focus".into())
+                            .border_l_2()
+                            .border_color(color(ACCENT))
+                            .pl_2()
+                    })
+                    .child(el),
+            );
+        }
+        if r.next.is_some() {
+            body = body.child(
+                button(
+                    "reader-more",
+                    if r.loading { "Reading…" } else { "Read on" },
+                    false,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.model.read_on();
+                    cx.notify();
+                })),
+            );
+        }
+        if let Some(i) = focus {
+            self.agent_form.reader_scroll.scroll_to_item(i);
+        }
+        div()
+            .debug_selector(|| "session-reader".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(46.))
+                    .flex_none()
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(color(BORDER))
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .text_color(color(TEXT_2))
+                            .child(name),
+                    )
+                    .child(button("reader-close", "Back to the list", false).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.model.close_reader();
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .child(body)
+            .into_any_element()
+    }
+
+    /// Read the next page of the session being read, off the window's thread, when it wants one.
+    fn read_pages(&mut self, cx: &mut Context<Self>) {
+        let Some((path, from)) = self.model.wants_page() else {
+            return;
+        };
+        let Some(session) = self.model.agents.reader.as_ref().map(|r| r.session.clone()) else {
+            return;
+        };
+        self.model.page_asked();
+        let read = cx.background_spawn(async move { livtk_core::claude::read(&path, from, PAGE) });
+        cx.spawn(async move |this, cx| {
+            let page = read.await;
+            let _ = this.update(cx, |app, cx| {
+                match page {
+                    Ok(page) => app.model.add_page(&session, page),
+                    Err(e) => {
+                        app.model.close_reader();
+                        app.model
+                            .warn(format!("The transcript could not be read: {e}"));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn agent_page(&mut self, cx: &mut Context<Self>) -> Div {
@@ -666,4 +921,52 @@ fn labelled(label: &'static str, control: impl IntoElement) -> Div {
         .gap_1()
         .child(div().text_xs().text_color(color(TEXT_4)).child(label))
         .child(control)
+}
+
+/// What someone said in a session: who, when, and the text as written.
+fn said(who: &'static str, text: &str, at: &str, c: u32) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .text_xs()
+                .child(div().text_color(color(c)).child(who))
+                .child(div().text_color(color(TEXT_4)).child(ago(at))),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(color(TEXT))
+                .child(text.to_owned()),
+        )
+}
+
+/// A call's input or result, as written, in a quiet box.
+fn code(text: &str) -> Div {
+    div()
+        .p_2()
+        .rounded_lg()
+        .bg(color(SURFACE))
+        .text_xs()
+        .text_color(color(TEXT_2))
+        .child(text.to_owned())
+}
+
+/// A result cut to what reads in a box: the start, and how much more there was.
+fn clip(text: &str) -> String {
+    const MAX: usize = 4000;
+    if text.len() <= MAX {
+        return text.to_owned();
+    }
+    let cut = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= MAX)
+        .last()
+        .unwrap_or(0);
+    format!("{}\n… {} more characters", &text[..cut], text.len() - cut)
 }

@@ -280,7 +280,7 @@ impl Model {
         self.graph_cameras = saved
             .graph_cameras
             .iter()
-            .filter(|(_, c)| c.zoom.is_finite() && c.zoom > 0.)
+            .filter(|(_, c)| c.pan_x.is_finite() && c.pan_y.is_finite() && c.zoom > 0.)
             .map(|(dir, camera)| (PathBuf::from(dir), *camera))
             .collect();
         for view in known_views() {

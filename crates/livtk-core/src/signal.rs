@@ -92,6 +92,7 @@ impl Signals {
             (Kind::Task, State::Planned)
                 | (Kind::Lesson, State::Proposed)
                 | (Kind::Decision, State::Proposed)
+                | (Kind::Project, State::Proposed)
         ) || self
             .gates
             .iter()

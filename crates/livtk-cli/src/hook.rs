@@ -365,6 +365,13 @@ fn waiting_and_next(
 ) -> Option<()> {
     let lessons = inbox.iter().filter(|s| s.kind == Kind::Lesson).count();
     let decisions = inbox.iter().filter(|s| s.kind == Kind::Decision).count();
+    let projects = inbox.iter().filter(|s| s.kind == Kind::Project).count();
+    if projects > 0 {
+        let _ = writeln!(
+            b,
+            "Also waiting for the human: {projects} project(s) to commit to (`livtk inbox`)."
+        );
+    }
     if lessons + decisions > 0 {
         let _ = writeln!(
             b,

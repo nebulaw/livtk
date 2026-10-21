@@ -973,3 +973,167 @@ fn two_projects_in_one_process_keep_their_own_kinds() {
     );
     assert!(refused.is_err(), "not its kind");
 }
+
+// ---- projects -----------------------------------------------------------------------------------
+
+fn create(ws: &mut Workspace, kind: Kind, title: &str, links: &[(Rel, &str)]) -> String {
+    let events = ws
+        .execute(
+            Command::Create {
+                kind,
+                title: title.into(),
+                body: String::new(),
+                priority: None,
+                links: links.iter().map(|(r, k)| (*r, (*k).to_owned())).collect(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    match &events[0].op {
+        Op::NodeCreate { data, .. } => data.key.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_project_is_the_humans_to_commit_to_and_counts_its_tasks_through_nesting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let outer = create(&mut ws, Kind::Project, "ship the importer", &[]);
+    assert_eq!(outer, "PRJ-1");
+    let inner = create(
+        &mut ws,
+        Kind::Project,
+        "parse the board",
+        &[(Rel::Parent, &outer)],
+    );
+    // Claude proposes; only the human commits and calls it done.
+    let refused = mv(&mut ws, &outer, State::Active, &CLAUDE);
+    assert!(matches!(refused, Err(Error::Refused(_))), "{refused:?}");
+    mv(&mut ws, &outer, State::Active, &HUMAN).unwrap();
+    // Two tasks in the outer, three in the inner (one canceled, one with a sub-task).
+    let a = create(&mut ws, Kind::Task, "a", &[(Rel::Parent, &outer)]);
+    let b = create(&mut ws, Kind::Task, "b", &[(Rel::Parent, &outer)]);
+    let c = create(&mut ws, Kind::Task, "c", &[(Rel::Parent, &inner)]);
+    let d = create(&mut ws, Kind::Task, "d", &[(Rel::Parent, &inner)]);
+    let e = create(&mut ws, Kind::Task, "e", &[(Rel::Parent, &c)]);
+    // Unrelated work does not count.
+    task(&mut ws, "elsewhere");
+    for k in [&a, &b, &c] {
+        ack(&mut ws, k);
+    }
+    for k in [&a, &b] {
+        mv(&mut ws, k, State::Doing, &CLAUDE).unwrap();
+        mv(&mut ws, k, State::Review, &CLAUDE).unwrap();
+    }
+    mv(&mut ws, &a, State::Done, &HUMAN).unwrap();
+    mv(&mut ws, &d, State::Canceled, &CLAUDE).unwrap();
+    mv(&mut ws, &e, State::Planned, &CLAUDE).unwrap();
+    let now = jiff::Timestamp::now();
+    let g = ws.progress(&outer, now).unwrap();
+    // a, b, c, e: d is canceled. a is done.
+    assert_eq!((g.done, g.total), (1, 4));
+    assert_eq!(g.projects, vec![inner.clone()]);
+    // e waits for its ack; nothing else is planned. b is in review, which this project's
+    // config does not gate, so it waits on no one.
+    assert_eq!(g.waiting.len(), 1, "{:?}", g.waiting);
+    assert_eq!(g.waiting[0].state, State::Planned);
+    assert_eq!(
+        (g.waiting[0].count, g.waiting[0].oldest.as_str()),
+        (1, e.as_str())
+    );
+    // Its own count, the inner project's.
+    let gi = ws.progress(&inner, now).unwrap();
+    assert_eq!((gi.done, gi.total), (0, 2));
+    // One project each: a task part of one cannot join another.
+    let other = create(&mut ws, Kind::Project, "another", &[]);
+    let r = ws.execute(
+        Command::Link {
+            src: a.clone(),
+            rel: Rel::Parent,
+            dst: other.clone(),
+        },
+        &CLAUDE,
+    );
+    assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
+    // Done is the human's too.
+    assert!(mv(&mut ws, &outer, State::Done, &CLAUDE).is_err());
+    mv(&mut ws, &outer, State::Done, &HUMAN).unwrap();
+}
+
+#[test]
+fn an_active_project_without_an_update_for_a_week_reads_update_missing() {
+    use livtk_core::Health;
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let p = create(&mut ws, Kind::Project, "an outcome", &[]);
+    // Proposed: nothing is missing yet.
+    let far = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24 * 30);
+    assert!(!ws.progress(&p, far).unwrap().update_missing);
+    let at: jiff::Timestamp = mv(&mut ws, &p, State::Active, &HUMAN).unwrap()[0]
+        .at
+        .parse()
+        .unwrap();
+    let day = |n: i64| at + jiff::SignedDuration::from_hours(24 * n);
+    assert!(!ws.progress(&p, day(6)).unwrap().update_missing);
+    assert!(ws.progress(&p, day(8)).unwrap().update_missing);
+    let events = ws
+        .execute(
+            Command::Update {
+                node: p.clone(),
+                health: Health::AtRisk,
+                text: "slower than hoped; next: batch it".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    assert_eq!(events[0].v, 6, "an update is new in format 6");
+    let g = ws.progress(&p, day(3)).unwrap();
+    assert!(!g.update_missing);
+    let u = g.update.unwrap();
+    assert_eq!(u.health, Health::AtRisk);
+    assert_eq!(u.text, "slower than hoped; next: batch it");
+    // An update is a project's; Claude never owns one.
+    let t = task(&mut ws, "a task");
+    assert!(
+        ws.execute(
+            Command::Update {
+                node: t,
+                health: Health::OnTrack,
+                text: "x".into()
+            },
+            &CLAUDE
+        )
+        .is_err()
+    );
+    let owner = ws.execute(
+        Command::SetProject {
+            node: p.clone(),
+            target: Some("2026-12-01".into()),
+            owner: Some("claude".into()),
+        },
+        &CLAUDE,
+    );
+    assert!(matches!(owner, Err(Error::Refused(_))), "{owner:?}");
+    ws.execute(
+        Command::SetProject {
+            node: p.clone(),
+            target: Some("2026-12-01".into()),
+            owner: Some("karl".into()),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let g = ws.progress(&p, day(3)).unwrap();
+    assert_eq!(g.target.as_deref(), Some("2026-12-01"));
+    assert_eq!(g.owner.as_deref(), Some("karl"));
+    let bad = ws.execute(
+        Command::SetProject {
+            node: p.clone(),
+            target: Some("next week".into()),
+            owner: None,
+        },
+        &CLAUDE,
+    );
+    assert!(bad.is_err());
+}

@@ -14,8 +14,10 @@ use uuid::Uuid;
 use crate::event::{DocData, EdgeData, Event, NodeData, NodePatch, NoteData, Op};
 use crate::log::{self, Log, Mark};
 use crate::model::{
-    Actor, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
+    Actor, Health, Key, Kind, Priority, Rel, State, default_prefix, validate_project_prefix,
 };
+
+mod project;
 #[cfg(feature = "embed")]
 use crate::search::Model;
 use crate::search::{
@@ -23,6 +25,7 @@ use crate::search::{
     matched_terms, models_dir, query_terms, text_hash,
 };
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
+pub use project::{ACTIVE_AT_ONCE, Progress, UPDATE_EVERY_DAYS, Update, Waiting};
 
 /// Recall injects at most this many items into a prompt.
 pub const RECALL_MAX: usize = 3;
@@ -328,6 +331,19 @@ pub enum Command {
     Note {
         node: String,
         text: String,
+    },
+    /// A project's update: how it stands (`health`), what moved and what is next.
+    Update {
+        node: String,
+        health: Health,
+        text: String,
+    },
+    /// A project's target date (`YYYY-MM-DD`) and owner (a person, never Claude): each given
+    /// is set, an empty one cleared.
+    SetProject {
+        node: String,
+        target: Option<String>,
+        owner: Option<String>,
     },
     /// Ratify a lesson (human only). `always` makes it a standing rule shown at every session
     /// start; otherwise it is recalled when relevant. On a ratified lesson, changes only that.
@@ -998,6 +1014,7 @@ impl Workspace {
         let mut out = self.store.list(Kind::Task, &[State::Planned])?;
         out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
+        out.extend(self.store.list(Kind::Project, &[State::Proposed])?);
         // What waits on a gate the config adds; a gate from any state guards a move but makes
         // nothing wait.
         for g in &self.gates {
@@ -1352,9 +1369,20 @@ impl Workspace {
                     (_, None) => Priority::DEFAULT,
                 };
                 let mut targets: Vec<(Rel, Uuid)> = Vec::new();
+                let mut project = None;
                 for (rel, r) in &links {
                     let d = self.node(r)?;
                     check_link(kind, *rel, &d)?;
+                    if *rel == Rel::Parent
+                        && d.kind == Kind::Project
+                        && let Some(other) = project.replace(d.key.clone())
+                        && other != d.key
+                    {
+                        return Err(Error::Refused(format!(
+                            "part of {other} and {}: one project each",
+                            d.key
+                        )));
+                    }
                     if !targets.contains(&(*rel, d.id)) {
                         targets.push((*rel, d.id));
                     }
@@ -1480,6 +1508,15 @@ impl Workspace {
                     return Ok(Vec::new());
                 }
                 check_link(s.kind, rel, &d)?;
+                if rel == Rel::Parent && d.kind == Kind::Project {
+                    let (parents, _) = self.store.links(s.id, Rel::Parent)?;
+                    if let Some(p) = parents.iter().find(|p| p.kind == Kind::Project) {
+                        return Err(Error::Refused(format!(
+                            "{} is part of {} already; one project each (unlink it first)",
+                            s.key, p.key
+                        )));
+                    }
+                }
                 if matches!(rel, Rel::DependsOn | Rel::Supersedes | Rel::Parent)
                     && self.store.reaches(d.id, s.id, rel)?
                 {
@@ -1540,6 +1577,78 @@ impl Workspace {
                     node: n.id,
                     data: NoteData {
                         text: text.to_owned(),
+                        health: None,
+                    },
+                }])
+            }
+            Command::Update { node, health, text } => {
+                let n = self.node(&node)?;
+                if n.kind != Kind::Project {
+                    return Err(Error::Invalid(format!(
+                        "{} is a {}; updates are a project's",
+                        n.key, n.kind
+                    )));
+                }
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err(Error::Invalid(
+                        "an update says what moved and what is next".into(),
+                    ));
+                }
+                if text.chars().count() > NOTE_MAX {
+                    return Err(Error::Invalid(format!(
+                        "an update is at most {NOTE_MAX} characters"
+                    )));
+                }
+                Ok(vec![Op::NodeNote {
+                    node: n.id,
+                    data: NoteData {
+                        text: text.to_owned(),
+                        health: Some(health),
+                    },
+                }])
+            }
+            Command::SetProject {
+                node,
+                target,
+                owner,
+            } => {
+                let n = self.node(&node)?;
+                if n.kind != Kind::Project {
+                    return Err(Error::Invalid(format!(
+                        "{} is a {}; a target and an owner are a project's",
+                        n.key, n.kind
+                    )));
+                }
+                let mut props = serde_json::Map::new();
+                if let Some(t) = target {
+                    let t = t.trim();
+                    if !t.is_empty() && t.parse::<jiff::civil::Date>().is_err() {
+                        return Err(Error::Invalid(format!(
+                            "target `{t}` is not a date (YYYY-MM-DD)"
+                        )));
+                    }
+                    props.insert("target".into(), prop_value(t));
+                }
+                if let Some(o) = owner {
+                    let o = o.trim();
+                    if o.eq_ignore_ascii_case("claude") || o.starts_with("claude:") {
+                        return Err(Error::Refused(
+                            "Claude never owns an outcome; name the person who does".into(),
+                        ));
+                    }
+                    props.insert("owner".into(), prop_value(o));
+                }
+                // Only what changes.
+                props.retain(|k, v| n.props.get(k).unwrap_or(&serde_json::Value::Null) != v);
+                if props.is_empty() {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![Op::NodeSet {
+                    node: n.id,
+                    data: NodePatch {
+                        props: Some(props),
+                        ..NodePatch::default()
                     },
                 }])
             }
@@ -1654,6 +1763,10 @@ fn human_only_reason(n: &Node) -> String {
             "only a human can accept or reject a decision; ask the developer to run `livtk accept {}` (or `reject`) or to decide in the app",
             n.key
         ),
+        Kind::Project => format!(
+            "only a human can commit to a project or call it done; ask the developer to run `livtk move {} active` (or `done`) or to decide in the app",
+            n.key
+        ),
         _ => format!(
             "only a human can acknowledge {}; ask the developer to run `livtk ack {}` or to acknowledge it in the app",
             n.key, n.key
@@ -1666,10 +1779,24 @@ fn human_only_reason(n: &Node) -> String {
 /// from or related to anything. The app offers only these.
 pub fn link_allowed(kind: Kind, rel: Rel, dst: Kind) -> bool {
     match rel {
-        Rel::DependsOn | Rel::Parent => kind == Kind::Task && dst == Kind::Task,
+        Rel::DependsOn => kind == Kind::Task && dst == Kind::Task,
+        // A sub-task of a task; a task or a project part of a project.
+        Rel::Parent => {
+            (kind == Kind::Task && dst == Kind::Task)
+                || (matches!(kind, Kind::Task | Kind::Project) && dst == Kind::Project)
+        }
         Rel::Supersedes => matches!(kind, Kind::Lesson | Kind::Decision) && dst == kind,
         // Learned from, related to, and a project's own relations: anything to anything.
         _ => true,
+    }
+}
+
+/// A prop's value as given: a string, or a null that clears it when empty.
+fn prop_value(v: &str) -> serde_json::Value {
+    if v.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(v.to_owned())
     }
 }
 

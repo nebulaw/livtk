@@ -5,6 +5,7 @@ mod export;
 mod guard;
 mod hook;
 mod output;
+mod project;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -114,6 +115,11 @@ enum Cmd {
     Accept { key: String },
     /// Everything waiting for the human: plans, lessons, decisions.
     Inbox,
+    /// Projects: an outcome above tasks, its progress counted from the tasks part of it.
+    Project {
+        #[command(subcommand)]
+        cmd: project::ProjectCmd,
+    },
     /// List nodes of a kind grouped by state; the active ones unless told otherwise.
     #[command(visible_alias = "ls", visible_alias = "board")]
     List {
@@ -548,6 +554,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Retire { key } => moved(ws, &key, State::Retired, by, json),
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
         Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
+        Cmd::Project { cmd } => project::run(ws, cmd, by, json),
         Cmd::Export { dir, check } => export::run(ws, dir.as_deref(), check),
         Cmd::List {
             kind,
@@ -577,7 +584,8 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             if json && !fields.is_empty() {
                 return output::list_fields(ws, &rows, &fields);
             }
-            output::list(&rows, json)
+            let projects = ws.projects_of()?;
+            output::list(&rows, &projects, json)
         }
         Cmd::Search { query, limit } => output::hits(&ws.search(&query, Scope::All, limit)?, json),
         Cmd::Recall { query } => output::hits(&ws.recall(&query)?, json),

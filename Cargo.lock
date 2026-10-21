@@ -4037,6 +4037,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
+ "jiff",
  "livtk-build",
  "livtk-core",
  "serde",

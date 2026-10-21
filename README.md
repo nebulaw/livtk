@@ -148,6 +148,27 @@ Docs are the project's markdown files, under `docs/` (or the folder `docs = "...
 
 Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 
+**Projects: an outcome above tasks.** A project (`PRJ-1`) says what should be true, its body
+ending in a `Done when:` line. Claude may propose one; only you commit to it (`livtk move PRJ-1
+active`) and call it done. Tasks join it as parts (`livtk new "..." --parent PRJ-1`, or `livtk
+link 3 part-of PRJ-1`), one project each, and projects nest the same way. Its progress is counted,
+never typed in: tasks done out of all of them (canceled ones aside), and what waits on you at each
+of your gates, with the one waiting longest. Its health is written: an update says on track, at
+risk or off track, what moved and what is next; an active project a week without one reads
+"update missing".
+
+```
+livtk project new "Import the board" --body - --target 2026-12-01 --owner karl < outcome.md
+livtk project list                  # active first: state, done/total, health, what waits on you
+livtk project show PRJ-1            # its outcome, parts, waits and newest update
+livtk project update PRJ-1 --health at_risk "parsing is slow; next: batch it"
+livtk project set PRJ-1 --target "" # an empty value clears it
+```
+
+More than three active at once, and `project list` says so: fewer at a time finish sooner. Lists
+name a task's project (`[PRJ-1]`, and `"project"` in `--json` rows) once there is one. Project
+events are format 6: an older livtk skips them and asks to be updated.
+
 **For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
 row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY
 --json` gives everything about one node: its fields with body and props, its links, its notes and

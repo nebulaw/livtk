@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// What a node is. Every kind shares the same storage and the same event operations. The four
+/// What a node is. Every kind shares the same storage and the same event operations. The five
 /// built-in kinds are constants; a project may declare more (`[[kinds]]` in its config), which
 /// are registered by name as the config loads and behave by their declaration.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -24,10 +24,19 @@ impl Kind {
     pub const Decision: Kind = Kind(2);
     /// Something found out, kept for later; Claude records these freely.
     pub const Finding: Kind = Kind(3);
+    /// An outcome above tasks, ending in what "done" means: Claude may propose one, only the
+    /// human commits to it and calls it done. Its tasks join it as parts.
+    pub const Project: Kind = Kind(4);
 
     /// The built-in kinds.
-    pub const ALL: [Kind; 4] = [Kind::Task, Kind::Lesson, Kind::Decision, Kind::Finding];
-    const BUILT_IN: u16 = 4;
+    pub const ALL: [Kind; 5] = [
+        Kind::Task,
+        Kind::Lesson,
+        Kind::Decision,
+        Kind::Finding,
+        Kind::Project,
+    ];
+    const BUILT_IN: u16 = 5;
 
     /// Every kind known now: the built-in ones, then those declared, in their order.
     pub fn all() -> Vec<Kind> {
@@ -55,6 +64,7 @@ impl Kind {
             Kind::Lesson => "lesson",
             Kind::Decision => "decision",
             Kind::Finding => "finding",
+            Kind::Project => "project",
             _ => self.declared().map_or("unknown", |d| d.name),
         }
     }
@@ -66,6 +76,7 @@ impl Kind {
             Kind::Lesson => Some("LES"),
             Kind::Decision => Some("DEC"),
             Kind::Finding => Some("FND"),
+            Kind::Project => Some("PRJ"),
             _ => self.declared().map(|d| d.key),
         }
     }
@@ -73,7 +84,7 @@ impl Kind {
     /// What recall draws from: lessons, decisions, findings, and declared kinds that say so.
     pub fn is_memory(self) -> bool {
         match self {
-            Kind::Task => false,
+            Kind::Task | Kind::Project => false,
             Kind::Lesson | Kind::Decision | Kind::Finding => true,
             _ => self.declared().is_some_and(|d| d.memory),
         }
@@ -89,6 +100,7 @@ impl Kind {
             Kind::Lesson => &[Proposed, Ratified, Rejected, Retired],
             Kind::Decision => &[Proposed, Accepted, Rejected, Superseded],
             Kind::Finding => &[Recorded],
+            Kind::Project => &[Proposed, Active, Paused, Done, Dropped],
             _ => self.declared().map_or(&[], |d| d.states),
         }
     }
@@ -96,7 +108,7 @@ impl Kind {
     pub fn initial_state(self) -> State {
         match self {
             Kind::Task => State::Backlog,
-            Kind::Lesson | Kind::Decision => State::Proposed,
+            Kind::Lesson | Kind::Decision | Kind::Project => State::Proposed,
             Kind::Finding => State::Recorded,
             _ => self.declared().map_or(State::Backlog, |d| d.start),
         }
@@ -122,6 +134,11 @@ impl Kind {
             (Kind::Decision, Proposed) => &[Accepted, Rejected],
             (Kind::Decision, Accepted) => &[Superseded],
             (Kind::Decision, Rejected) => &[Proposed],
+            (Kind::Project, Proposed) => &[Active, Dropped],
+            (Kind::Project, Active) => &[Done, Paused, Dropped],
+            (Kind::Project, Paused) => &[Active, Dropped],
+            (Kind::Project, Done) => &[Active],
+            (Kind::Project, Dropped) => &[Proposed],
             (k, from) if k.is_declared() => k
                 .declared()
                 .and_then(|d| d.next.iter().find(|(s, _)| *s == from).map(|(_, n)| *n))
@@ -134,8 +151,9 @@ impl Kind {
         self.next_states(from).contains(&to)
     }
 
-    /// Whether only a human may make this move: acknowledging a plan, and deciding what binds
-    /// Claude (ratifying, rejecting and retiring lessons; accepting and rejecting decisions);
+    /// Whether only a human may make this move: acknowledging a plan, deciding what binds
+    /// Claude (ratifying, rejecting and retiring lessons; accepting and rejecting decisions), and
+    /// committing to a project's outcome or calling it reached;
     /// for a declared kind, the moves its declaration keeps for the human.
     pub fn human_only(self, from: State, to: State) -> bool {
         use states::*;
@@ -151,6 +169,8 @@ impl Kind {
                 | (Kind::Lesson, Ratified, Retired)
                 | (Kind::Lesson, Retired, Ratified)
                 | (Kind::Decision, Proposed, Accepted | Rejected)
+                | (Kind::Project, Proposed | Paused | Done, Active)
+                | (Kind::Project, Active, Done)
         )
     }
 
@@ -270,11 +290,15 @@ impl State {
     pub const Accepted: State = State(12);
     pub const Superseded: State = State(13);
     pub const Recorded: State = State(14);
-    const BUILT_IN: u16 = 15;
+    pub const Active: State = State(15);
+    pub const Paused: State = State(16);
+    pub const Dropped: State = State(17);
+    const BUILT_IN: u16 = 18;
 
     /// Every built-in state, in display order: what is in hand first, what is over last.
-    pub const ALL: [State; 15] = [
+    pub const ALL: [State; 18] = [
         State::Doing,
+        State::Active,
         State::Review,
         State::Acked,
         State::Planned,
@@ -284,14 +308,16 @@ impl State {
         State::Recorded,
         State::Backlog,
         State::Parked,
+        State::Paused,
         State::Done,
         State::Superseded,
         State::Retired,
         State::Rejected,
         State::Canceled,
+        State::Dropped,
     ];
 
-    const NAMES: [&'static str; 15] = [
+    const NAMES: [&'static str; 18] = [
         "backlog",
         "planned",
         "acked",
@@ -307,6 +333,9 @@ impl State {
         "accepted",
         "superseded",
         "recorded",
+        "active",
+        "paused",
+        "dropped",
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -338,19 +367,19 @@ impl State {
             .map_or(u8::MAX, |i| i as u8)
     }
 
-    /// Finished one way or another, as the built-in kinds finish: done or canceled. A closed
+    /// Finished one way or another, as the built-in kinds finish: done, canceled or dropped. A closed
     /// dependency no longer blocks. Whether a declared kind's node is over is its kind's to say
     /// (`Kind::is_closed`).
     pub fn is_closed(self) -> bool {
-        matches!(self, State::Done | State::Canceled)
+        matches!(self, State::Done | State::Canceled | State::Dropped)
     }
 
-    /// Set aside without being done: canceled, rejected, retired or superseded. The app hides
-    /// these unless asked; done work stays in view.
+    /// Set aside without being done: canceled, rejected, retired, superseded or dropped. The
+    /// app hides these unless asked; done work stays in view.
     pub fn is_dismissed(self) -> bool {
         matches!(
             self,
-            State::Canceled | State::Rejected | State::Retired | State::Superseded
+            State::Canceled | State::Rejected | State::Retired | State::Superseded | State::Dropped
         )
     }
 
@@ -359,7 +388,12 @@ impl State {
     pub fn is_active(self) -> bool {
         !matches!(
             self,
-            State::Done | State::Canceled | State::Rejected | State::Retired | State::Superseded
+            State::Done
+                | State::Canceled
+                | State::Rejected
+                | State::Retired
+                | State::Superseded
+                | State::Dropped
         )
     }
 
@@ -441,6 +475,52 @@ mod states {
     pub const Accepted: State = State::Accepted;
     pub const Superseded: State = State::Superseded;
     pub const Recorded: State = State::Recorded;
+    pub const Active: State = State::Active;
+    pub const Paused: State = State::Paused;
+    pub const Dropped: State = State::Dropped;
+}
+
+/// How a project stands, as its updates say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Health {
+    OnTrack,
+    AtRisk,
+    OffTrack,
+}
+
+impl Health {
+    pub const ALL: [Health; 3] = [Health::OnTrack, Health::AtRisk, Health::OffTrack];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Health::OnTrack => "on_track",
+            Health::AtRisk => "at_risk",
+            Health::OffTrack => "off_track",
+        }
+    }
+}
+
+impl fmt::Display for Health {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Health {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        let w = s.replace('-', "_");
+        Health::ALL
+            .into_iter()
+            .find(|h| h.as_str() == w)
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "unknown health `{s}`; one of: on_track, at_risk, off_track"
+                ))
+            })
+    }
 }
 
 // ---- declared kinds ---------------------------------------------------------------------------
@@ -517,7 +597,7 @@ fn forever<T>(v: Vec<T>) -> &'static [T] {
 pub fn declare_kinds(owner: &std::path::Path, specs: &[KindSpec]) -> Result<(), Error> {
     let bad = |name: &str, msg: String| Error::Invalid(format!("[[kinds]] `{name}`: {msg}"));
     let mut seen_names = Vec::new();
-    let mut seen_keys = vec!["LES", "DEC", "FND"];
+    let mut seen_keys = vec!["LES", "DEC", "FND", "PRJ"];
     for spec in specs {
         let name = spec.name.trim();
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
@@ -748,7 +828,7 @@ pub fn validate_project_prefix(prefix: &str) -> Result<(), Error> {
     // its own are checked against its prefix where it declares them.
     if Kind::ALL.iter().any(|k| k.fixed_prefix() == Some(prefix)) {
         return Err(Error::Invalid(format!(
-            "prefix `{prefix}` is reserved for lessons, decisions or findings; pick another"
+            "prefix `{prefix}` is reserved for lessons, decisions, findings or projects; pick another"
         )));
     }
     Ok(())
@@ -994,6 +1074,10 @@ mod tests {
             (Kind::Lesson, Retired, Ratified),
             (Kind::Decision, Proposed, Accepted),
             (Kind::Decision, Proposed, Rejected),
+            (Kind::Project, Proposed, Active),
+            (Kind::Project, Paused, Active),
+            (Kind::Project, Done, Active),
+            (Kind::Project, Active, Done),
         ];
         for kind in Kind::ALL {
             for from in State::ALL {

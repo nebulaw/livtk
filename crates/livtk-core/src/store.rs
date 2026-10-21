@@ -95,8 +95,21 @@ const RECALLABLE: &str = "((n.kind = 'lesson' AND n.state = 'ratified' \
     OR (n.kind = 'decision' AND n.state = 'accepted') OR n.kind = 'finding')";
 
 /// True when node `n` waits on a dependency that is neither done nor canceled.
-const BLOCKED: &str = "EXISTS (SELECT 1 FROM edges e JOIN nodes d ON d.id = e.dst \
-    WHERE e.src = n.id AND e.rel = 'depends_on' AND d.state NOT IN ('done', 'canceled'))";
+macro_rules! blocked {
+    () => {
+        "EXISTS (SELECT 1 FROM edges e JOIN nodes d ON d.id = e.dst \
+         WHERE e.src = n.id AND e.rel = 'depends_on' AND d.state NOT IN ('done', 'canceled'))"
+    };
+}
+const BLOCKED: &str = blocked!();
+
+/// What a [`Summary`] is read from, in `summary_from`'s order; `BLOCKED` follows `updated`.
+const SUMMARY_COLS: &str = concat!(
+    "n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, ",
+    blocked!(),
+    ", coalesce(json_extract(n.props, '$.scope'), '') = 'always', \
+     (SELECT e.dst FROM edges e WHERE e.src = n.id AND e.rel = 'parent' LIMIT 1)"
+);
 
 const NODE_COLS: &str = "n.id, n.key, n.kind, n.title, n.body, n.state, n.priority, n.props, \
     n.created, n.updated, n.created_by";
@@ -350,6 +363,88 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every node under `id` through `parent` links, nested ones too: its parts, theirs, and so
+    /// on, each once.
+    pub fn parts_under(&self, id: Uuid) -> Result<Vec<Summary>> {
+        let sql = format!(
+            "WITH RECURSIVE under(id) AS ( \
+                 SELECT src FROM edges WHERE dst = ?1 AND rel = 'parent' \
+                 UNION SELECT e.src FROM edges e JOIN under u ON e.dst = u.id \
+                 WHERE e.rel = 'parent') \
+             SELECT {SUMMARY_COLS} FROM nodes n JOIN under u ON n.id = u.id ORDER BY n.id"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut rows = stmt.query([id.to_string()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(summary_from(row)?);
+        }
+        Ok(out)
+    }
+
+    /// Each node under a project, with the nearest project it is part of: none when no
+    /// project exists, at no cost.
+    pub fn projects_of(&self) -> Result<Vec<(Uuid, Brief)>> {
+        let any: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT 1 FROM nodes WHERE kind = 'project' LIMIT 1")?
+            .query_row([], |r| r.get(0))
+            .optional()?;
+        if any.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare_cached(
+            "WITH RECURSIVE under(id, project, depth) AS ( \
+                 SELECT e.src, e.dst, 1 FROM edges e JOIN nodes p ON p.id = e.dst \
+                 WHERE e.rel = 'parent' AND p.kind = 'project' \
+                 UNION ALL SELECT e.src, u.project, u.depth + 1 FROM edges e \
+                 JOIN under u ON e.dst = u.id WHERE e.rel = 'parent' AND u.depth < 64) \
+             SELECT u.id, p.key, p.title, p.state, min(u.depth) FROM under u \
+             JOIN nodes p ON p.id = u.project GROUP BY u.id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let state: String = row.get(3)?;
+            out.push((
+                parse_uuid(&id)?,
+                Brief {
+                    key: row.get(1)?,
+                    title: row.get(2)?,
+                    state: state.parse()?,
+                    kind: Kind::Project,
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    /// When a node last changed state, or was created if it never has.
+    pub fn entered(&self, id: Uuid) -> Result<Option<String>> {
+        let at: Option<String> = self
+            .conn
+            .prepare_cached(
+                "SELECT max(at) FROM events WHERE node = ?1 AND (op = 'node.create' \
+                 OR (op = 'node.set' AND json_extract(line, '$.data.state') IS NOT NULL))",
+            )?
+            .query_row([id.to_string()], |r| r.get(0))?;
+        Ok(at)
+    }
+
+    /// A node's newest note that carries a health, as when, the health, and the text.
+    pub fn last_update(&self, id: Uuid) -> Result<Option<(String, String, String)>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT at, json_extract(line, '$.data.health'), json_extract(line, '$.data.text') \
+                 FROM events WHERE node = ?1 AND op = 'node.note' \
+                 AND json_extract(line, '$.data.health') IS NOT NULL ORDER BY id DESC LIMIT 1",
+            )?
+            .query_row([id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?)
+    }
+
     /// The key of the node with this id, if the store has it.
     pub fn key_of(&self, id: &str) -> Result<Option<String>> {
         let mut stmt = self
@@ -365,36 +460,14 @@ impl Store {
     pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
         let wanted: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
         let sql = format!(
-            "SELECT n.id, n.key, n.kind, n.title, n.state, n.priority, n.updated, {BLOCKED}, \
-             coalesce(json_extract(n.props, '$.scope'), '') = 'always', \
-             (SELECT e.dst FROM edges e WHERE e.src = n.id AND e.rel = 'parent' LIMIT 1) \
-             FROM nodes n WHERE n.kind = ?1 \
+            "SELECT {SUMMARY_COLS} FROM nodes n WHERE n.kind = ?1 \
              AND (?2 = '[]' OR n.state IN (SELECT value FROM json_each(?2)))"
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut rows = stmt.query(params![kind.as_str(), serde_json::to_string(&wanted)?])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            let text = |i: usize| -> Result<&str> {
-                Ok(row.get_ref(i)?.as_str().map_err(rusqlite::Error::from)?)
-            };
-            out.push(Summary {
-                id: parse_uuid(text(0)?)?,
-                key: row.get(1)?,
-                kind: text(2)?.parse()?,
-                title: row.get(3)?,
-                state: text(4)?.parse()?,
-                priority: row.get(5)?,
-                updated: row.get(6)?,
-                blocked: row.get(7)?,
-                standing: row.get(8)?,
-                parent: row
-                    .get_ref(9)?
-                    .as_str_or_null()
-                    .map_err(rusqlite::Error::from)?
-                    .map(parse_uuid)
-                    .transpose()?,
-            });
+            out.push(summary_from(row)?);
         }
         // Sorting here rather than in SQL keeps SQLite from copying rows through its sorter.
         out.sort_unstable_by(|a, b| {
@@ -1077,6 +1150,29 @@ fn node_from(row: &rusqlite::Row<'_>) -> Result<Node> {
         updated: row.get(9)?,
         created_by: row.get(10)?,
         blocked: row.get(11)?,
+    })
+}
+
+/// A row of [`SUMMARY_COLS`] as a summary.
+fn summary_from(row: &rusqlite::Row) -> Result<Summary> {
+    let text =
+        |i: usize| -> Result<&str> { Ok(row.get_ref(i)?.as_str().map_err(rusqlite::Error::from)?) };
+    Ok(Summary {
+        id: parse_uuid(text(0)?)?,
+        key: row.get(1)?,
+        kind: text(2)?.parse()?,
+        title: row.get(3)?,
+        state: text(4)?.parse()?,
+        priority: row.get(5)?,
+        updated: row.get(6)?,
+        blocked: row.get(7)?,
+        standing: row.get(8)?,
+        parent: row
+            .get_ref(9)?
+            .as_str_or_null()
+            .map_err(rusqlite::Error::from)?
+            .map(parse_uuid)
+            .transpose()?,
     })
 }
 

@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::model::{Actor, Kind, Priority, Rel, State};
+use crate::model::{Actor, Health, Kind, Priority, Rel, State};
 
 /// The newest format version this livtk reads. Each event carries the version its operation
 /// needs, so adding an operation never changes the bytes of older events, and an older livtk
 /// skips the new operation with a clear "update livtk" warning.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -63,7 +63,12 @@ impl Op {
     /// notes, 3 for lessons, decisions and findings and the states they use, 4 for docs' links.
     pub fn min_version(&self) -> u32 {
         let task_state = |s: State| Kind::Task.states().contains(&s);
+        let project_state = |s: State| matches!(s, State::Active | State::Paused | State::Dropped);
         match self {
+            // A project (the outcome above tasks), its states and its health: new in 6.
+            Op::NodeCreate { data, .. } if data.kind == Kind::Project => 6,
+            Op::NodeSet { data, .. } if data.state.is_some_and(project_state) => 6,
+            Op::NodeNote { data, .. } if data.health.is_some() => 6,
             // A project's own kind or state: an older livtk knows neither.
             Op::NodeCreate { data, .. } if data.kind.is_declared() => 5,
             Op::EdgeAdd { data } | Op::EdgeRemove { data } if data.rel.is_declared() => 5,
@@ -131,6 +136,9 @@ impl NodePatch {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteData {
     pub text: String,
+    /// On a project's update: how it stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Health>,
 }
 
 /// A doc, by its path from the project's folder, `/` between its parts: `docs/guide/setup.md`.

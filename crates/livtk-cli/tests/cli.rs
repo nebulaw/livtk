@@ -1053,3 +1053,138 @@ fn declared_relations_are_in_show_json_and_a_bad_kind_is_a_usage_error() {
     let out = livtk(d, As::Claude, &["move", "LIV-1", "nowhere"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+// ---- projects -----------------------------------------------------------------------------------
+
+#[test]
+fn a_project_is_proposed_committed_to_by_the_human_and_counts_what_waits_on_them() {
+    let dir = project();
+    let d = dir.path();
+    // This project gates review -> done for the human, so review waits on them too.
+    declare(d, "[gates]\nhuman = [\"task: review -> done\"]\n");
+    // Rows read as always while there is no project.
+    ok(d, As::Claude, &["new", "unrelated"]);
+    assert!(json(d, &["list"])[0].get("project").is_none());
+    let out = ok(
+        d,
+        As::Claude,
+        &[
+            "project",
+            "new",
+            "Import the board",
+            "--body",
+            "Bring it in.\n\nDone when: every card is a task.",
+            "--target",
+            "2026-12-01",
+            "--owner",
+            "karl",
+        ],
+    );
+    assert!(out.contains("PRJ-1 proposed"), "{out}");
+    assert!(
+        ok(d, As::Claude, &["inbox"]).contains("PRJ-1"),
+        "waits for the human"
+    );
+    let refused = livtk(d, As::Claude, &["move", "PRJ-1", "active"]);
+    assert_eq!(refused.status.code(), Some(3), "the human commits");
+    ok(d, As::Human, &["move", "PRJ-1", "active"]);
+    for t in ["parse cards", "write tasks", "link them"] {
+        ok(d, As::Claude, &["new", t, "--parent", "PRJ-1"]);
+    }
+    // LIV-2 planned (waits for its ack); LIV-3 in review (waits for done); LIV-4 in backlog.
+    ok(d, As::Claude, &["move", "LIV-2", "planned"]);
+    ok(d, As::Claude, &["move", "LIV-3", "planned"]);
+    ok(d, As::Human, &["ack", "LIV-3"]);
+    ok(d, As::Claude, &["start", "LIV-3"]);
+    ok(d, As::Claude, &["move", "LIV-3", "review"]);
+    let show = json(d, &["project", "show", "PRJ-1"]);
+    let g = &show["progress"];
+    assert_eq!(
+        (g["done"].as_u64(), g["total"].as_u64()),
+        (Some(0), Some(3))
+    );
+    let waiting: Vec<(String, u64, String)> = g["waiting"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["state"].as_str().unwrap().to_owned(),
+                w["count"].as_u64().unwrap(),
+                w["oldest"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        waiting.contains(&("planned".into(), 1, "LIV-2".into())),
+        "{waiting:?}"
+    );
+    assert!(
+        waiting.contains(&("review".into(), 1, "LIV-3".into())),
+        "{waiting:?}"
+    );
+    assert_eq!(g["target"], "2026-12-01");
+    assert_eq!(g["owner"], "karl");
+    // A task names its project in lists, text and JSON.
+    assert!(ok(d, As::Claude, &["list"]).contains("parse cards  [PRJ-1]"));
+    let rows = json(d, &["list"]);
+    let row = |k: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == k)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row("LIV-2")["project"], "PRJ-1");
+    assert!(row("LIV-1").get("project").is_none());
+    // An update says how it stands.
+    ok(
+        d,
+        As::Claude,
+        &[
+            "project",
+            "update",
+            "PRJ-1",
+            "--health",
+            "at-risk",
+            "parsing is slow; next: batch it",
+        ],
+    );
+    let list = ok(d, As::Claude, &["project", "list"]);
+    assert!(
+        list.contains("PRJ-1") && list.contains("at risk") && list.contains("0/3"),
+        "{list}"
+    );
+    assert!(
+        list.contains("1 planned") && list.contains("1 review"),
+        "{list}"
+    );
+    // Done once the human says so.
+    ok(d, As::Human, &["done", "LIV-3"]);
+    assert_eq!(
+        json(d, &["project", "show", "PRJ-1"])["progress"]["done"],
+        1
+    );
+    assert_eq!(
+        livtk(d, As::Claude, &["move", "PRJ-1", "done"])
+            .status
+            .code(),
+        Some(3)
+    );
+}
+
+#[test]
+fn more_than_three_active_projects_get_a_plain_line() {
+    let dir = project();
+    let d = dir.path();
+    for i in 1..=4 {
+        ok(d, As::Claude, &["project", "new", &format!("outcome {i}")]);
+        ok(d, As::Human, &["move", &format!("PRJ-{i}"), "active"]);
+        if i == 3 {
+            assert!(!ok(d, As::Claude, &["project", "list"]).contains("active at once"));
+        }
+    }
+    let list = ok(d, As::Claude, &["project", "list"]);
+    assert!(list.contains("4 projects are active at once"), "{list}");
+}

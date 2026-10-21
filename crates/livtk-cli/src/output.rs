@@ -10,7 +10,7 @@ use livtk_core::{Gate, Hit, Kind, Node, Rel, State, Summary, Workspace};
 use serde::Serialize;
 use serde_json::json;
 
-fn print_json(value: &impl Serialize) -> Result<()> {
+pub(crate) fn print_json(value: &impl Serialize) -> Result<()> {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     serde_json::to_writer(&mut out, value)?;
     out.write_all(b"\n")?;
@@ -48,7 +48,7 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
                 let key = key_of(ws, *node).unwrap_or_else(|| data.key.clone());
                 let verb = match data.kind {
                     Kind::Task => "created",
-                    Kind::Lesson | Kind::Decision => "proposed",
+                    Kind::Lesson | Kind::Decision | Kind::Project => "proposed",
                     Kind::Finding => "recorded",
                     _ => "created",
                 };
@@ -58,6 +58,9 @@ pub fn created(ws: &Workspace, events: &[Event], json: bool) -> Result<()> {
                     Kind::Decision => {
                         println!("  it binds once the human runs `livtk accept {key}`")
                     }
+                    Kind::Project => println!(
+                        "  it is committed to once the human runs `livtk move {key} active`"
+                    ),
                     _ => {}
                 }
             }
@@ -117,9 +120,28 @@ pub fn list_fields(ws: &Workspace, rows: &[Summary], fields: &[String]) -> Resul
     print_json(&out)
 }
 
-pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
+/// Rows by state; a row part of a project names it (`projects`, from `Workspace::projects_of`,
+/// is empty while there is none, and the rows read as they always have).
+pub fn list(
+    tasks: &[Summary],
+    projects: &std::collections::HashMap<uuid::Uuid, livtk_core::Brief>,
+    json: bool,
+) -> Result<()> {
     if json {
-        return print_json(&tasks);
+        if projects.is_empty() {
+            return print_json(&tasks);
+        }
+        let rows = tasks
+            .iter()
+            .map(|t| {
+                let mut row = serde_json::to_value(t)?;
+                if let Some(p) = projects.get(&t.id) {
+                    row["project"] = json!(p.key);
+                }
+                Ok(row)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return print_json(&rows);
     }
     if tasks.is_empty() {
         println!(
@@ -144,10 +166,14 @@ pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
         } else {
             ""
         };
+        let project = projects
+            .get(&t.id)
+            .map(|p| format!("  [{}]", p.key))
+            .unwrap_or_default();
         if t.kind == Kind::Task {
             writeln!(
                 text,
-                "  {:width$}  P{}  {}{flag}",
+                "  {:width$}  P{}  {}{flag}{project}",
                 t.key, t.priority, t.title
             )?;
         } else {
@@ -359,6 +385,7 @@ pub fn inbox(items: &[Summary], gates: &[Gate], json: bool) -> Result<()> {
             Kind::Task if t.state == State::Planned => "ack",
             Kind::Lesson if t.state == State::Proposed => "ratify or reject",
             Kind::Decision if t.state == State::Proposed => "accept or reject",
+            Kind::Project if t.state == State::Proposed => "activate or drop",
             _ => {
                 moves = format!("move to {}", gated.join(" or "));
                 &moves

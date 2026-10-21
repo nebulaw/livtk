@@ -1342,3 +1342,27 @@ fn claudes_writes_name_their_session_and_earlier_ones_can_be_claimed() {
     assert!(all.iter().any(|s| s.session == "sess-main" && s.nodes == 1));
     assert_eq!(ws.session_nodes("sess-old").unwrap()[0].key, a);
 }
+
+#[test]
+fn a_stored_event_from_a_newer_livtk_is_passed_over_not_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let a = task(&mut ws, "a task");
+    // A newer livtk, sharing the database, stored an operation this one does not know.
+    let db = rusqlite::Connection::open(dir.path().join(".livtk/livtk.db")).unwrap();
+    let node = ws.node(&a).unwrap().id;
+    db.execute(
+        "INSERT INTO events (id, at, by, op, node, other, line) VALUES (?1, ?2, 'claude', 'node.future', ?3, NULL, ?4)",
+        rusqlite::params![
+            "01ffffff-ffff-7fff-bfff-ffffffffffff",
+            "2099-01-01T00:00:00.000Z",
+            node.to_string(),
+            format!(r#"{{"v":99,"id":"01ffffff-ffff-7fff-bfff-ffffffffffff","at":"2099-01-01T00:00:00.000Z","by":"claude","op":"node.future","node":"{node}","data":{{}}}}"#),
+        ],
+    )
+    .unwrap();
+    // Its history and the feed still read, without it.
+    let history = ws.history(Some(&a)).unwrap();
+    assert_eq!(history.len(), 1, "only the create");
+    assert!(ws.activity(None, 10).is_ok());
+}

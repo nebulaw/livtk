@@ -731,10 +731,7 @@ impl Store {
                 r.get(0)
             })?
             .collect::<rusqlite::Result<_>>()?;
-        lines
-            .iter()
-            .map(|l| serde_json::from_str(l).map_err(Error::from))
-            .collect()
+        Ok(readable(&lines))
     }
 
     /// A page of the log between `from` (inclusive) and `to` (exclusive), times as the log
@@ -756,10 +753,7 @@ impl Store {
                 |r| r.get(0),
             )?
             .collect::<rusqlite::Result<_>>()?;
-        lines
-            .iter()
-            .map(|l| serde_json::from_str(l).map_err(Error::from))
-            .collect()
+        Ok(readable(&lines))
     }
 
     /// How many events each day holds, in this machine's time zone: by whether the human made
@@ -918,10 +912,7 @@ impl Store {
         let lines: Vec<String> = stmt
             .query_map(params![after.map(|a| a.to_string())], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-        lines
-            .iter()
-            .map(|l| serde_json::from_str(l).map_err(Error::from))
-            .collect()
+        Ok(readable(&lines))
     }
 
     /// The whole log as applied, oldest first.
@@ -940,10 +931,7 @@ impl Store {
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<_>>()?,
         };
-        lines
-            .iter()
-            .map(|l| serde_json::from_str(l).map_err(Error::from))
-            .collect()
+        Ok(readable(&lines))
     }
 
     // ---- search ---------------------------------------------------------------------------
@@ -1055,6 +1043,19 @@ impl Store {
             edges: self.edges()?,
         })
     }
+}
+
+/// The stored lines this livtk can read, as events. A line written by a newer livtk sharing the
+/// database (during an upgrade, say) is passed over, never an error: it is read once this one is
+/// updated.
+fn readable(lines: &[String]) -> Vec<Event> {
+    lines
+        .iter()
+        .filter_map(|l| match crate::event::parse_line(l) {
+            crate::event::Line::Event(e) => Some(*e),
+            _ => None,
+        })
+        .collect()
 }
 
 // ---- applying events ------------------------------------------------------------------------

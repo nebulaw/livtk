@@ -1034,13 +1034,17 @@ fn a_project_is_the_humans_to_commit_to_and_counts_its_tasks_through_nesting() {
     // a, b, c, e: d is canceled. a is done.
     assert_eq!((g.done, g.total), (1, 4));
     assert_eq!(g.projects, vec![inner.clone()]);
-    // e waits for its ack; nothing else is planned. b is in review, which this project's
-    // config does not gate, so it waits on no one.
-    assert_eq!(g.waiting.len(), 1, "{:?}", g.waiting);
+    // e waits for its ack; b, in review, for the human's check.
+    assert_eq!(g.waiting.len(), 2, "{:?}", g.waiting);
     assert_eq!(g.waiting[0].state, State::Planned);
     assert_eq!(
         (g.waiting[0].count, g.waiting[0].oldest.as_str()),
         (1, e.as_str())
+    );
+    assert_eq!(g.waiting[1].state, State::Review);
+    assert_eq!(
+        (g.waiting[1].count, g.waiting[1].oldest.as_str()),
+        (1, b.as_str())
     );
     // Its own count, the inner project's.
     let gi = ws.progress(&inner, now).unwrap();
@@ -1056,6 +1060,17 @@ fn a_project_is_the_humans_to_commit_to_and_counts_its_tasks_through_nesting() {
         &CLAUDE,
     );
     assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
+    // Nor through a sub-task: e is part of c, which is in the inner project.
+    let r = ws.execute(
+        Command::Link {
+            src: e.clone(),
+            rel: Rel::Parent,
+            dst: other.clone(),
+        },
+        &CLAUDE,
+    );
+    assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
+    assert_eq!(ws.progress(&other, now).unwrap().total, 0);
     // Done is the human's too.
     assert!(mv(&mut ws, &outer, State::Done, &CLAUDE).is_err());
     mv(&mut ws, &outer, State::Done, &HUMAN).unwrap();

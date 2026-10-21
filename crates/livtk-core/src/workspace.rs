@@ -1369,17 +1369,16 @@ impl Workspace {
                     (_, None) => Priority::DEFAULT,
                 };
                 let mut targets: Vec<(Rel, Uuid)> = Vec::new();
-                let mut project = None;
+                let mut parent = None;
                 for (rel, r) in &links {
                     let d = self.node(r)?;
                     check_link(kind, *rel, &d)?;
                     if *rel == Rel::Parent
-                        && d.kind == Kind::Project
-                        && let Some(other) = project.replace(d.key.clone())
+                        && let Some(other) = parent.replace(d.key.clone())
                         && other != d.key
                     {
                         return Err(Error::Refused(format!(
-                            "part of {other} and {}: one project each",
+                            "part of {other} and {}: one parent each",
                             d.key
                         )));
                     }
@@ -1508,11 +1507,13 @@ impl Workspace {
                     return Ok(Vec::new());
                 }
                 check_link(s.kind, rel, &d)?;
-                if rel == Rel::Parent && d.kind == Kind::Project {
+                // One parent each, so a node is under one chain of projects, never two: the app
+                // shows one, and a task counts toward one outcome.
+                if rel == Rel::Parent {
                     let (parents, _) = self.store.links(s.id, Rel::Parent)?;
-                    if let Some(p) = parents.iter().find(|p| p.kind == Kind::Project) {
+                    if let Some(p) = parents.first() {
                         return Err(Error::Refused(format!(
-                            "{} is part of {} already; one project each (unlink it first)",
+                            "{} is part of {} already; one parent each (unlink it first)",
                             s.key, p.key
                         )));
                     }

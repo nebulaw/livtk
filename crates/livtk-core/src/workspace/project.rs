@@ -139,7 +139,8 @@ impl Workspace {
     }
 
     /// The states a node of `kind` waits on the human in: those with a move only the human may
-    /// make (planned, for a task), and those a gate in the config moves from.
+    /// make (planned, for a task), review for a task (the human checks it and calls it done),
+    /// and those a gate in the config moves from.
     pub fn waits_on_human(&self, kind: Kind) -> Vec<State> {
         let states = kind.states();
         let mut out: Vec<State> = states
@@ -151,6 +152,9 @@ impl Workspace {
                     .any(|&to| kind.can_move(s, to) && kind.human_only(s, to))
             })
             .collect();
+        if kind == Kind::Task {
+            out.push(State::Review);
+        }
         for g in &self.gates {
             if g.kind == kind
                 && let Some(from) = g.from

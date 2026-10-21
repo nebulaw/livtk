@@ -151,9 +151,10 @@ Keys accept `LIV-12`, `liv-12` or just `12`. Every command takes `--json`.
 **Projects: an outcome above tasks.** A project (`PRJ-1`) says what should be true, its body
 ending in a `Done when:` line. Claude may propose one; only you commit to it (`livtk move PRJ-1
 active`) and call it done. Tasks join it as parts (`livtk new "..." --parent PRJ-1`, or `livtk
-link 3 part-of PRJ-1`), one project each, and projects nest the same way. Its progress is counted,
-never typed in: tasks done out of all of them (canceled ones aside), and what waits on you at each
-of your gates, with the one waiting longest. Its health is written: an update says on track, at
+link 3 part-of PRJ-1`), and projects nest the same way; a node has one parent, so it counts
+toward one project. Its progress is counted, never typed in: tasks done out of all of them
+(canceled ones aside), and what waits on you (planned for your ack, in review for your check, and
+whatever your gates hold), with the one waiting longest. Its health is written: an update says on track, at
 risk or off track, what moved and what is next; an active project a week without one reads
 "update missing".
 

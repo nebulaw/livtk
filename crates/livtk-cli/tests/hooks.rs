@@ -735,10 +735,15 @@ fn the_brief_names_active_projects_and_each_task_carries_its_outcome() {
     livtk(d, false, &["move", "LIV-1", "planned"]);
     livtk(d, true, &["ack", "LIV-1"]);
     livtk(d, false, &["start", "LIV-1"]);
+    // A second task, planned: it waits on the human.
+    livtk(d, false, &["new", "write tasks", "--parent", "PRJ-1"]);
+    livtk(d, false, &["move", "LIV-2", "planned"]);
     let full = brief_of(d).unwrap();
     assert!(full.contains("Active projects:"), "{full}");
     assert!(
-        full.contains("PRJ-1 Import the board: 0/1 tasks done"),
+        full.contains(
+            "PRJ-1 Import the board: 0/2 tasks done, no update yet, 1 waiting on the human"
+        ),
         "{full}"
     );
     assert!(

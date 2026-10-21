@@ -41,6 +41,7 @@ icons! {
     Decisions => "route",
     Findings => "medical-flask",
     Projects => "bullseye",
+    Agents => "brain-circuit",
     Graph => "circuit-board",
     /// The project's docs.
     Docs => "book",

@@ -90,6 +90,27 @@ impl LivtkApp {
         cx.notify();
     }
 
+    /// A new terminal running `program` with `args` in the project's folder, shown.
+    pub(super) fn open_program(
+        &mut self,
+        program: &str,
+        args: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dir) = self.model.project().map(|p| p.dir.clone()) else {
+            return;
+        };
+        let program = program.to_owned();
+        let pane = cx.new(|cx| TerminalPane::running(dir.clone(), program, args, cx));
+        self.go(View::Terminal, window, cx);
+        let t = self.terminals.entry(dir).or_default();
+        t.list.push(pane);
+        t.shown = t.list.len() - 1;
+        self.last_place = None;
+        cx.notify();
+    }
+
     /// Show terminal `i` of the open project's, with the keys.
     fn show_terminal(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(t) = self

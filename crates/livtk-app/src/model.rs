@@ -10,6 +10,7 @@ use livtk_core::{Actor, Brief, Command, Gate, Kind, Links, Node, Rel, State, Sum
 use uuid::Uuid;
 
 mod activity;
+pub mod agents;
 pub mod contour;
 pub mod docs;
 mod flow;
@@ -50,12 +51,14 @@ pub enum View {
     Terminal,
     /// The project's docs: its markdown files.
     Docs,
+    /// The Claude sessions working in the project, and the agents they can run as.
+    Agents,
     /// A kind the project declares (`[[kinds]]` in its config), listed as the built-in kinds are.
     Of(Kind),
 }
 
 impl View {
-    pub const ALL: [View; 10] = [
+    pub const ALL: [View; 11] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
@@ -64,6 +67,7 @@ impl View {
         View::Decisions,
         View::Findings,
         View::Docs,
+        View::Agents,
         View::Graph,
         View::Terminal,
     ];
@@ -81,6 +85,7 @@ impl View {
             View::Graph => "Graph",
             View::Terminal => "Terminal",
             View::Docs => "Docs",
+            View::Agents => "Agents",
         }
     }
 
@@ -106,7 +111,12 @@ impl View {
     pub const fn kind(self) -> Option<Kind> {
         match self {
             View::Of(kind) => Some(kind),
-            View::Inbox | View::Activity | View::Graph | View::Terminal | View::Docs => None,
+            View::Inbox
+            | View::Activity
+            | View::Graph
+            | View::Terminal
+            | View::Docs
+            | View::Agents => None,
             View::Tasks => Some(Kind::Task),
             View::Projects => Some(Kind::Project),
             View::Lessons => Some(Kind::Lesson),
@@ -600,6 +610,8 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
     pub activity: Vec<livtk_core::Activity>,
+    /// The Agents place: its sessions and agent files.
+    pub agents: agents::AgentsPlace,
     /// The project's flow, as the activity view shows it: what waits on the human and for how
     /// long, and the time tasks spend in each state.
     pub flow: Option<livtk_core::Flow>,
@@ -825,6 +837,7 @@ impl Model {
             arrivals: Vec::new(),
             palette: None,
             activity: Vec::new(),
+            agents: agents::AgentsPlace::default(),
             flow: None,
             activity_more: false,
             activity_index: 0,
@@ -2461,6 +2474,9 @@ impl Model {
         }
         if self.pane().view == View::Docs {
             self.load_docs();
+        }
+        if self.pane().view == View::Agents {
+            self.load_agents();
         }
         if self.pane().view == View::Activity {
             self.load_activity();

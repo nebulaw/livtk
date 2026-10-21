@@ -604,6 +604,7 @@ impl Model {
             (View::Activity, "G A"),
             (View::Tasks, "G T"),
             (View::Projects, "G P"),
+            (View::Agents, "G E"),
             (View::Lessons, "G L"),
             (View::Decisions, "G D"),
             (View::Findings, "G F"),

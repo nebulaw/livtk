@@ -42,6 +42,8 @@ impl Global for Headless {}
 /// One project's terminal: its shell once started, or why it could not be.
 pub struct TerminalPane {
     dir: PathBuf,
+    /// What it runs instead of a shell, if anything: a program and its arguments.
+    program: Option<(String, Vec<String>)>,
     shell: Option<Shell>,
     error: Option<String>,
     focus: FocusHandle,
@@ -71,6 +73,7 @@ impl TerminalPane {
     pub fn new(dir: PathBuf, cx: &mut Context<Self>) -> TerminalPane {
         TerminalPane {
             dir,
+            program: None,
             shell: None,
             error: None,
             focus: cx.focus_handle(),
@@ -79,6 +82,19 @@ impl TerminalPane {
             cell: Rc::new(Shared::new((8., 17.))),
             wheel: 0.,
             held: None,
+        }
+    }
+
+    /// A terminal that runs `program` with `args` instead of a shell.
+    pub fn running(
+        dir: PathBuf,
+        program: String,
+        args: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        TerminalPane {
+            program: Some((program, args)),
+            ..TerminalPane::new(dir, cx)
         }
     }
 
@@ -98,7 +114,10 @@ impl TerminalPane {
         }
         match &mut self.shell {
             Some(shell) => shell.resize(size),
-            None if self.error.is_none() => match Shell::spawn(&self.dir, size) {
+            None if self.error.is_none() => match match &self.program {
+                Some((program, args)) => Shell::spawn_program(&self.dir, size, program, args),
+                None => Shell::spawn(&self.dir, size),
+            } {
                 Ok((shell, events)) => {
                     self.shell = Some(shell);
                     self._events = Some(cx.spawn(async move |this, cx| {

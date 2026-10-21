@@ -7,6 +7,7 @@
 //! the terminal live outside it, so typing never triggers a command.
 
 mod activity_grid;
+mod agents;
 pub mod contour_grid;
 pub mod diagram;
 mod docs;
@@ -84,6 +85,7 @@ actions!(
         GoActivity,
         GoTasks,
         GoProjects,
+        GoAgents,
         GoLessons,
         GoDecisions,
         GoFindings,
@@ -505,6 +507,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("g a", GoActivity, nav),
         KeyBinding::new("g t", GoTasks, nav),
         KeyBinding::new("g p", GoProjects, nav),
+        KeyBinding::new("g e", GoAgents, nav),
         KeyBinding::new("g l", GoLessons, nav),
         KeyBinding::new("g d", GoDecisions, nav),
         KeyBinding::new("g f", GoFindings, nav),
@@ -742,6 +745,8 @@ pub struct LivtkApp {
     about: bool,
     /// Settings, open.
     settings: settings::Settings,
+    /// The Agents place's page for an agent, and its sessions' polling.
+    agent_form: agents::AgentForm,
     /// What the menu bar and the Dock menu were last made from.
     menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
@@ -791,6 +796,7 @@ impl LivtkApp {
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
         let reader = docs::Reader::new(window, cx);
         let settings = settings::Settings::new(window, cx);
+        let agent_form = agents::AgentForm::new(window, cx);
         let subscriptions = vec![
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
@@ -962,6 +968,7 @@ impl LivtkApp {
             help: false,
             about: false,
             settings,
+            agent_form,
             menu_state: None,
             editing: None,
             last_detail: None,
@@ -2980,6 +2987,7 @@ impl LivtkApp {
     fn panel_open(&self) -> bool {
         (self.model.detail.is_some() && self.model.detail_mode == crate::model::DetailMode::Side)
             || self.doc_panel_open()
+            || self.agents_panel_open()
     }
 
     /// Whether the panel shows the doc being read: nothing else open in it, and not put away.
@@ -3991,6 +3999,7 @@ impl LivtkApp {
             (View::Activity, _) => self.activity_view(cx),
             (View::Graph, _) => self.graph_view(cx),
             (View::Docs, _) => self.docs_view(window, cx),
+            (View::Agents, _) => self.agents_view(window, cx),
             // Drawn in the list's place, outside its keys: `terminal_view`.
             (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
@@ -5154,6 +5163,10 @@ impl LivtkApp {
     /// The detail panel, sliding in when it opens and out when it closes. Its width animates,
     /// so the list beside it makes room smoothly instead of jumping.
     fn detail(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // The Agents place's panel: a session, or an agent's page.
+        if self.model.view() == View::Agents {
+            return self.agents_panel(width, cx);
+        }
         // A node's detail opened another way is not the panel's: the panel keeps only a doc's.
         let side = self.model.detail_mode == crate::model::DetailMode::Side;
         let (d, closing) = match (&self.model.detail, &self.detail_leaving) {
@@ -6587,6 +6600,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &GoActivity, w, cx| this.go(View::Activity, w, cx)))
             .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
             .on_action(cx.listener(|this, _: &GoProjects, w, cx| this.go(View::Projects, w, cx)))
+            .on_action(cx.listener(|this, _: &GoAgents, w, cx| this.go(View::Agents, w, cx)))
             .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
             .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
             .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
@@ -7253,7 +7267,7 @@ fn span(secs: i64) -> String {
     }
 }
 
-fn section_label(text: &str) -> Div {
+pub(super) fn section_label(text: &str) -> Div {
     div()
         .px_2()
         .h(px(24.))
@@ -7338,6 +7352,7 @@ fn view_icon(view: View) -> Icon {
         View::Activity => Icon::Activity,
         View::Tasks => Icon::Tasks,
         View::Projects => Icon::Projects,
+        View::Agents => Icon::Agents,
         View::Lessons => Icon::Lessons,
         View::Decisions => Icon::Decisions,
         View::Findings => Icon::Findings,
@@ -7759,7 +7774,7 @@ fn who(by: &str) -> &str {
 }
 
 /// One event of the timeline of the node keyed `key` now.
-fn event_line(e: &Event, key: &str) -> Div {
+pub(super) fn event_line(e: &Event, key: &str) -> Div {
     let when = ago(&e.at);
     let what = match &e.op {
         Op::NodeCreate { .. } => match created_as(e, key) {
@@ -7885,7 +7900,7 @@ const BOARD_COLUMN: f32 = 256.;
 const PALETTE_W: f32 = 640.;
 
 /// "just now", "5m", "3h", "2d", or the date, as Linear shows ages.
-fn ago(at: &str) -> String {
+pub(super) fn ago(at: &str) -> String {
     let Ok(t) = at.parse::<jiff::Timestamp>() else {
         return at.to_owned();
     };

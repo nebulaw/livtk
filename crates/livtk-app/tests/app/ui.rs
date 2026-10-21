@@ -4111,3 +4111,122 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
     redraw(cx);
     assert!(cx.debug_bounds("flow-strip").is_some());
 }
+
+/// The Agents place, with a stub `claude`: this project's sessions only, Needs you first, Stop
+/// for a background one; the agents by place, livtk's copied, a copy saved and then removed
+/// after a second press. (The only test that points livtk at a `claude` and a Claude home.)
+#[gpui_kit::test]
+fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let stub = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    // livtk's plugin, as Claude Code records it, with one agent.
+    let plugin = home.path().join("plugins/cache/livtk/livtk/0.4.0");
+    std::fs::create_dir_all(plugin.join("agents")).unwrap();
+    std::fs::write(
+        plugin.join("agents/implementer.md"),
+        "---\nname: implementer\ndescription: Implements a task.\ntools: Read, Edit\n---\n\nYou implement.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("plugins/installed_plugins.json"),
+        format!(
+            r#"{{"version":2,"plugins":{{"livtk@livtk":[{{"installPath":"{}"}}]}}}}"#,
+            plugin.display()
+        ),
+    )
+    .unwrap();
+    let sessions = stub.path().join("agents.json");
+    let write_sessions = |waiting: &str| {
+        std::fs::write(
+            &sessions,
+            format!(
+                r#"[
+  {{"pid":1,"cwd":"{root}","kind":"interactive","startedAt":1792576396219,"sessionId":"aaaaaaaa-1","name":"planning","status":"busy"}},
+  {{"cwd":"{root}","kind":"background","startedAt":1792576396000,"sessionId":"bbbbbbbb-2","name":"building","status":"{waiting}","id":"bg1","state":"working"}},
+  {{"pid":3,"cwd":"/elsewhere","kind":"interactive","startedAt":1,"sessionId":"cccccccc-3","name":"other","status":"busy"}}
+]"#,
+                root = root.display()
+            ),
+        )
+        .unwrap();
+    };
+    write_sessions("waiting");
+    let claude = stub.path().join("claude");
+    std::fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = agents ]; then cat '{}'; fi\nif [ \"$1\" = stop ]; then echo \"$2\" >> '{}'; fi\n",
+            sessions.display(),
+            stub.path().join("stopped").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    livtk_app::agents::use_paths(claude.clone(), home.path().to_path_buf());
+    let (app, cx) = open_app(cx, &root);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g e");
+    redraw(cx);
+    redraw(cx);
+    // This project's two, the one waiting for you first; not the one elsewhere.
+    let waiting = cx
+        .debug_bounds("session-bbbbbbbb-2")
+        .expect("the waiting one");
+    let busy = cx.debug_bounds("session-aaaaaaaa-1").expect("the busy one");
+    assert!(waiting.top() < busy.top(), "Needs you first");
+    assert!(
+        cx.debug_bounds("session-cccccccc-3").is_none(),
+        "not this project's"
+    );
+    // It follows Claude Code: no longer waiting, it moves below.
+    write_sessions("busy");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(4));
+    redraw(cx);
+    redraw(cx);
+    let (a, b) = (
+        cx.debug_bounds("session-aaaaaaaa-1").unwrap(),
+        cx.debug_bounds("session-bbbbbbbb-2").unwrap(),
+    );
+    assert!(a.top() < b.top(), "both working: the newest first");
+    // A background session can be stopped from its panel.
+    click_on(cx, "session-bbbbbbbb-2");
+    redraw(cx);
+    assert!(cx.debug_bounds("session-page").is_some());
+    click_on(cx, "session-stop");
+    assert_eq!(
+        std::fs::read_to_string(stub.path().join("stopped"))
+            .unwrap()
+            .trim(),
+        "bg1"
+    );
+    // livtk's own agent: copied, not changed or removed.
+    click_on(cx, "agent-implementer-livtk");
+    redraw(cx);
+    assert!(cx.debug_bounds("agent-page").is_some());
+    assert!(cx.debug_bounds("agent-save").is_none());
+    assert!(cx.debug_bounds("agent-remove").is_none());
+    click_on(cx, "agent-copy");
+    redraw(cx);
+    click_on(cx, "agent-save");
+    redraw(cx);
+    let copy = root.join(".claude/agents/implementer-copy.md");
+    let text = std::fs::read_to_string(&copy).expect("saved in the project");
+    assert!(
+        text.contains("name: implementer-copy") && text.contains("tools: Read, Edit"),
+        "{text}"
+    );
+    assert!(cx.debug_bounds("agent-implementer-copy-project").is_some());
+    // Removed only on the second press.
+    click_on(cx, "agent-remove");
+    redraw(cx);
+    assert!(copy.exists(), "asked first");
+    click_on(cx, "agent-remove");
+    redraw(cx);
+    assert!(!copy.exists());
+    let _ = app;
+}

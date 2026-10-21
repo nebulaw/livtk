@@ -42,6 +42,19 @@ list's place, behind a header bar, and Esc gives the list back.
 - The terminal is one view holding several terminals, as VS Code does: a list beside it once
   there are two, a click shows one, its × kills it.
 
+## Agents
+
+The first of the agentic views. Agents is a place in the sidebar with the same three places:
+- **The middle** lists the Claude sessions working in the project. They come from Claude Code's
+  own list, refreshed while the place is open, with **Needs you** first, then Working and Idle.
+  Below them come the agents they can run as, by where they live: livtk's, this project's, yours.
+- **The panel** shows the one picked. A session shows its standing and what it did in livtk, with
+  Open (in the terminal) and Stop. An agent shows its page: name, description, tools, model and
+  instructions, with Save, Copy and Remove.
+
+livtk's own agents can be copied, never changed or removed. Remove asks once, on the button
+itself, before it removes.
+
 ## Settings
 
 Settings are a place, not a modal (⌘, or the Settings row under Shortcuts): the sidebar becomes

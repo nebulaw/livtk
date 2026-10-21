@@ -4242,3 +4242,19 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
     assert!(!copy.exists());
     let _ = app;
 }
+
+/// The sidebar: Agents in a section of its own, between the views and the tools.
+#[gpui_kit::test]
+fn agents_have_their_own_sidebar_section_above_the_tools(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    redraw(cx);
+    let docs = cx.debug_bounds("view-Docs").unwrap();
+    let agents = cx.debug_bounds("view-Agents").unwrap();
+    let graph = cx.debug_bounds("view-Graph").unwrap();
+    assert!(docs.top() < agents.top() && agents.top() < graph.top());
+    // A heading between Docs and Agents: more than a row's step apart.
+    let step = agents.top() - docs.top();
+    assert!(step > docs.size.height * 1.5, "{step:?}");
+}

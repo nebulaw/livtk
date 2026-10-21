@@ -2081,8 +2081,9 @@ impl LivtkApp {
         let inbox = self.model.project().map(|p| p.inbox).unwrap_or(0);
         let unseen = self.model.project().map(|p| p.unseen).unwrap_or(0);
         // The split's views first, grouped, while there is one; then the inbox and the feed,
-        // under no heading; then the views of the project's work; then the tools to work on it
-        // with. A view in the split is in its group, not in its usual place.
+        // under no heading; then the views of the project's work; then the agents working on
+        // it; then the tools to work on it with. A view in the split is in its group, not in
+        // its usual place.
         let split = self.model.split_views();
         if let Some(group) = self.sidebar_split(&split, cx) {
             side = side.child(group).child(div().h(px(10.)));
@@ -2090,6 +2091,9 @@ impl LivtkApp {
         for view in self.model.views() {
             if view == View::Tasks {
                 side = side.child(div().h(px(14.))).child(section_label("Views"));
+            }
+            if view == View::Agents {
+                side = side.child(div().h(px(14.))).child(section_label("Agents"));
             }
             if view == View::Graph {
                 side = side.child(div().h(px(14.))).child(section_label("Tools"));

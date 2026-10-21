@@ -1010,6 +1010,23 @@ fn a_dropped_kind_or_state_is_refused_naming_the_node_with_or_without_the_databa
     refused(d, &["mitigated", "INC-1"]);
     fresh(d);
     refused(d, &["mitigated", "INC-1"]);
+    // A state still known by name, here a built-in one: refused on the very first command too.
+    let dir = project();
+    let d = dir.path();
+    let config = std::fs::read_to_string(d.join(".livtk/config.toml")).unwrap();
+    declare(
+        d,
+        "[[kinds]]\nname = \"bug\"\nstates = [\"open\", \"done\", \"verified\"]\nkey = \"BUG\"\n",
+    );
+    ok(d, As::Claude, &["new", "--kind", "bug", "crash"]);
+    ok(d, As::Claude, &["move", "BUG-1", "done"]);
+    std::fs::write(d.join(".livtk/config.toml"), &config).unwrap();
+    declare(
+        d,
+        "[[kinds]]\nname = \"bug\"\nstates = [\"open\", \"verified\"]\nkey = \"BUG\"\n",
+    );
+    fresh(d);
+    refused(d, &["done", "BUG-1"]);
 }
 
 #[test]

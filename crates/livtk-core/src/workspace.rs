@@ -488,6 +488,9 @@ impl Workspace {
                 ws.store.reset_schema()?;
             }
             ws.catch_up()?;
+            // A state still known by name (a built-in one, or another kind's) replays without
+            // complaint; whether its kind still has it is checked on what was built.
+            ws.check_kinds()?;
         }
         ws.refresh()?;
         Ok(ws)

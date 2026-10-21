@@ -185,6 +185,25 @@ the session it came from, once: `livtk sessions claim` matches each earlier even
 Code transcript that ran its command, and gives the rest to `--default <session>` (`--dry-run`
 says what it would do). An older livtk reads past the session; a claim is format 7.
 
+**Runs: Claude working on a task on its own.** `livtk run KEY` starts Claude Code headless on a
+task, for the stage its state is ready for: planning from the backlog, building once you have
+acknowledged it, reviewing in review (`--stage` picks another, `--agent` another agent). A build
+runs as `livtk:implementer` and a review as `livtk:refuter`, unless the task was given to another
+agent with `livtk agent set KEY NAME` or an agent's file says `stage: build`. The run is
+written on the task as notes: that it started, what Claude says when a turn ends, and how it
+ended (done, failed, stopped). When it needs you, a note says so and the task waits in your
+inbox:
+- **A question:** answer it with `livtk note KEY "..."`, and the run reads your note next.
+- **A command it may not run on its own** (it runs with nothing allowed beyond reading, editing
+  for a build, and livtk itself): `livtk run allow KEY` lets it run exactly that, and
+  `livtk run deny KEY` refuses it. Both are yours alone.
+
+`livtk runs` lists the runs going or waiting (`--all` the ended too). `livtk run stop KEY` ends
+the turn cleanly and keeps the work; `livtk run continue KEY` takes it up again. Each turn is its
+own process, writing to `.livtk/runs/` (local, never committed), so runs outlive the terminal or
+app that started them; whichever livtk looks next writes what they did. Run in a git worktree,
+`livtk` writes to the main checkout's log. Run notes are format 8.
+
 **For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
 row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY
 --json` gives everything about one node: its fields with body and props, its links, its notes and

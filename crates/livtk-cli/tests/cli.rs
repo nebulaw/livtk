@@ -29,7 +29,10 @@ fn livtk_with_stdin(dir: &Path, who: As, args: &[&str], stdin: Option<&str>) -> 
         .env(
             "LIVTK_CONFIG_DIR",
             std::env::temp_dir().join("livtk-test-config"),
-        );
+        )
+        // Never the developer's own Claude Code: a stub, where a test puts one, and no agents.
+        .env("LIVTK_CLAUDE", dir.join("claude-stub"))
+        .env("LIVTK_CLAUDE_HOME", dir.join(".claude-home"));
     match who {
         As::Human => cmd.env_remove("CLAUDECODE"),
         As::Claude => cmd.env("CLAUDECODE", "1"),
@@ -1325,5 +1328,66 @@ fn claude_names_its_session_and_earlier_work_is_claimed_from_transcripts() {
             .unwrap()
             .iter()
             .any(|s| s["session"]["session"] == "sess-a" && s["nodes"][0] == "LIV-2")
+    );
+}
+
+/// A run from the command line: given to an agent, started on an acknowledged task, waiting
+/// on a question (in the inbox), answered by the human's note, which it reads next. Only the
+/// human allows what a run asks.
+#[test]
+fn a_run_from_the_command_line() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let d = dir.path();
+    let stub = d.join("claude-stub");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> .stub-args\necho '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"Which colour?\",\"permission_denials\":[]}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ok(d, As::Claude, &["new", "paint the shed"]);
+    ok(d, As::Claude, &["move", "LIV-1", "planned"]);
+    ok(d, As::Human, &["ack", "LIV-1"]);
+    ok(d, As::Human, &["agent", "set", "LIV-1", "builder"]);
+    assert!(ok(d, As::Human, &["agent", "show", "LIV-1"]).contains("given to builder"));
+    let started = ok(d, As::Human, &["run", "LIV-1"]);
+    assert!(started.contains("started to build as builder"), "{started}");
+    let start = Instant::now();
+    loop {
+        let runs = json(d, &["runs"]);
+        if runs[0]["standing"] == "needs you: a question" {
+            assert_eq!(runs[0]["text"], "Which colour?");
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "{runs}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        ok(d, As::Human, &["inbox"]).contains("LIV-1"),
+        "waits in the inbox"
+    );
+    assert!(
+        !livtk(d, As::Claude, &["run", "allow", "LIV-1"])
+            .status
+            .success(),
+        "the human's to allow"
+    );
+    ok(d, As::Human, &["note", "LIV-1", "Blue."]);
+    // Its next turn, started by the note.
+    let start = Instant::now();
+    let args = loop {
+        let args = std::fs::read_to_string(d.join(".stub-args")).unwrap();
+        if args.lines().count() == 2 {
+            break args;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "{args}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let turns: Vec<&str> = args.lines().collect();
+    assert!(turns[0].contains("--agent builder"), "{args}");
+    assert!(
+        turns[1].starts_with("-p Blue.") && turns[1].contains("--resume"),
+        "{args}"
     );
 }

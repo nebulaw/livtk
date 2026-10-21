@@ -18,8 +18,32 @@ const EDGE: u64 = 256 * 1024;
 /// Where Claude Code keeps the transcripts of the sessions run in `root`: its projects folder,
 /// under the folder's path with `/` and `.` as `-`.
 pub fn transcripts_dir(root: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(transcripts_in(&PathBuf::from(home).join(".claude"), root))
+    Some(transcripts_in(&home()?, root))
+}
+
+/// Claude Code's own folder: `LIVTK_CLAUDE_HOME` if set (for tests), else `~/.claude`.
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("LIVTK_CLAUDE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))
+}
+
+/// The `claude` command: `LIVTK_CLAUDE` if set, else the first found on the PATH or where its
+/// installers put it (an app started from the Finder has a short PATH).
+pub fn command() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("LIVTK_CLAUDE") {
+        return Some(PathBuf::from(p));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|d| d.join("claude"))
+        .chain(
+            home.iter()
+                .flat_map(|h| [h.join(".local/bin/claude"), h.join(".claude/local/claude")]),
+        )
+        .chain(["/opt/homebrew/bin/claude", "/usr/local/bin/claude"].map(PathBuf::from))
+        .find(|p| p.is_file())
 }
 
 /// The same, under Claude Code's folder `claude_home` (`~/.claude`, or a test's).

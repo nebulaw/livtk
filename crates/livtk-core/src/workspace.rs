@@ -74,11 +74,12 @@ pub struct Config {
 
 /// The hooks a project may switch off with `[hooks] disable`. The guard (pre-tool-use) is not
 /// among them: it keeps the human's gates, and the file is one Claude could edit.
-pub const HOOK_NAMES: [&str; 4] = [
+pub const HOOK_NAMES: [&str; 5] = [
     "session-start",
     "user-prompt-submit",
     "subagent-start",
     "subagent-stop",
+    "stop",
 ];
 /// What the session-start brief is made of, as a reader sees it.
 pub const SESSION_SECTIONS: [&str; 6] =
@@ -278,11 +279,41 @@ impl Hooks {
 /// The nearest `.livtk/` directory in `start` or one of its parents.
 pub fn find_dir(start: &Path) -> Result<PathBuf> {
     let start = start.canonicalize()?;
-    start
+    let dir = start
         .ancestors()
         .map(|d| d.join(DIR_NAME))
         .find(|d| d.join("config.toml").is_file())
-        .ok_or(Error::NotFound)
+        .ok_or(Error::NotFound)?;
+    // In a git worktree, the main checkout's: one log, which the app reads, whatever branch
+    // the work is on.
+    Ok(dir
+        .parent()
+        .and_then(main_checkout)
+        .map(|main| main.join(DIR_NAME))
+        .filter(|d| d.join("config.toml").is_file())
+        .unwrap_or(dir))
+}
+
+/// The main checkout of the git worktree at `root`: its `.git` is a file naming
+/// `<main>/.git/worktrees/<name>`. None for a main checkout, or anything else.
+fn main_checkout(root: &Path) -> Option<PathBuf> {
+    let git = root.join(".git");
+    if !git.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(git).ok()?;
+    let gitdir = PathBuf::from(text.strip_prefix("gitdir:")?.trim());
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        root.join(gitdir)
+    };
+    // `<main>/.git/worktrees/<name>`: up three.
+    let dot_git = gitdir.parent()?.parent()?;
+    (dot_git.file_name()? == ".git" && gitdir.parent()?.file_name()? == "worktrees")
+        .then(|| dot_git.parent().map(Path::to_path_buf))
+        .flatten()
+        .and_then(|m| m.canonicalize().ok())
 }
 
 /// A change to the workspace. Node references accept a key (`LIV-12`), a bare number (`12`), or
@@ -335,6 +366,13 @@ pub enum Command {
         node: String,
         text: String,
     },
+    /// A note of a run of Claude on the node: what it marks in the run. Your answer to what a
+    /// run asks to do is yours alone.
+    RunNote {
+        node: String,
+        text: String,
+        run: crate::event::RunData,
+    },
     /// A project's update: how it stands (`health`), what moved and what is next.
     Update {
         node: String,
@@ -347,6 +385,11 @@ pub enum Command {
         node: String,
         target: Option<String>,
         owner: Option<String>,
+    },
+    /// Give a task to an agent (by its name, as `--agent` takes it), or take it back (empty).
+    SetAgent {
+        node: String,
+        agent: String,
     },
     /// Credit `events` on `node`, written before livtk recorded sessions, to `session`.
     ClaimSession {
@@ -721,6 +764,81 @@ impl Workspace {
         self.session = session.filter(|s| !s.trim().is_empty());
     }
 
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    /// Every run of Claude the log tells of, oldest first: each from its notes, with your
+    /// answer since it last asked, if any.
+    pub fn runs(&self) -> Result<Vec<crate::run::Run>> {
+        use crate::event::RunMark;
+        use crate::run::{Answer, Run};
+        let mut runs: Vec<Run> = Vec::new();
+        for e in self.store.run_notes()? {
+            let Op::NodeNote { node, data } = &e.op else {
+                continue;
+            };
+            let Some(r) = &data.run else { continue };
+            let i = match runs
+                .iter()
+                .position(|x| x.session == r.session && x.node == *node)
+            {
+                Some(i) => i,
+                None => {
+                    let Some(key) = self.store.key_of(&node.to_string())? else {
+                        continue;
+                    };
+                    runs.push(Run {
+                        node: *node,
+                        key,
+                        session: r.session.clone(),
+                        agent: r.agent.clone(),
+                        stage: r.stage,
+                        started: e.at.clone(),
+                        last: r.mark.clone(),
+                        text: data.text.clone(),
+                        last_id: e.id,
+                        answer: None,
+                    });
+                    runs.len() - 1
+                }
+            };
+            let run = &mut runs[i];
+            match &r.mark {
+                // An answer: kept with the question, which stays the run's last word.
+                RunMark::Allowed if matches!(run.last, RunMark::Asks { .. }) => {
+                    run.answer = Some(Answer::Allowed(run.asks_to_run().to_vec()));
+                }
+                RunMark::Denied if matches!(run.last, RunMark::Asks { .. }) => {
+                    run.answer = Some(Answer::Denied);
+                }
+                RunMark::Allowed | RunMark::Denied => {}
+                mark => {
+                    run.last = mark.clone();
+                    run.text.clone_from(&data.text);
+                    run.last_id = e.id;
+                    run.answer = None;
+                }
+            }
+        }
+        // A note of yours on the task, after it asked a question, answers it.
+        for run in &mut runs {
+            if run.needs_you() && run.asks_to_run().is_empty() {
+                run.answer = self
+                    .store
+                    .notes_after(run.node, run.last_id)?
+                    .into_iter()
+                    .find_map(|e| match e.op {
+                        Op::NodeNote { data, .. } if e.by == "human" && data.run.is_none() => {
+                            Some(Answer::Note(data.text))
+                        }
+                        _ => None,
+                    });
+            }
+        }
+        Ok(runs)
+    }
+
     /// The sessions that wrote to node `key`.
     pub fn sessions_of(&self, key: &str) -> Result<Vec<crate::store::SessionUse>> {
         self.store.sessions_of(self.node(key)?.id)
@@ -1073,6 +1191,14 @@ impl Workspace {
         out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Project, &[State::Proposed])?);
+        // A run of Claude waiting for your answer.
+        for run in self.runs()?.into_iter().filter(crate::run::Run::needs_you) {
+            if !out.iter().any(|o| o.id == run.node)
+                && let Some(s) = self.store.summary(run.node)?
+            {
+                out.push(s);
+            }
+        }
         // What waits on a gate the config adds; a gate from any state guards a move but makes
         // nothing wait.
         for g in &self.gates {
@@ -1637,6 +1763,29 @@ impl Workspace {
                     data: NoteData {
                         text: text.to_owned(),
                         health: None,
+                        run: None,
+                    },
+                }])
+            }
+            Command::RunNote { node, text, run } => {
+                use crate::event::RunMark;
+                let n = self.node(&node)?;
+                if matches!(run.mark, RunMark::Allowed | RunMark::Denied) && !by.is_human() {
+                    return Err(Error::Refused(
+                        "letting a run do what it asks is the human's decision".into(),
+                    ));
+                }
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err(Error::Invalid("a note cannot be empty".into()));
+                }
+                let text: String = text.chars().take(NOTE_MAX).collect();
+                Ok(vec![Op::NodeNote {
+                    node: n.id,
+                    data: NoteData {
+                        text,
+                        health: None,
+                        run: Some(run),
                     },
                 }])
             }
@@ -1664,6 +1813,7 @@ impl Workspace {
                     data: NoteData {
                         text: text.to_owned(),
                         health: Some(health),
+                        run: None,
                     },
                 }])
             }
@@ -1732,6 +1882,34 @@ impl Workspace {
                 if props.is_empty() {
                     return Ok(Vec::new());
                 }
+                Ok(vec![Op::NodeSet {
+                    node: n.id,
+                    data: NodePatch {
+                        props: Some(props),
+                        ..NodePatch::default()
+                    },
+                }])
+            }
+            Command::SetAgent { node, agent } => {
+                let n = self.node(&node)?;
+                if n.kind != Kind::Task {
+                    return Err(Error::Invalid(format!(
+                        "{} is a {}; only a task is given to an agent",
+                        n.key, n.kind
+                    )));
+                }
+                let agent = agent.trim();
+                if agent.chars().any(char::is_whitespace) {
+                    return Err(Error::Invalid(format!(
+                        "`{agent}` is not an agent's name (like livtk:implementer)"
+                    )));
+                }
+                let value = prop_value(agent);
+                if n.props.get("agent").unwrap_or(&serde_json::Value::Null) == &value {
+                    return Ok(Vec::new());
+                }
+                let mut props = serde_json::Map::new();
+                props.insert("agent".into(), value);
                 Ok(vec![Op::NodeSet {
                     node: n.id,
                     data: NodePatch {

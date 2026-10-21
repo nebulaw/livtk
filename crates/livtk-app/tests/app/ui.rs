@@ -4123,9 +4123,25 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
 }
 
 /// One stub `claude` and Claude home for the whole test binary (livtk is pointed at them once):
-/// `claude agents` answers with `.stub-agents.json` in the folder it runs in (the project), and
-/// `claude stop` writes `.stub-stopped` there, so each test's project answers for itself. The
-/// home has livtk's plugin with one agent, `implementer`.
+/// `claude agents` answers with `.stub-agents.json` in the folder it runs in (the project),
+/// `claude stop` writes `.stub-stopped` there, and `claude -p` (a run's turn) answers as the next
+/// word in `.stub-turns` there says, so each test's project answers for itself. The home has
+/// livtk's plugin with one agent, `implementer`.
+const STUB_CLAUDE: &str = r#"#!/bin/sh
+if [ "$1" = agents ]; then cat .stub-agents.json 2>/dev/null || echo '[]'; exit 0; fi
+if [ "$1" = stop ]; then echo "$2" >> .stub-stopped; exit 0; fi
+f=.stub-turns
+what=$(head -n 1 "$f")
+tail -n +2 "$f" > "$f.tmp"; mv "$f.tmp" "$f"
+printf '%s\n' "$*" >> .stub-args
+case "$what" in
+  slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
+        echo '{"type":"system","subtype":"init"}'
+        while :; do sleep 0.05; done ;;
+  *) echo '{"type":"result","subtype":"success","is_error":false,"result":"Which colour?","permission_denials":[]}' ;;
+esac
+"#;
+
 fn claude_stub() -> &'static std::path::Path {
     use std::os::unix::fs::PermissionsExt;
     static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -4149,7 +4165,7 @@ fn claude_stub() -> &'static std::path::Path {
         let claude = home.join("claude");
         std::fs::write(
             &claude,
-            "#!/bin/sh\nif [ \"$1\" = agents ]; then cat .stub-agents.json 2>/dev/null || echo '[]'; fi\nif [ \"$1\" = stop ]; then echo \"$2\" >> .stub-stopped; fi\n",
+            STUB_CLAUDE,
         )
         .unwrap();
         std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -4635,4 +4651,142 @@ fn a_named_node_opens_on_a_click(cx: &mut TestAppContext) {
     assert_eq!(detail(cx).as_deref(), Some("LIV-1"));
     let ws = Workspace::open(dir.path()).unwrap();
     assert!(ws.links("LIV-1").unwrap().blocks.is_empty());
+}
+
+/// A run of the stub on LIV-1 (acknowledged first), its turn writing until interrupted.
+fn a_run_writing(root: &std::path::Path) -> livtk_core::run::Runner {
+    let runner = livtk_core::run::Runner {
+        claude: claude_stub().join("claude"),
+    };
+    std::fs::write(root.join(".stub-turns"), "slow\nask\n").unwrap();
+    let mut ws = Workspace::open(root).unwrap();
+    ws.execute(
+        Command::Move {
+            node: "LIV-1".into(),
+            to: State::Acked,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    let live = runner
+        .start(&mut ws, "LIV-1", None, None, &[], &Actor::Human)
+        .unwrap();
+    // Under way: the stub ready for the interrupt.
+    let start = Instant::now();
+    while !std::fs::read_to_string(livtk_core::run::stream_path(ws.dir(), &live.session))
+        .is_ok_and(|s| s.contains("init"))
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the turn never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    runner
+}
+
+/// Tick until the app has surveyed the runs and `done` holds of its model.
+fn until_runs(
+    app: &gpui_kit::Entity<LivtkApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    done: impl Fn(&Model) -> bool,
+) {
+    let start = Instant::now();
+    while !app.read_with(cx, |a, _| done(a.model())) {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the runs never got there"
+        );
+        cx.executor().advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    redraw(cx);
+}
+
+/// Quitting while an agent works asks first: Cancel quits nothing and leaves it working; Stop
+/// them all ends its turn, the run noted as stopped by the quit.
+#[gpui_kit::test]
+fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let runner = a_run_writing(&root);
+    let (app, cx) = open_app(cx, &root);
+    // Found by the app: working.
+    until_runs(&app, cx, |m| m.runs.going.len() == 1);
+    cx.simulate_keystrokes("secondary-q");
+    redraw(cx);
+    assert!(cx.debug_bounds("quit-runs").is_some(), "asked first");
+    assert!(
+        cx.debug_bounds("asked-run-LIV-1").is_some(),
+        "naming the work"
+    );
+    click_on(cx, "runs-cancel");
+    redraw(cx);
+    assert!(cx.debug_bounds("quit-runs").is_none());
+    let mut ws = Workspace::open(&root).unwrap();
+    livtk_core::run::settle(&mut ws, &runner).unwrap();
+    assert_eq!(
+        ws.runs().unwrap()[0].ended(),
+        None,
+        "Cancel stopped nothing"
+    );
+    // Stop them all: the turn ends cleanly, noted as stopped by the quit.
+    cx.simulate_keystrokes("secondary-q");
+    redraw(cx);
+    click_on(cx, "runs-stop");
+    let start = Instant::now();
+    loop {
+        livtk_core::run::settle(&mut ws, &runner).unwrap();
+        if let Some(how) = ws.runs().unwrap()[0].ended() {
+            assert_eq!(how, livtk_core::event::Ending::Quit);
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "never stopped");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+/// On the next start, the runs a quit stopped are offered back once: continued, each resumes
+/// its own session where it left off.
+#[gpui_kit::test]
+fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let runner = a_run_writing(&root);
+    let mut ws = Workspace::open(&root).unwrap();
+    runner
+        .stop(
+            &mut ws,
+            "LIV-1",
+            livtk_core::event::Ending::Quit,
+            &Actor::Human,
+        )
+        .unwrap();
+    let start = Instant::now();
+    while ws.runs().unwrap()[0].ended().is_none() {
+        livtk_core::run::settle(&mut ws, &runner).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(10), "never stopped");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let (app, cx) = open_app(cx, &root);
+    until_runs(&app, cx, |m| m.runs.quit.len() == 1);
+    assert!(cx.debug_bounds("continue-runs").is_some(), "offered back");
+    click_on(cx, "runs-continue");
+    redraw(cx);
+    assert!(cx.debug_bounds("continue-runs").is_none());
+    let start = Instant::now();
+    let session = ws.runs().unwrap()[0].session.clone();
+    loop {
+        let args = std::fs::read_to_string(root.join(".stub-args")).unwrap_or_default();
+        if args.lines().count() == 2 {
+            assert!(args.contains(&format!("--resume {session}")), "{args}");
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "never continued: {args}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

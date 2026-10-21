@@ -6,6 +6,7 @@ mod guard;
 mod hook;
 mod output;
 mod project;
+mod runs;
 mod sessions;
 
 use std::io::Read;
@@ -134,6 +135,31 @@ enum Cmd {
         key: Option<String>,
         #[command(subcommand)]
         cmd: Option<sessions::SessionsCmd>,
+    },
+    /// Run Claude on a task, headless: KEY alone starts the stage its state is ready for
+    /// (planning from the backlog, building once acknowledged, reviewing in review).
+    #[command(args_conflicts_with_subcommands = true)]
+    Run {
+        key: Option<String>,
+        /// plan, build, review or research, instead of the stage the task's state says.
+        #[arg(long)]
+        stage: Option<String>,
+        /// The agent to run as, instead of the task's own or the suggested one.
+        #[arg(long)]
+        agent: Option<String>,
+        #[command(subcommand)]
+        cmd: Option<runs::RunCmd>,
+    },
+    /// The runs of Claude on this project's tasks: going, waiting for you, ended.
+    Runs {
+        /// Ended runs too.
+        #[arg(long)]
+        all: bool,
+    },
+    /// The agent a task is given to, or give it to one.
+    Agent {
+        #[command(subcommand)]
+        cmd: runs::AgentCmd,
     },
     /// Projects: an outcome above tasks, its progress counted from the tasks part of it.
     Project {
@@ -587,6 +613,16 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
         Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
         Cmd::Project { cmd } => project::run(ws, cmd, by, json),
+        Cmd::Run {
+            key: Some(key),
+            stage,
+            agent,
+            cmd: None,
+        } => runs::start(ws, &key, stage.as_deref(), agent, by, json),
+        Cmd::Run { cmd: Some(cmd), .. } => runs::run(ws, cmd, by, json),
+        Cmd::Run { .. } => runs::list(ws, false, json),
+        Cmd::Runs { all } => runs::list(ws, all, json),
+        Cmd::Agent { cmd } => runs::agent(ws, cmd, by, json),
         Cmd::Sessions { key, cmd: None } => sessions::list(ws, key.as_deref(), json),
         Cmd::Sessions { cmd: Some(cmd), .. } => sessions::run(ws, cmd, by, json),
         Cmd::Flow { project } => project::flow(ws, project.as_deref(), json),
@@ -729,6 +765,10 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 },
                 by,
             )?;
+            // Yours, on a task whose run waits: the run reads it next.
+            if by.is_human() {
+                runs::settle(ws);
+            }
             output::noted(&ws.node(&key)?.key, &events, json)
         }
         Cmd::Next => output::next(ws.next()?.as_ref(), json),

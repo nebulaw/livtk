@@ -163,6 +163,7 @@ fn a_page_of_100k_events_and_the_unseen_count_stay_in_budget() {
             Op::NodeNote {
                 node: nodes[i % nodes.len()],
                 data: NoteData {
+                    run: None,
                     text: format!("progress note {i}"),
                     health: None,
                 },

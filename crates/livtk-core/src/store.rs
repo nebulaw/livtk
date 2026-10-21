@@ -17,7 +17,7 @@ use crate::log::Mark;
 use crate::model::{Key, Kind, Rel, State};
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE events (
@@ -34,6 +34,9 @@ CREATE TABLE events (
 CREATE INDEX events_node ON events (node, id);
 CREATE INDEX events_session ON events (session) WHERE session IS NOT NULL;
 CREATE INDEX events_other ON events (other, id) WHERE other IS NOT NULL;
+-- The notes of runs of Claude, read as the app ticks.
+CREATE INDEX events_runs ON events (id)
+    WHERE op = 'node.note' AND json_extract(line, '$.data.run') IS NOT NULL;
 
 CREATE TABLE nodes (
     id         TEXT PRIMARY KEY,
@@ -568,6 +571,29 @@ impl Store {
         Ok(readable(&lines))
     }
 
+    /// The notes of runs of Claude, in the log's order.
+    pub fn run_notes(&self) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT line FROM events WHERE op = 'node.note' \
+             AND json_extract(line, '$.data.run') IS NOT NULL ORDER BY id",
+        )?;
+        let lines: Vec<String> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(readable(&lines))
+    }
+
+    /// The notes on node `node` after event `after`, in the log's order.
+    pub fn notes_after(&self, node: Uuid, after: Uuid) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT line FROM events WHERE node = ?1 AND op = 'node.note' AND id > ?2 ORDER BY id",
+        )?;
+        let lines: Vec<String> = stmt
+            .query_map(params![node.to_string(), after.to_string()], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(readable(&lines))
+    }
+
     /// Events Claude wrote that name no session, in the log's order.
     pub fn unclaimed(&self) -> Result<Vec<Unclaimed>> {
         let mut stmt = self.conn.prepare_cached(
@@ -643,6 +669,17 @@ impl Store {
             (a.state.rank(), a.priority, a.id).cmp(&(b.state.rank(), b.priority, b.id))
         });
         Ok(out)
+    }
+
+    /// Node `id` as the lists show it.
+    pub fn summary(&self, id: Uuid) -> Result<Option<Summary>> {
+        let sql = format!("SELECT {SUMMARY_COLS} FROM nodes n WHERE n.id = ?1");
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut rows = stmt.query([id.to_string()])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(summary_from(row)?)),
+            None => Ok(None),
+        }
     }
 
     /// The best acknowledged task with nothing left to wait for: highest priority first, then

@@ -1371,3 +1371,41 @@ fn a_stored_event_from_a_newer_livtk_is_passed_over_not_an_error() {
     assert_eq!(history.len(), 1, "only the create");
     assert!(ws.activity(None, 10).is_ok());
 }
+
+/// livtk run inside a git worktree of the project writes to the main checkout's log: the one
+/// the app reads, whatever branch the work is on.
+#[test]
+fn a_worktree_writes_to_the_main_checkouts_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().canonicalize().unwrap();
+    let git = |args: &[&str], at: &Path| {
+        let ok = std::process::Command::new("git")
+            .args(args)
+            .current_dir(at)
+            .output()
+            .unwrap();
+        assert!(
+            ok.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+    };
+    git(&["init", "-q"], &main);
+    git(&["config", "user.email", "t@t"], &main);
+    git(&["config", "user.name", "t"], &main);
+    let mut ws = init(&main);
+    task(&mut ws, "in the main checkout");
+    git(&["add", "-A"], &main);
+    git(&["commit", "-qm", "init"], &main);
+    let tree = main.join("wt");
+    git(&["worktree", "add", "-q", tree.to_str().unwrap()], &main);
+    assert!(
+        tree.join(".livtk/config.toml").is_file(),
+        "the worktree has its own copy"
+    );
+    let mut there = Workspace::open(&tree).unwrap();
+    assert_eq!(there.dir(), main.join(".livtk"));
+    task(&mut there, "from the worktree");
+    let ours = Workspace::open(&main).unwrap();
+    assert_eq!(ours.tasks(&[]).unwrap().len(), 2, "both in the main log");
+}

@@ -75,6 +75,21 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "livtk",
+            "args": [
+              "hook",
+              "stop"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

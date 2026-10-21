@@ -37,6 +37,8 @@ pub(super) struct AgentForm {
     model: Option<String>,
     /// The file's other keys, kept as they were.
     extra: String,
+    /// The stage it suits, kept as it was.
+    stage: Option<livtk_core::run::Stage>,
     place: Place,
     loaded: Option<Pick>,
     /// Sessions are being asked for.
@@ -62,6 +64,7 @@ impl AgentForm {
             tools: Vec::new(),
             model: None,
             extra: String::new(),
+            stage: None,
             place: Place::Project,
             loaded: None,
             polling: false,
@@ -143,6 +146,7 @@ impl LivtkApp {
         f.tools = agent.tools;
         f.model = agent.model;
         f.extra = agent.extra;
+        f.stage = agent.stage;
         f.place = place;
         f.loaded = open;
     }
@@ -157,6 +161,7 @@ impl LivtkApp {
             model: f.model.clone(),
             body: f.body.read(cx).value().to_string(),
             extra: f.extra.clone(),
+            stage: f.stage,
         }
     }
 

@@ -18,6 +18,7 @@ mod graph;
 pub mod grid;
 pub mod keys;
 mod palette;
+pub mod runs;
 mod saved;
 pub mod toasts;
 pub use activity::{FeedRow, INDENT, created_as, day_label, describe, note_markdown, reindent};
@@ -659,6 +660,8 @@ pub struct Model {
     activity_seen_before: Option<Uuid>,
     /// The graph view's nodes, links, camera and selection.
     pub graph: Graph,
+    /// Runs of Claude in the open projects: writing, and stopped by the last quit.
+    pub runs: runs::Runs,
     /// Each project's graph camera, by its folder, as last left: taken back on the next visit.
     graph_cameras: HashMap<PathBuf, Camera>,
     displays: HashMap<View, Display>,
@@ -881,6 +884,7 @@ impl Model {
             activity_index: 0,
             activity_seen_before: None,
             graph: Graph::default(),
+            runs: runs::Runs::default(),
             graph_cameras: HashMap::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),

@@ -4,6 +4,7 @@
 //! A SQLite store holds every event plus the current state built from them, and can always be
 //! rebuilt from the log. Every surface goes through [`Workspace`].
 
+pub mod agents;
 pub mod claude;
 pub mod docs;
 mod error;
@@ -16,6 +17,7 @@ pub mod on;
 pub mod registry;
 #[cfg(feature = "embed")]
 pub mod rows;
+pub mod run;
 pub mod search;
 pub mod signal;
 mod store;

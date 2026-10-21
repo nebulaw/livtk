@@ -6,11 +6,12 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::model::{Actor, Health, Kind, Priority, Rel, State};
+pub use crate::run::Stage;
 
 /// The newest format version this livtk reads. Each event carries the version its operation
 /// needs, so adding an operation never changes the bytes of older events, and an older livtk
 /// skips the new operation with a clear "update livtk" warning.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -74,6 +75,8 @@ impl Op {
         let task_state = |s: State| Kind::Task.states().contains(&s);
         let project_state = |s: State| matches!(s, State::Active | State::Paused | State::Dropped);
         match self {
+            // A note of a run of Claude on the node: new in 8.
+            Op::NodeNote { data, .. } if data.run.is_some() => 8,
             // A claim of earlier events for a session: new in 7.
             Op::NodeSession { .. } => 7,
             // A project (the outcome above tasks), its states and its health: new in 6.
@@ -151,6 +154,56 @@ pub struct NoteData {
     /// On a project's update: how it stands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
+    /// On a run of Claude on the node: which run, and what the note marks in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunData>,
+}
+
+/// A run's note: the session it is, the agent it runs as and the stage of the work, and what the
+/// note marks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunData {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub stage: Stage,
+    #[serde(flatten)]
+    pub mark: RunMark,
+}
+
+/// What a run's note marks: it started; it waits for you (a question in the note's text, or the
+/// commands it was refused and asks to run); your answer to that; or how it ended.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mark", rename_all = "snake_case")]
+pub enum RunMark {
+    Started,
+    Asks {
+        /// The tools it was refused, as Claude Code's permission rules name them
+        /// (`Bash(cargo test)`); none for a question.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        allow: Vec<String>,
+    },
+    /// The human let it run what it asked for.
+    Allowed,
+    /// The human refused what it asked for.
+    Denied,
+    Ended {
+        how: Ending,
+    },
+}
+
+/// How a run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ending {
+    /// Its stage's work is done.
+    Done,
+    /// It stopped on an error, or its process went without a word.
+    Failed,
+    /// Stopped by hand, the work kept: it can be started again.
+    Stopped,
+    /// Stopped when the app quit: offered to continue on the next start.
+    Quit,
 }
 
 /// A session's claim to earlier events: the session, and the events it wrote.

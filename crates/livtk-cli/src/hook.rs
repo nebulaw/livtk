@@ -73,7 +73,8 @@ pub fn run(event: &str) -> ExitCode {
         "pre-tool-use" => pre_tool_use(&input),
         // Formatting is the project's own hooks' to do; an older hooks.json still calls this.
         "post-tool-use" => None,
-        "subagent-stop" => subagent_stop(&input),
+        "subagent-stop" => unrecorded_stop(&input, "subagent-stop"),
+        "stop" => stop(&input),
         // A hooks.json newer than this binary: stay out of the way.
         _ => None,
     };
@@ -117,7 +118,24 @@ fn session_start(input: &Value) -> Option<Value> {
     Some(context("SessionStart", text))
 }
 
+/// Mark the session writing (a turn begins) or not (it ends), beside the log: so the app shows
+/// "writing" on its work for a session livtk did not start.
+fn mark_writing(input: &Value, on: bool) {
+    let Some(session) = input.get("session_id").and_then(Value::as_str) else {
+        return;
+    };
+    if let Ok(dir) = livtk_core::find_dir(&cwd(input)) {
+        let _ = livtk_core::run::mark_writing(&dir, session, on);
+    }
+}
+
+fn stop(input: &Value) -> Option<Value> {
+    mark_writing(input, false);
+    unrecorded_stop(input, "stop")
+}
+
 fn user_prompt_submit(input: &Value) -> Option<Value> {
+    mark_writing(input, true);
     let prompt = input.get("prompt")?.as_str()?;
     if prompt.trim().is_empty() {
         return None;
@@ -220,11 +238,12 @@ fn pre_tool_use(input: &Value) -> Option<Value> {
     guard::refuse_path(path).map(|reason| deny(&reason))
 }
 
-/// A stop that would leave the work unrecorded: the implementer stopping while a task it worked
-/// on (one it moved or wrote to) is in progress with nothing recorded about it. Others' tasks
-/// are theirs to record. What only livtk can know, so the one thing it refuses at a stop; a
-/// project's own checks run from its own hooks.
-fn subagent_stop(input: &Value) -> Option<Value> {
+/// A stop that would leave the work unrecorded: the implementer stopping (as a subagent, or as a
+/// session started as the implementer, which a run is) while a task it worked on (one it moved
+/// or wrote to) is in progress with nothing recorded about it. Others' tasks are theirs to
+/// record. What only livtk can know, so the one thing it refuses at a stop; a project's own
+/// checks run from its own hooks. `hook` is the name a project switches it off by.
+fn unrecorded_stop(input: &Value, hook: &str) -> Option<Value> {
     // Once blocked already: let it stop rather than loop.
     if input.get("stop_hook_active").and_then(Value::as_bool) == Some(true) {
         return None;
@@ -234,7 +253,7 @@ fn subagent_stop(input: &Value) -> Option<Value> {
         return None;
     }
     let ws = Workspace::open(&cwd(input)).ok()?;
-    if !ws.config().hook_on("subagent-stop") {
+    if !ws.config().hook_on(hook) {
         return None;
     }
     // Its events are signed with its name (see the guard).

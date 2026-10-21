@@ -72,6 +72,12 @@ with Read, Open (in the terminal) and Stop.
   that task's first event in it, in Sessions.
 - **Read-only.** livtk never writes Claude Code's files.
 
+**Quitting with agents working.** Quitting (Cmd-Q, or Quit livtk) while a run is writing asks
+first, naming each: **Keep them working** (they go on without the app, which finds them again
+when it starts), **Stop them all** (each turn ends cleanly, the work kept, a note on each task
+saying the quit stopped it) or **Cancel**. On the next start, the runs a quit stopped are offered
+back once: **Continue them** or **Leave them stopped**. Nothing is remembered silently.
+
 ## Settings
 
 Settings are a place, not a modal (⌘, or the Settings row under Shortcuts): the sidebar becomes

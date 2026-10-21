@@ -400,11 +400,44 @@ fn an_implementer_may_not_stop_leaving_work_in_progress_unrecorded() {
         "never twice in a row"
     );
     assert_eq!(stop("livtk:refuter", false), None, "only the implementer");
+    // A session started as the implementer (a run) is held to the same at its own stop.
+    let v = answer(
+        "stop",
+        &json!({
+            "hook_event_name": "Stop", "cwd": dir.path(),
+            "agent_type": "livtk:implementer", "stop_hook_active": false,
+        }),
+    )
+    .unwrap();
+    assert_eq!(v["decision"], "block");
     livtk(dir.path(), true, &["note", "LIV-1", "built the thing"]);
     assert_eq!(
         stop("livtk:implementer", false),
         None,
         "recorded: it may stop"
+    );
+}
+
+/// A session's turns mark it writing beside the log, for the app: on as a prompt arrives, off
+/// as the turn stops. Never in the log.
+#[test]
+fn a_sessions_turn_marks_it_writing_beside_the_log() {
+    let dir = project();
+    let mark = dir.path().join(".livtk/runs/writing/sess-1");
+    let log = std::fs::read_to_string(dir.path().join(".livtk/events.jsonl")).unwrap();
+    answer(
+        "user-prompt-submit",
+        &json!({ "cwd": dir.path(), "session_id": "sess-1", "prompt": "go on" }),
+    );
+    assert!(mark.exists(), "writing");
+    answer(
+        "stop",
+        &json!({ "cwd": dir.path(), "session_id": "sess-1" }),
+    );
+    assert!(!mark.exists(), "done writing");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".livtk/events.jsonl")).unwrap(),
+        log
     );
 }
 

@@ -24,6 +24,7 @@ mod notices;
 mod overlays;
 mod panes;
 mod peek;
+mod runs;
 mod settings;
 mod sidebar;
 pub mod state_flow;
@@ -764,6 +765,10 @@ pub struct LivtkApp {
     help: bool,
     /// The About modal is open.
     about: bool,
+    /// The runs modal, when it asks something.
+    asking: Option<runs::Asking>,
+    /// The runs the last quit stopped were offered back this launch.
+    runs_offered: bool,
     /// Settings, open.
     settings: settings::Settings,
     /// Agents' page for an agent, and the Sessions view's polling.
@@ -913,6 +918,7 @@ impl LivtkApp {
                     }
                     app.run_catch_ups(cx);
                     app.run_hooks(cx);
+                    app.survey_runs(cx);
                     let busy = !app.model.flashed.is_empty() || !app.model.leaving().is_empty();
                     let now = Instant::now();
                     app.model.settle(now, FLASH.max(FADE) + POLL);
@@ -989,6 +995,8 @@ impl LivtkApp {
             form: None,
             help: false,
             about: false,
+            asking: None,
+            runs_offered: false,
             settings,
             agent_form,
             menu_state: None,
@@ -1222,7 +1230,7 @@ impl LivtkApp {
     /// Give the keys to what is in front: the new-task form, the palette, the find bar, else the
     /// list.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.help || self.about {
+        if self.help || self.about || self.asking.is_some() {
             self.modal_focus.focus(window, cx);
         } else if let Some(form) = &self.form {
             form.title.read(cx).focus_handle(cx).focus(window, cx);
@@ -1891,7 +1899,10 @@ impl LivtkApp {
     /// Close the overlay on top, and only it (About, the shortcuts, the palette, then the form),
     /// and give the keys to what is now on top.
     fn close_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.about {
+        if self.asking.is_some() {
+            // Asked about runs: closing answers nothing, so nothing quits or starts.
+            self.asking = None;
+        } else if self.about {
             self.about = false;
         } else if self.help {
             self.help = false;
@@ -2749,6 +2760,7 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
+        let asking = self.runs_overlay(cx);
         let palette = self.palette_overlay(cx);
         let peek = self.center_peek(window, cx);
         let notice = self.notice(cx);
@@ -2785,7 +2797,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &Close, window, cx| {
                 if this.menu.is_some() {
                     this.escape(window, cx);
-                } else if this.help || this.about || this.form.is_some() {
+                } else if this.help || this.about || this.asking.is_some() || this.form.is_some() {
                     this.close_top(window, cx);
                 } else if this.reader.finding && this.model.view() == View::Docs {
                     this.close_find(window, cx);
@@ -2971,6 +2983,8 @@ impl Render for LivtkApp {
                     this.open_settings(settings::Section::Appearance, window, cx);
                 }
             }))
+            // Quitting from the window asks first while agents are working.
+            .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.show_over_form(window, cx);
                 this.about = true;
@@ -3080,6 +3094,7 @@ impl Render for LivtkApp {
             .children(palette)
             .children(help)
             .children(about)
+            .children(asking)
             .children(notice)
             .children(drag)
     }

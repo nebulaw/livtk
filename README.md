@@ -56,7 +56,7 @@ project that already briefs Claude at session start gets two overlapping blocks.
   disable = ["session-start"]          # or user-prompt-submit, subagent-start, subagent-stop
 
   [session_start]
-  include = ["tasks", "gates"]         # of intro, tasks, gates, protocol, rules
+  include = ["tasks", "gates"]         # of intro, tasks, projects, gates, protocol, rules
 
   [user_prompt_submit]
   include = ["memory"]                 # of memory (what is recalled), nudge (propose a lesson)

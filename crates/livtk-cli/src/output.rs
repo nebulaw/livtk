@@ -345,10 +345,32 @@ pub fn moved(ws: &Workspace, before: &Node, events: &[Event], json: bool) -> Res
             }
         }
     }
-    // Started: the docs it is linked to, to read first.
-    let started = events.iter().any(|e| {
-        matches!(&e.op, Op::NodeSet { node, data } if *node == before.id && data.state == Some(State::Doing))
+    // Started: the docs it is linked to, to read first, and the outcome it serves.
+    let to = events.iter().find_map(|e| match &e.op {
+        Op::NodeSet { node, data } if *node == before.id => data.state,
+        _ => None,
     });
+    let started = to == Some(State::Doing);
+    let project = if before.kind == Kind::Task {
+        ws.project_of(&before.key).ok().flatten()
+    } else {
+        None
+    };
+    if started && let Some(p) = &project {
+        match livtk_core::done_when(&p.body) {
+            Some(o) => println!("  part of {} {}: {o}", p.key, p.title),
+            None => println!("  part of {} {}", p.key, p.title),
+        }
+    }
+    // Brought to the human's check, or done: the project asks how it stands now.
+    if matches!(to, Some(State::Review | State::Done))
+        && let Some(p) = project.filter(|p| p.state == State::Active)
+    {
+        println!(
+            "  {} may want an update: `livtk project update {} --health on_track|at_risk|off_track \"what moved; what is next\"`",
+            p.key, p.key
+        );
+    }
     if started {
         for (path, title) in ws.docs_of(&before.key).unwrap_or_default() {
             match title {

@@ -479,6 +479,7 @@ impl LivtkApp {
                 "tasks" => "The work in progress, in review, waiting for you, and next.",
                 "gates" => "The moves only you may make.",
                 "protocol" => "How to work: plan, wait for your acknowledgement, record.",
+                "projects" => "The active projects: how far each has come, and what waits on you.",
                 _ => "The standing rules you ratified.",
             };
             let id = format!("settings-session-{section}");

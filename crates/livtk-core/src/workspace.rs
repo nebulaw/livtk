@@ -25,7 +25,7 @@ use crate::search::{
     matched_terms, models_dir, query_terms, text_hash,
 };
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
-pub use project::{ACTIVE_AT_ONCE, Progress, UPDATE_EVERY_DAYS, Update, Waiting};
+pub use project::{ACTIVE_AT_ONCE, Progress, UPDATE_EVERY_DAYS, Update, Waiting, done_when};
 
 /// Recall injects at most this many items into a prompt.
 pub const RECALL_MAX: usize = 3;
@@ -79,7 +79,8 @@ pub const HOOK_NAMES: [&str; 4] = [
     "subagent-stop",
 ];
 /// What the session-start brief is made of, as a reader sees it.
-pub const SESSION_SECTIONS: [&str; 5] = ["intro", "tasks", "gates", "protocol", "rules"];
+pub const SESSION_SECTIONS: [&str; 6] =
+    ["intro", "tasks", "projects", "gates", "protocol", "rules"];
 /// What is added before a prompt: the memory recalled for it, and the nudge to propose a lesson.
 pub const PROMPT_SECTIONS: [&str; 2] = ["memory", "nudge"];
 

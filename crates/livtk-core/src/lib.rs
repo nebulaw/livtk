@@ -27,5 +27,5 @@ pub use store::{Brief, DayEvents, Node, Snapshot, Summary};
 pub use workspace::{
     ACTIVE_AT_ONCE, Activity, Command, Config, DIR_NAME, Gate, Gates, HOOK_NAMES, Hooks, Links,
     Memory, PROMPT_SECTIONS, Progress, RECALL_MAX, SESSION_SECTIONS, Scope, Sections, UNSEEN_CAP,
-    UPDATE_EVERY_DAYS, Update, Waiting, Workspace, find_dir, link_allowed,
+    UPDATE_EVERY_DAYS, Update, Waiting, Workspace, done_when, find_dir, link_allowed,
 };

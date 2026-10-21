@@ -37,6 +37,22 @@ acknowledging, then to stop.
    acknowledged on its own. `livtk link KEY relates OTHER` notes a connection that is not an
    order. A task a doc describes or that changes a doc: `livtk doc link KEY docs/PATH.md`
    (`livtk doc list` shows the docs).
+   **An outcome bigger than a few tasks is a project.** Propose it with its outcome and what
+   "done" means, then create its tasks under it:
+
+   ```bash
+   livtk project new "The outcome in plain words" --body - <<'EOF'
+   Why it matters, and what changes for the people it serves.
+
+   Done when: the one observable condition that says it is reached.
+   EOF
+   livtk new "First task" --parent PRJ-1 --body - < plan.md
+   ```
+
+   A project waits for the human to commit to it (`livtk move PRJ-1 active`, theirs alone),
+   as each of its tasks waits for its ack. A task belongs to one project; a project may sit
+   inside another. Check `livtk project list` first: more than three active at once is worth
+   saying to the human before adding a fourth.
 5. **Move each task to planned:** `livtk move KEY planned`.
 6. **Stop and ask.** Show the human the plan (`livtk list`, plus anything they need to judge it)
    and ask them to acknowledge with `livtk ack KEY` or in the app. You cannot acknowledge, and you

@@ -1160,6 +1160,17 @@ fn a_project_is_proposed_committed_to_by_the_human_and_counts_what_waits_on_them
         list.contains("1 planned") && list.contains("1 review"),
         "{list}"
     );
+    // Brought to review, a task of an active project asks for its update; started, it names
+    // the outcome it serves.
+    ok(d, As::Claude, &["move", "LIV-4", "planned"]);
+    ok(d, As::Human, &["ack", "LIV-4"]);
+    let started = ok(d, As::Claude, &["start", "LIV-4"]);
+    assert!(
+        started.contains("part of PRJ-1 Import the board: Done when: every card is a task."),
+        "{started}"
+    );
+    let reviewed = ok(d, As::Claude, &["move", "LIV-4", "review"]);
+    assert!(reviewed.contains("PRJ-1 may want an update"), "{reviewed}");
     // Done once the human says so.
     ok(d, As::Human, &["done", "LIV-3"]);
     assert_eq!(

@@ -712,3 +712,44 @@ fn a_config_livtk_cannot_read_is_told_to_claude_not_silenced() {
         assert!(text.contains("gatez"), "{event}: {text}");
     }
 }
+
+// ---- projects -----------------------------------------------------------------------------------
+
+#[test]
+fn the_brief_names_active_projects_and_each_task_carries_its_outcome() {
+    let dir = project();
+    let d = dir.path();
+    livtk(
+        d,
+        false,
+        &[
+            "project",
+            "new",
+            "Import the board",
+            "--body",
+            "Bring the board in.\n\nDone when: every card is a task.",
+        ],
+    );
+    livtk(d, true, &["move", "PRJ-1", "active"]);
+    livtk(d, false, &["new", "parse cards", "--parent", "PRJ-1"]);
+    livtk(d, false, &["move", "LIV-1", "planned"]);
+    livtk(d, true, &["ack", "LIV-1"]);
+    livtk(d, false, &["start", "LIV-1"]);
+    let full = brief_of(d).unwrap();
+    assert!(full.contains("Active projects:"), "{full}");
+    assert!(
+        full.contains("PRJ-1 Import the board: 0/1 tasks done"),
+        "{full}"
+    );
+    assert!(
+        full.contains("part of PRJ-1 Import the board: Done when: every card is a task."),
+        "{full}"
+    );
+    // The implementer's brief carries the outcome too.
+    let sub = answer("subagent-start", &json!({ "cwd": d })).unwrap();
+    assert!(context_of(&sub).contains("Done when: every card is a task."));
+    // A project that keeps other sections leaves it out.
+    with_config(d, "[session_start]\ninclude = [\"tasks\"]\n");
+    let some = brief_of(d).unwrap();
+    assert!(!some.contains("Active projects:"), "{some}");
+}

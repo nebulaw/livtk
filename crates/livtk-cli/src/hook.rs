@@ -323,6 +323,9 @@ fn brief(ws: &Workspace, subagent: bool) -> Option<String> {
             false,
         );
     }
+    if say.has("projects") {
+        projects(&mut b, ws);
+    }
     if say.has("gates") {
         // The built-in gates are said in the protocol; without it, here.
         if !say.has("protocol") {
@@ -406,10 +409,58 @@ fn standing_rules(b: &mut String, rules: &[livtk_core::Brief]) {
     b.push_str(&block);
 }
 
+/// The active projects: how far each has come, how it stands, what waits on the human, and an
+/// update asked for when one is missing.
+fn projects(b: &mut String, ws: &Workspace) {
+    let now = jiff::Timestamp::now();
+    let active: Vec<_> = ws
+        .projects()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p.state == State::Active)
+        .collect();
+    if active.is_empty() {
+        return;
+    }
+    let _ = writeln!(b, "Active projects:");
+    for p in active.iter().take(LIST_MAX) {
+        let Ok(g) = ws.progress(&p.key, now) else {
+            continue;
+        };
+        let health = match (&g.update, g.update_missing) {
+            (_, true) => "update missing".to_owned(),
+            (Some(u), false) => u.health.as_str().replace('_', " "),
+            (None, false) => "no update yet".to_owned(),
+        };
+        let waiting: usize = g.waiting.iter().map(|w| w.count).sum();
+        let _ = write!(
+            b,
+            "  {} {}: {}/{} tasks done, {health}",
+            p.key,
+            short(&p.title),
+            g.done,
+            g.total
+        );
+        if waiting > 0 {
+            let _ = write!(b, ", {waiting} waiting on the human");
+        }
+        b.push('\n');
+        if g.update_missing {
+            let _ = writeln!(
+                b,
+                "    write one: `livtk project update {} --health on_track|at_risk|off_track \"what moved; what is next\"`",
+                p.key
+            );
+        }
+    }
+}
+
 fn section(b: &mut String, title: &str, tasks: &[livtk_core::Summary], ws: &Workspace, last: bool) {
     if tasks.is_empty() {
         return;
     }
+    // Which project each task serves, so its outcome travels with it.
+    let projects = ws.projects_of().unwrap_or_default();
     let _ = writeln!(b, "{title}:");
     for t in tasks.iter().take(LIST_MAX) {
         let _ = write!(b, "  {} {}", t.key, short(&t.title));
@@ -440,6 +491,20 @@ fn section(b: &mut String, title: &str, tasks: &[livtk_core::Summary], ws: &Work
             let _ = write!(b, " (last: {what}, by {})", e.by);
         }
         b.push('\n');
+        // The outcome it serves: its project's "Done when".
+        if let Some((_, p)) = projects.get(&t.id) {
+            let outcome = ws
+                .node(&p.key)
+                .ok()
+                .and_then(|n| livtk_core::done_when(&n.body).map(short));
+            let _ = writeln!(
+                b,
+                "    part of {} {}{}",
+                p.key,
+                short(&p.title),
+                outcome.map(|o| format!(": {o}")).unwrap_or_default()
+            );
+        }
         // Its docs, to read: what the work is written against.
         let docs: Vec<String> = ws
             .docs_of(&t.key)

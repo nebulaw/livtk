@@ -10,8 +10,16 @@ use uuid::Uuid;
 
 use super::Workspace;
 use crate::model::{Health, Kind, State};
-use crate::store::{Brief, Summary};
+use crate::store::{Brief, Node, Summary};
 use crate::{Error, Result};
+
+/// What a project's outcome says "done" is: its `Done when:` line, else its body's first line.
+pub fn done_when(body: &str) -> Option<&str> {
+    let lines = || body.lines().map(str::trim).filter(|l| !l.is_empty());
+    lines()
+        .find(|l| l.to_lowercase().starts_with("done when"))
+        .or_else(|| lines().next())
+}
 
 /// An active project with no update for this long reads "update missing".
 pub const UPDATE_EVERY_DAYS: i64 = 7;
@@ -142,6 +150,20 @@ impl Workspace {
             .into_iter()
             .map(|(node, id, brief)| (node, (id, brief)))
             .collect())
+    }
+
+    /// The nearest project node `key` is part of.
+    pub fn project_of(&self, key: &str) -> Result<Option<Node>> {
+        let n = self.node(key)?;
+        match self
+            .store
+            .projects_of()?
+            .into_iter()
+            .find(|(id, _, _)| *id == n.id)
+        {
+            Some((_, project, _)) => self.store.node(project),
+            None => Ok(None),
+        }
     }
 
     /// A project's updates, newest first.

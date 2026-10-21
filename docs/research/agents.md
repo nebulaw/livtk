@@ -134,6 +134,29 @@ Added 2026-10-21 from your notes on TAS-65 and LES-3.
 
   The mark sits beside the log, never in it, so typing never fills the history.
 
+## Designing agents
+
+Added 2026-10-21 from your note on TAS-65: the app is also where agents are made.
+
+- **An agent is a Claude Code agent file:** a markdown file with a name, a description, the tools it
+  may use, an optional model, and its instructions as the body. livtk's own are in the plugin
+  (implementer, refuter, researcher). A project's own go in `.claude/agents/`, and yours in
+  `~/.claude/agents/`. Claude Code reads all three, so an agent made in the app works in any
+  session, not only in livtk's runs.
+- **The Agents place lists them** beside the runs, grouped livtk's, this project's and yours. Each
+  has a page:
+  - name and description;
+  - the tools it may use, as switches;
+  - its model, and its permission mode for runs;
+  - its instructions, in the same editor as the docs.
+
+  New agent starts from a blank page or from a copy of one that exists. livtk's own agents can be
+  copied, not changed: an update of the plugin would overwrite the change.
+- **Picked on a task.** The Agent field offers every agent there is, with the suggested one first.
+  An agent may say which stage it suits (plan, build, review, research) in a line of its file, and
+  the suggestion follows that.
+- Editing an agent never changes a run already going: a run keeps the agent as it started.
+
 ## The hard parts
 
 1. **Worktrees and the log.** `.livtk/events.jsonl` is in git. An agent working in a worktree would write
@@ -157,22 +180,39 @@ Added 2026-10-21 from your notes on TAS-65 and LES-3.
 
    The installed CLI is 2.1.280, and the docs describe up to 2.1.302.
 
-## The work, if this is accepted
+## The work
 
-1. **Spike: the supervisor as livtk would use it.** Try each item in (4) on this machine. Record what
-   holds as a finding, and narrow the plan where it doesn't.
+Created 2026-10-21 as planned tasks, each waiting for your ack. The open questions below are taken
+as recommended; say otherwise in a note on the task it touches.
+
+1. **Spike: runs as livtk would drive them.** Check, on this machine:
+   - headless `claude -p` with stream-json, resumed by session id;
+   - a plugin agent run as the session's agent;
+   - how a question or a permission request reaches livtk (the permission prompt tool, or
+     PreToolUse `defer`);
+   - the `claude --bg` supervisor's flags and JSON.
+
+   Record what holds as a finding and narrow the rest of the plan to it.
 2. **Runs in the core and CLI:**
-   - the `agent` prop and the suggestion rule;
+   - the `agent` prop and the suggestion;
    - run records;
-   - `livtk agent set KEY implementer`, `livtk run KEY` (starts through the supervisor), `livtk runs`
-     (the supervisor's live state joined to tasks), `livtk run stop KEY`;
-   - the guard writing to the main log from worktrees;
-   - the stop check for sessions started as the implementer.
-3. **The Agents view and a task's Agent field** in the app: the rows, Watch in the terminal, Start, Stop,
-   Resume, and "starting…" at once. Behaviour tests only.
-4. **Automatic start and the queue:** the three project settings, the start on ack and on review, the
-   limit, and merging a done build's branch.
-5. **Retire `scripts/watch`** and update the skills and the README to the new loop.
+   - the runner that starts, resumes and stops a headless session;
+   - needs-you notes, and a reply note resuming the run;
+   - the "writing" mark beside the log;
+   - `livtk run`, `livtk runs`, `livtk run stop`;
+   - the stop check for a session started as the implementer;
+   - writing to the main log from a worktree.
+3. **The Agents place in the app:** the runs (Needs you first) and the agent files (livtk's, this
+   project's, yours) with their pages for making and editing agents.
+4. **The conversation on the task:**
+   - the Agent field, and Start / Stop in a task's detail;
+   - the notes as the conversation;
+   - needs-you in the Inbox, and Allow / Deny on a permission note;
+   - "Claude is writing…".
+5. **Starting on its own:** the project settings (automatic start, how many build at once,
+   worktree or in place), the start on ack and on review, the queue, and merging a done build's
+   branch.
+6. **Retire `scripts/watch`:** the skills and the README follow the new loop.
 
 ## Open questions for you
 

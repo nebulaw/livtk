@@ -488,11 +488,13 @@ impl Store {
         Ok(out)
     }
 
-    /// The sessions that wrote to node `id`, each by actor, first seen first.
+    /// The sessions that wrote to node `id`, each by actor, first seen first. A claim is
+    /// bookkeeping, not work: it counts in none of these.
     pub fn sessions_of(&self, id: Uuid) -> Result<Vec<SessionUse>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT session, by, min(at), max(at), count(*) FROM events \
-             WHERE node = ?1 AND session IS NOT NULL GROUP BY session, by ORDER BY min(at)",
+             WHERE node = ?1 AND session IS NOT NULL AND op != 'node.session' \
+             GROUP BY session, by ORDER BY min(at)",
         )?;
         let rows = stmt
             .query_map([id.to_string()], |r| {
@@ -512,7 +514,8 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<SessionSummary>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT session, min(at), max(at), count(DISTINCT node), group_concat(DISTINCT by) \
-             FROM events WHERE session IS NOT NULL GROUP BY session ORDER BY max(at) DESC",
+             FROM events WHERE session IS NOT NULL AND op != 'node.session' \
+             GROUP BY session ORDER BY max(at) DESC",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -533,7 +536,8 @@ impl Store {
     pub fn session_nodes(&self, session: &str) -> Result<Vec<Brief>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT n.key, n.title, n.state, n.kind, min(e.id) AS first FROM events e \
-             JOIN nodes n ON n.id = e.node WHERE e.session = ?1 GROUP BY n.id ORDER BY first",
+             JOIN nodes n ON n.id = e.node WHERE e.session = ?1 AND e.op != 'node.session' \
+             GROUP BY n.id ORDER BY first",
         )?;
         let rows: Vec<(String, String, String, String)> = stmt
             .query_map([session], |r| {

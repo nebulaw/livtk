@@ -1318,6 +1318,11 @@ fn claudes_writes_name_their_session_and_earlier_ones_can_be_claimed() {
         by_session.contains(&("sess-old".into(), 2)),
         "{by_session:?}"
     );
+    // The claim itself is bookkeeping: the session that wrote it is credited with its note only.
+    assert!(
+        by_session.contains(&("sess-main".into(), 1)),
+        "{by_session:?}"
+    );
     // Claimed again: nothing left to claim, nothing written.
     let again = ws
         .execute(

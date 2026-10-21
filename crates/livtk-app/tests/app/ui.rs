@@ -4382,6 +4382,17 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
             .map(|e| matches!(e, livtk_core::claude::Entry::Tool { .. }))
     });
     assert_eq!(marked, Some(true));
+    // Esc in Agents leaves the session read in Sessions alone.
+    cx.simulate_keystrokes("g e");
+    redraw(cx);
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    cx.simulate_keystrokes("g s");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("session-reader").is_some(),
+        "still read, back in Sessions"
+    );
     // A call is one line until opened.
     click_on(cx, "call-toolu_1");
     redraw(cx);

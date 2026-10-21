@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use livtk_core::Activity;
 use livtk_core::claude::{Entry, Transcript};
 
-use super::Model;
+use super::{Model, View};
 use crate::agents::{self, Agent, AgentFile, Place, Session};
 
 /// What Agents and Sessions hold.
@@ -105,6 +105,16 @@ pub enum Pick {
     Agent(PathBuf),
     /// A new agent, from blank or a copy, to be saved in a place.
     New(Agent),
+}
+
+impl Pick {
+    /// The view it is picked in: a session in Sessions, an agent in Agents.
+    pub fn view(&self) -> View {
+        match self {
+            Pick::Session(_) => View::Sessions,
+            Pick::Agent(_) | Pick::New(_) => View::Agents,
+        }
+    }
 }
 
 impl Model {
@@ -362,6 +372,24 @@ impl Model {
     /// The project's folder, where its sessions work and its agents live.
     pub fn project_root(&self) -> Option<PathBuf> {
         self.project().map(|p| p.ws.root().to_path_buf())
+    }
+
+    /// Esc in `view`: in Sessions, the session read gives way to the list, then its pick to
+    /// nothing; in Agents, the agent's pick. Whether there was anything to close there.
+    pub fn agents_back(&mut self, view: View) -> bool {
+        if view == View::Sessions && self.close_reader() {
+            return true;
+        }
+        if self.agents_pick_in(view).is_some() {
+            self.pick_agent(None);
+            return true;
+        }
+        false
+    }
+
+    /// What is picked in `view`'s panel, if anything.
+    pub fn agents_pick_in(&self, view: View) -> Option<&Pick> {
+        self.agents.open.as_ref().filter(|p| p.view() == view)
     }
 
     pub fn pick_agent(&mut self, pick: Option<Pick>) {

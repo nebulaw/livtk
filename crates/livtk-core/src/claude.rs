@@ -252,8 +252,9 @@ pub fn read(path: &Path, from: u64, limit: usize) -> std::io::Result<Page> {
 }
 
 /// Where to start reading the transcript at `path` to see what happened at `at`: the byte
-/// offset of the line `back` records before the first one at or after `at` (or of the start).
-/// Only the timestamps are looked at, so a long transcript is crossed quickly.
+/// offset of the turn `back` turns (prompts, replies, calls, results) before the first record at
+/// or after `at` (or of the start). Bookkeeping lines (titles, modes, attachments) are not
+/// counted. Only a few keys are looked for, so a long transcript is crossed quickly.
 pub fn offset_near(path: &Path, at: &str, back: usize) -> std::io::Result<u64> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut starts: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
@@ -265,17 +266,24 @@ pub fn offset_near(path: &Path, at: &str, back: usize) -> std::io::Result<u64> {
         if n == 0 {
             return Ok(starts.front().copied().unwrap_or(0));
         }
-        if starts.len() > back {
-            starts.pop_front();
+        let t = timestamp(&line);
+        if t.is_some() && is_turn(&line) {
+            if starts.len() > back {
+                starts.pop_front();
+            }
+            starts.push_back(offset);
         }
-        starts.push_back(offset);
         offset += n as u64;
-        if let Some(t) = timestamp(&line)
-            && t >= at
-        {
+        if t.is_some_and(|t| t >= at) {
             return Ok(starts.front().copied().unwrap_or(0));
         }
     }
+}
+
+/// Whether a record is a turn of the conversation, read without parsing it: only the top level
+/// says `"type":"user"` or `"type":"assistant"` (a message says its `role`).
+fn is_turn(line: &str) -> bool {
+    line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"")
 }
 
 /// A record's timestamp, read without parsing the record.

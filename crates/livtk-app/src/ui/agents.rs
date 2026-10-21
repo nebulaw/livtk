@@ -74,11 +74,7 @@ impl LivtkApp {
     /// Whether the panel shows this view's pick: an agent in Agents, a session in Sessions.
     pub(super) fn agents_panel_open(&self) -> bool {
         // Each view's own: a session in Sessions, an agent in Agents.
-        matches!(
-            (self.model.view(), &self.model.agents.open),
-            (View::Sessions, Some(Pick::Session(_)))
-                | (View::Agents, Some(Pick::Agent(_) | Pick::New(_)))
-        )
+        self.model.agents_pick_in(self.model.view()).is_some()
     }
 
     /// Ask Claude Code for the sessions, off the window's thread, again every few seconds while

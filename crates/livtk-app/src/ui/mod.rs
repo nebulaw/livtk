@@ -2793,13 +2793,9 @@ impl Render for LivtkApp {
                 {
                     // Done reading: the list again.
                     this.leave_reading(window, cx);
-                } else if matches!(this.model.view(), View::Agents | View::Sessions)
-                    && (this.model.agents.reader.is_some() || this.model.agents.open.is_some())
-                {
-                    // A session being read gives way to the list, then the panel to nothing.
-                    if !this.model.close_reader() {
-                        this.model.pick_agent(None);
-                    }
+                } else if this.model.agents_back(this.model.view()) {
+                    // In Sessions, a session read gives way to the list, then the panel to
+                    // nothing; in Agents, the panel.
                     cx.notify();
                 } else if this.model.view() == View::Activity
                     && this.model.detail.is_none()

@@ -154,3 +154,34 @@ fn reading_starts_a_little_before_a_time_without_reading_the_rest() {
     );
     assert!(livtk_core::claude::offset_near(&path, "2999-01-01T00:00:00.000Z", 1).unwrap() > 0);
 }
+
+/// Bookkeeping between the turns (titles, modes, timed or not) is not counted: a turn back is
+/// a turn back.
+#[test]
+fn reading_back_counts_turns_not_bookkeeping() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let rec = |v: serde_json::Value| format!("{v}\n");
+    let mut t = String::new();
+    t += &rec(
+        serde_json::json!({"type": "assistant", "timestamp": "2026-10-16T08:00:01.000Z",
+        "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+        "input": {"command": "livtk note X hi"}}]}}),
+    );
+    for kind in ["ai-title", "mode", "permission-mode", "agent-name"] {
+        t += &rec(serde_json::json!({"type": kind}));
+    }
+    t += &rec(serde_json::json!({"type": "attachment", "timestamp": "2026-10-16T08:00:01.500Z"}));
+    t += &rec(
+        serde_json::json!({"type": "user", "timestamp": "2026-10-16T08:00:02.000Z",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}),
+    );
+    std::fs::write(&path, t).unwrap();
+    let from = livtk_core::claude::offset_near(&path, "2026-10-16T08:00:01.800Z", 1).unwrap();
+    let page = read(&path, from, 100).unwrap();
+    assert!(
+        matches!(page.entries[0], Entry::Tool { .. }),
+        "{:?}",
+        page.entries
+    );
+}

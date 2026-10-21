@@ -36,13 +36,13 @@ macro_rules! icons {
 icons! {
     Inbox => "inbox",
     Activity => "bolt-alt",
-    Tasks => "task",
-    Lessons => "cognition",
+    Tasks => "ticket-star",
+    Lessons => "light-bulb-alt",
     Decisions => "route",
     Findings => "medical-flask",
     Projects => "bullseye",
-    Agents => "brain-circuit",
-    Graph => "circuit-board",
+    Agents => "cognition",
+    Graph => "mesh",
     /// The project's docs.
     Docs => "book",
     Terminal => "terminal",

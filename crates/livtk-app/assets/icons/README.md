@@ -13,6 +13,10 @@ compiled into it; the rest cost nothing.
 To add one, download it from boxicons.com in the same style (filled, regular weight) and drop the
 SVG here under its own `bx-` name.
 
+`bx-light-bulb-alt.svg` (lessons) came the same way as `bx-move-horizontal.svg` below: the
+*filled* path of `@boxicons/js` 1.0.1's `LightBulbAlt`, unchanged, in the same wrapper and credit
+comment.
+
 `bx-move-horizontal.svg` (the resize edges' handle) came later, from Boxicons' own npm package,
 `@boxicons/js` 1.0.1: its *filled* path, unchanged, in the same wrapper and credit comment as the
 files from boxicons.com. That package's shapes are the site's: its `arrow-down-up` is the

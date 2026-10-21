@@ -7349,7 +7349,7 @@ fn kind_slot(kind: Kind) -> Div {
 }
 
 /// A view's icon, as the sidebar and the palette show it.
-fn view_icon(view: View) -> Icon {
+pub fn view_icon(view: View) -> Icon {
     match view {
         View::Of(_) => Icon::Grouping,
         View::Inbox => Icon::Inbox,

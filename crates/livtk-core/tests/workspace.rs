@@ -1209,7 +1209,8 @@ fn flow_numbers_match_a_hand_built_log() {
     let f = ws.flow(None, now).unwrap();
     let h = 3600;
     let of = |s: State| f.states.iter().find(|t| t.state == s).cloned().unwrap();
-    // Backlog: LIV-1 1h, LIV-2 2h; median of two is the upper, 2h; total 3h.
+    // Backlog: LIV-1 1h, LIV-2 2h; the median of two is their mean, 1.5h; total 3h.
+    assert_eq!(of(State::Backlog).median_secs, 3 * h / 2);
     assert_eq!(
         (of(State::Backlog).tasks, of(State::Backlog).total_secs),
         (2, 3 * h)

@@ -111,7 +111,7 @@ impl Workspace {
                 Some(StateTime {
                     state: s,
                     tasks: times.len(),
-                    median_secs: times[times.len() / 2],
+                    median_secs: median(&times),
                     total_secs: times.iter().sum(),
                 })
             })
@@ -167,5 +167,15 @@ impl Workspace {
             queues,
             lead,
         })
+    }
+}
+
+/// The middle of `sorted`, or the mean of its two middle values when its count is even.
+fn median(sorted: &[i64]) -> i64 {
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2
     }
 }

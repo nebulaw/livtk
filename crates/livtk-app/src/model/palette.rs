@@ -599,19 +599,9 @@ impl Model {
             run,
         };
         out.push(plain("New task", Some("N"), Run::Ask(Ask::NewTask)));
-        for (v, keys) in [
-            (View::Inbox, "G I"),
-            (View::Activity, "G A"),
-            (View::Tasks, "G T"),
-            (View::Projects, "G P"),
-            (View::Agents, "G E"),
-            (View::Lessons, "G L"),
-            (View::Decisions, "G D"),
-            (View::Findings, "G F"),
-            (View::Docs, "G O"),
-            (View::Graph, "G R"),
-            (View::Terminal, "G X"),
-        ] {
+        // Every view with its go-to key, as the views say them.
+        for v in View::ALL {
+            let Some(keys) = v.go_keys() else { continue };
             if v != self.pane().view {
                 out.push(plain(
                     &format!("Go to {}", v.title()),

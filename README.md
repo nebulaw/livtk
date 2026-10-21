@@ -92,6 +92,7 @@ closed = ["closed"]                        # what counts as over (the last state
 human  = ["mitigated -> closed"]           # moves only you may make
 key    = "INC"                             # its keys: INC-1, INC-2
 memory = false                             # true: recalled like lessons and findings
+icon   = "bug"                             # its icon in the app; a name it lacks is said, with the names it has
 
 [[relations]]
 name    = "implements"

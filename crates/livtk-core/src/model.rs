@@ -82,6 +82,12 @@ impl Kind {
     }
 
     /// What recall draws from: lessons, decisions, findings, and declared kinds that say so.
+    /// The icon a declared kind asks the app for, by name; `None` for built-in kinds and for
+    /// declared ones that leave it to the app.
+    pub fn icon_name(self) -> Option<String> {
+        self.declared().and_then(|d| d.spec.icon)
+    }
+
     pub fn is_memory(self) -> bool {
         match self {
             Kind::Task | Kind::Project => false,
@@ -545,6 +551,9 @@ pub struct KindSpec {
     /// Whether recall draws from it, as from lessons, decisions and findings.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    /// The icon the app shows for it, by the icon's name (`flag`); the app's own when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// A declared kind as the rules read it.

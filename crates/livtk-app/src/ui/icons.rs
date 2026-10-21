@@ -17,6 +17,11 @@ macro_rules! icons {
         impl Icon {
             pub const ALL: &[Icon] = &[$(Icon::$name,)*];
 
+            /// The icon whose file is `name` (without `bx-` and `.svg`), if the app has it.
+            pub fn named(name: &str) -> Option<Icon> {
+                Icon::ALL.iter().copied().find(|i| i.file() == name)
+            }
+
             /// The file it comes from, without `bx-` and `.svg`.
             pub const fn file(self) -> &'static str {
                 match self {

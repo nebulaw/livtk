@@ -6,11 +6,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_component::Sizable;
-use gpui_component::input::{Input, InputState};
+use gpui_component::input::InputState;
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+use super::form::{button, chip, choice, field, segmented};
 use super::icons::{Icon, icon};
 use super::theme::*;
 use super::{LivtkApp, ago, event_line, section_label};
@@ -415,7 +416,7 @@ impl LivtkApp {
         let mut actions = div().flex().gap_2();
         if let Some(id) = s.session_id.clone() {
             actions = actions.child(
-                action_button("session-open", "Open in the terminal", true).on_click(cx.listener(
+                button("session-open", "Open in the terminal", true).on_click(cx.listener(
                     move |this, _, window, cx| {
                         // The one livtk found: the Finder's PATH is short.
                         let claude = agents::claude()
@@ -433,15 +434,15 @@ impl LivtkApp {
         if s.is_background()
             && let Some(id) = s.id.clone()
         {
-            actions = actions.child(action_button("session-stop", "Stop", false).on_click(
-                cx.listener(move |this, _, _, cx| {
+            actions = actions.child(button("session-stop", "Stop", false).on_click(cx.listener(
+                move |this, _, _, cx| {
                     match agents::stop(&id) {
                         Ok(()) => this.model.inform("Stopped."),
                         Err(e) => this.model.warn(e),
                     }
                     cx.notify();
-                }),
-            ));
+                },
+            )));
         }
         page = page.child(actions);
         let seen = self.model.session_activity(&s);
@@ -574,30 +575,30 @@ impl LivtkApp {
         if editable {
             let replacing: Option<PathBuf> = picked.as_ref().map(|p| p.path.clone());
             let place = picked.as_ref().map_or(f.place, |p| p.place);
-            actions = actions.child(action_button("agent-save", "Save", true).on_click(
-                cx.listener(move |this, _, _, cx| {
+            actions = actions.child(button("agent-save", "Save", true).on_click(cx.listener(
+                move |this, _, _, cx| {
                     let agent = this.form_agent(cx);
                     this.model.save_agent(place, &agent, replacing.clone());
                     cx.notify();
-                }),
-            ));
+                },
+            )));
         }
         if let Some(p) = &picked {
             let mut copy = p.agent.clone();
             copy.name = format!("{}-copy", copy.name);
-            actions = actions.child(action_button("agent-copy", "Copy", false).on_click(
-                cx.listener(move |this, _, _, cx| {
+            actions = actions.child(button("agent-copy", "Copy", false).on_click(cx.listener(
+                move |this, _, _, cx| {
                     this.model.pick_agent(Some(Pick::New(copy.clone())));
                     cx.notify();
-                }),
-            ));
+                },
+            )));
             if p.place.editable() {
                 let label = if self.model.agents.confirm_remove {
                     "Remove: press again"
                 } else {
                     "Remove"
                 };
-                actions = actions.child(action_button("agent-remove", label, false).on_click(
+                actions = actions.child(button("agent-remove", label, false).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.model.remove_agent();
                         cx.notify();
@@ -665,101 +666,4 @@ fn labelled(label: &'static str, control: impl IntoElement) -> Div {
         .gap_1()
         .child(div().text_xs().text_color(color(TEXT_4)).child(label))
         .child(control)
-}
-
-fn field(state: &Entity<InputState>, id: &'static str) -> Div {
-    div()
-        .debug_selector(move || id.into())
-        .h(px(28.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_lg()
-        .bg(color(CONTENT))
-        .border_1()
-        .border_color(color(BORDER_STRONG))
-        .child(
-            div()
-                .flex_1()
-                .child(Input::new(state).appearance(false).small()),
-        )
-}
-
-fn segmented() -> Div {
-    div()
-        .flex()
-        .p(px(2.))
-        .gap(px(2.))
-        .rounded_lg()
-        .bg(color(SURFACE))
-        .border_1()
-        .border_color(color(BORDER))
-}
-
-fn choice(id: String, label: &'static str, on: bool) -> Stateful<Div> {
-    div()
-        .id(SharedString::from(id.clone()))
-        .debug_selector(move || id.clone())
-        .h(px(24.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_md()
-        .text_xs()
-        .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
-        .when(!on, |d| {
-            d.text_color(color(TEXT_3))
-                .hover(|h| h.text_color(color(TEXT_2)))
-        })
-        .child(label)
-}
-
-/// A tool's chip: lit while chosen.
-fn chip(id: &str, label: &'static str, on: bool) -> Stateful<Div> {
-    let sel = format!("{id}-{}", if on { "on" } else { "off" });
-    div()
-        .id(SharedString::from(id.to_owned()))
-        .debug_selector(move || sel.clone())
-        .h(px(22.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_full()
-        .text_xs()
-        .border_1()
-        .when(on, |d| {
-            d.bg(color(SELECTED))
-                .border_color(color(ACCENT))
-                .text_color(color(TEXT))
-        })
-        .when(!on, |d| {
-            d.border_color(color(BORDER_STRONG))
-                .text_color(color(TEXT_3))
-                .hover(|h| h.text_color(color(TEXT_2)))
-        })
-        .child(label)
-}
-
-fn action_button(id: &'static str, label: &str, main: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .debug_selector(move || id.into())
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_lg()
-        .text_sm()
-        .when(main, |d| {
-            d.bg(color(ACCENT))
-                .text_color(color(TEXT))
-                .hover(|h| h.bg(color(ACCENT_HOVER)))
-        })
-        .when(!main, |d| {
-            d.border_1()
-                .border_color(color(BORDER_STRONG))
-                .text_color(color(TEXT_2))
-                .hover(|h| h.bg(color(HOVER)))
-        })
-        .child(label.to_owned())
 }

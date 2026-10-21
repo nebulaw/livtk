@@ -327,3 +327,31 @@ fn choosing_a_node_clears_a_state_filter_that_hides_it() {
     );
     assert_eq!(m.selected().map(|r| r.key.as_str()), Some("LIV-3"));
 }
+
+/// Every view is offered as "Go to …" with the keys the view says it has: one table, no list
+/// kept by hand.
+#[test]
+fn every_view_is_offered_with_its_own_keys() {
+    use livtk_app::model::View;
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = app(dir.path());
+    m.open_palette();
+    for v in View::ALL {
+        if v == m.view() {
+            continue;
+        }
+        let label = format!("Go to {}", v.title());
+        m.palette_query(&label);
+        let first = m
+            .palette
+            .as_ref()
+            .unwrap()
+            .items
+            .first()
+            .and_then(|i| match i {
+                Item::Action(a) => Some((a.label.clone(), a.shortcut)),
+                _ => None,
+            });
+        assert_eq!(first, Some((label, v.go_keys())));
+    }
+}

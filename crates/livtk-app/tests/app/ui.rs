@@ -3082,7 +3082,7 @@ fn the_menus_tick_what_is_on() {
     let state = MenuState {
         projects: vec!["tasks".into(), "other".into()],
         current: 1,
-        view: 2,
+        view: Some(livtk_app::model::View::Tasks),
         board: true,
         show_empty: true,
         show_dismissed: false,
@@ -3266,7 +3266,11 @@ fn the_docks_items_work_with_no_window_active(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("g t");
     cx.deactivate_window();
     let available = |cx: &mut gpui_kit::VisualTestContext| {
-        cx.update(|_, cx| cx.is_action_available(&livtk_app::ui::GoInbox))
+        cx.update(|_, cx| {
+            cx.is_action_available(&livtk_app::ui::GoView {
+                view: livtk_app::model::View::Inbox,
+            })
+        })
     };
     assert!(!available(cx), "with no window active, nobody hears it");
     // As the Dock sends them: from the app, not from inside the window (which a test's
@@ -3275,7 +3279,13 @@ fn the_docks_items_work_with_no_window_active(cx: &mut TestAppContext) {
     let weak = app.downgrade();
     cx.update(|_, cx| livtk_app::ui::dock_actions(window, weak, cx));
     assert!(available(cx), "the Dock's item is not greyed");
-    cx.update(|_, cx| cx.defer(|cx| cx.dispatch_action(&livtk_app::ui::GoInbox)));
+    cx.update(|_, cx| {
+        cx.defer(|cx| {
+            cx.dispatch_action(&livtk_app::ui::GoView {
+                view: livtk_app::model::View::Inbox,
+            })
+        })
+    });
     cx.run_until_parked();
     app.read_with(cx, |a, _| assert_eq!(a.model().view(), View::Inbox));
     cx.deactivate_window();
@@ -4257,4 +4267,96 @@ fn agents_have_their_own_sidebar_section_above_the_tools(cx: &mut TestAppContext
     // A heading between Docs and Agents: more than a row's step apart.
     let step = agents.top() - docs.top();
     assert!(step > docs.size.height * 1.5, "{step:?}");
+}
+
+/// G and a view's key goes to it, for every view; and the View menu lists every view, the one
+/// shown ticked. Both read the views' own table.
+#[gpui_kit::test]
+fn every_view_has_its_keys_and_its_menu_item(cx: &mut TestAppContext) {
+    use livtk_app::model::View;
+    use livtk_app::ui::menus::{MenuState, menu_bar};
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    for v in View::ALL {
+        let keys = v
+            .go_keys()
+            .expect("every built-in view has keys")
+            .to_lowercase();
+        // The terminal would start a real shell here: its key is checked by its binding.
+        if v == View::Terminal {
+            let bound = cx.update(|_, cx| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings_for_action(&livtk_app::ui::GoView { view: v })
+                    .any(|b| {
+                        b.keystrokes()
+                            .iter()
+                            .map(|k| k.unparse())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            == keys
+                    })
+            });
+            assert!(bound, "{keys}");
+            continue;
+        }
+        cx.simulate_keystrokes(&keys);
+        redraw(cx);
+        assert_eq!(app.read_with(cx, |a, _| a.model().view()), v, "{keys}");
+    }
+    let bar = menu_bar(&MenuState {
+        view: Some(View::Agents),
+        ..MenuState::default()
+    });
+    let view_menu = bar.iter().find(|m| m.name.as_ref() == "View").unwrap();
+    for v in View::ALL {
+        let ticked = view_menu.items.iter().find_map(|i| match i {
+            gpui_kit::MenuItem::Action { name, checked, .. } if name.as_ref() == v.title() => {
+                Some(*checked)
+            }
+            _ => None,
+        });
+        assert_eq!(ticked, Some(v == View::Agents), "{}", v.title());
+    }
+}
+
+/// A kind wears one icon wherever it shows: its view's is its rows' slot's. A declared kind may
+/// name one (`icon = "bug"`); a name the app does not have is said, with the names it has.
+#[gpui_kit::test]
+fn a_kind_has_one_icon_and_a_declared_one_may_name_it(cx: &mut TestAppContext) {
+    use livtk_app::model::View;
+    use livtk_app::ui::{kind_icon, view_icon};
+    for k in [
+        Kind::Task,
+        Kind::Lesson,
+        Kind::Decision,
+        Kind::Finding,
+        Kind::Project,
+    ] {
+        let view = View::ALL.into_iter().find(|v| v.kind() == Some(k)).unwrap();
+        assert_eq!(view_icon(view), kind_icon(k), "{k}");
+    }
+    let dir = project();
+    let config = dir.path().join(".livtk/config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "\n[[kinds]]\nname = \"defect\"\nstates = [\"open\", \"fixed\"]\nkey = \"DEF\"\nicon = \"bug\"\n\
+         [[kinds]]\nname = \"chore\"\nstates = [\"open\", \"done\"]\nkey = \"CHO\"\nicon = \"nope\"\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    let defect = Kind::named("defect").unwrap();
+    assert_eq!(kind_icon(defect).file(), "bug");
+    assert_eq!(view_icon(View::Of(defect)), kind_icon(defect));
+    // The unknown name is said, naming the kind and what there is; it shows a general icon.
+    let said = app.read_with(cx, |a, _| {
+        a.model()
+            .toasts()
+            .shown()
+            .0
+            .iter()
+            .any(|t| t.text.contains("`chore`: no icon `nope`") && t.text.contains("bug"))
+    });
+    assert!(said);
+    assert_eq!(kind_icon(Kind::named("chore").unwrap()).file(), "blocks");
 }

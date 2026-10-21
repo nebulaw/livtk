@@ -34,7 +34,7 @@ pub use saved::{Saved, SavedView, SavedWindow};
 pub use toasts::{Act, Button, Level, Mark, Toast, Toasts};
 
 /// The views in the sidebar, in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum View {
     Inbox,
     /// Every change in the project, newest first.
@@ -87,6 +87,26 @@ impl View {
             View::Docs => "Docs",
             View::Agents => "Agents",
         }
+    }
+
+    /// The keys that go to the view, as the palette shows them (`G T` for the tasks; bound as
+    /// `g t`); a declared kind's view has none. The key bindings, the View menu and the palette
+    /// all read them from here.
+    pub const fn go_keys(self) -> Option<&'static str> {
+        Some(match self {
+            View::Inbox => "G I",
+            View::Activity => "G A",
+            View::Tasks => "G T",
+            View::Projects => "G P",
+            View::Lessons => "G L",
+            View::Decisions => "G D",
+            View::Findings => "G F",
+            View::Docs => "G O",
+            View::Agents => "G E",
+            View::Graph => "G R",
+            View::Terminal => "G X",
+            View::Of(_) => return None,
+        })
     }
 
     /// Whether the view lays its nodes out as a board too: the tasks, and a declared kind.

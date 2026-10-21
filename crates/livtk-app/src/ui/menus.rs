@@ -6,10 +6,11 @@
 use gpui_kit::component::input;
 use gpui_kit::*;
 
+use crate::model::View;
+
 use super::{
-    About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoActivity, GoAgents,
-    GoDecisions, GoDocs, GoFindings, GoGraph, GoInbox, GoLessons, GoProjects, GoTasks, GoTerminal,
-    HideApp, HideOthers, InstallCli, Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette,
+    About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoView, HideApp,
+    HideOthers, InstallCli, Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette,
     OpenSettings, Priority1, Priority2, Priority3, Priority4, Quit, Reject, ReportIssue,
     RestartToUpdate, ShowAll, Standing, ToggleAll, ToggleBottom, ToggleEmpty, ToggleHelp,
     ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
@@ -22,8 +23,8 @@ use super::{
 pub struct MenuState {
     pub projects: Vec<String>,
     pub current: usize,
-    /// The view, as an index into `View::ALL`.
-    pub view: usize,
+    /// The view shown.
+    pub view: Option<View>,
     pub board: bool,
     pub show_empty: bool,
     pub show_dismissed: bool,
@@ -43,31 +44,19 @@ fn item(name: impl Into<SharedString>, action: impl Action, checked: bool) -> Me
     }
 }
 
-/// How many projects the menus list by name, each with an action of its own.
+/// How many projects the menus list by name.
 pub const PROJECTS_LISTED: usize = 9;
 
-actions!(
-    livtk,
-    [
-        Project1, Project2, Project3, Project4, Project5, Project6, Project7, Project8, Project9
-    ]
-);
+/// Switch to project `index` (from 0): one action for every project the menus list.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
+#[action(namespace = livtk, no_json)]
+pub struct SwitchProject {
+    pub index: usize,
+}
 
 /// The action that switches to project `i` (from 0), for the first `PROJECTS_LISTED`.
 pub fn project_action(i: usize) -> Option<Box<dyn Action>> {
-    let action: Box<dyn Action> = match i {
-        0 => Box::new(Project1),
-        1 => Box::new(Project2),
-        2 => Box::new(Project3),
-        3 => Box::new(Project4),
-        4 => Box::new(Project5),
-        5 => Box::new(Project6),
-        6 => Box::new(Project7),
-        7 => Box::new(Project8),
-        8 => Box::new(Project9),
-        _ => return None,
-    };
-    Some(action)
+    (i < PROJECTS_LISTED).then(|| Box::new(SwitchProject { index: i }) as Box<dyn Action>)
 }
 
 /// The projects, by name, each switching to it, the open one ticked.
@@ -91,7 +80,6 @@ fn projects(state: &MenuState) -> Vec<MenuItem> {
 
 /// The menu bar, as `state` has it.
 pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
-    let view = |i: usize| state.view == i;
     vec![
         Menu::new("livtk").items(
             [
@@ -135,32 +123,27 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
             MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
         ]),
-        Menu::new("View").items([
-            item("Inbox", GoInbox, view(0)),
-            item("Activity", GoActivity, view(1)),
-            item("Tasks", GoTasks, view(2)),
-            item("Projects", GoProjects, view(3)),
-            item("Lessons", GoLessons, view(4)),
-            item("Decisions", GoDecisions, view(5)),
-            item("Findings", GoFindings, view(6)),
-            item("Docs", GoDocs, view(7)),
-            item("Agents", GoAgents, view(8)),
-            item("Graph", GoGraph, view(9)),
-            item("Terminal", GoTerminal, view(10)),
-            MenuItem::separator(),
-            item("Board", ToggleLayout, state.board),
-            item("Show Empty Groups", ToggleEmpty, state.show_empty),
-            item("Show Dismissed Work", ToggleAll, state.show_dismissed),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Toggle Bottom Bar", ToggleBottom),
-            MenuItem::action("Toggle Detail Panel", TogglePanel),
-            MenuItem::action("Command Palette", OpenPalette),
-            MenuItem::separator(),
-            MenuItem::action("Zoom Graph In", ZoomIn),
-            MenuItem::action("Zoom Graph Out", ZoomOut),
-            MenuItem::action("Fit Graph", ZoomFit),
-        ]),
+        Menu::new("View").items(
+            // Every view, in the sidebar's order, the one shown ticked.
+            View::ALL
+                .into_iter()
+                .map(|view| item(view.title(), GoView { view }, state.view == Some(view)))
+                .chain([
+                    MenuItem::separator(),
+                    item("Board", ToggleLayout, state.board),
+                    item("Show Empty Groups", ToggleEmpty, state.show_empty),
+                    item("Show Dismissed Work", ToggleAll, state.show_dismissed),
+                    MenuItem::separator(),
+                    MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                    MenuItem::action("Toggle Bottom Bar", ToggleBottom),
+                    MenuItem::action("Toggle Detail Panel", TogglePanel),
+                    MenuItem::action("Command Palette", OpenPalette),
+                    MenuItem::separator(),
+                    MenuItem::action("Zoom Graph In", ZoomIn),
+                    MenuItem::action("Zoom Graph Out", ZoomOut),
+                    MenuItem::action("Fit Graph", ZoomFit),
+                ]),
+        ),
         Menu::new("Task").items([
             MenuItem::action("Acknowledge, Ratify or Accept", Decide),
             MenuItem::action("Ratify as Standing Rule", Standing),
@@ -201,7 +184,7 @@ pub fn dock_menu(state: &MenuState) -> Vec<MenuItem> {
             } else {
                 format!("Inbox ({})", state.inbox)
             },
-            GoInbox,
+            GoView { view: View::Inbox },
         ),
     ];
     let listed = projects(state);

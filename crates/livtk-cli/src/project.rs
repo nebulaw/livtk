@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use clap::Subcommand;
 use jiff::Timestamp;
+use livtk_core::format::duration;
 use livtk_core::{
     ACTIVE_AT_ONCE, Actor, Command, Health, Kind, Progress, Rel, State, Summary, Workspace,
 };
@@ -280,8 +281,8 @@ pub fn flow(ws: &Workspace, project: Option<&str>, json: bool) -> Result<()> {
                 "  {:<9} {:>3} task(s)  {:>8}  {:>8}",
                 t.state.as_str(),
                 t.tasks,
-                span(t.median_secs),
-                span(t.total_secs)
+                duration(t.median_secs),
+                duration(t.total_secs)
             )?;
         }
     }
@@ -294,7 +295,7 @@ pub fn flow(ws: &Workspace, project: Option<&str>, json: bool) -> Result<()> {
                 q.state.as_str(),
                 q.count,
                 q.oldest,
-                span(q.oldest_secs)
+                duration(q.oldest_secs)
             )?;
         }
     }
@@ -307,21 +308,10 @@ pub fn flow(ws: &Workspace, project: Option<&str>, json: bool) -> Result<()> {
         writeln!(
             text,
             "Lead time: {} {state}, since {}",
-            span(l.secs),
+            duration(l.secs),
             l.started.get(..10).unwrap_or(&l.started)
         )?;
     }
     print!("{text}");
     Ok(())
-}
-
-/// A duration as people say it: `3d 4h`, `5h 20m`, `12m`, `40s`.
-pub fn span(secs: i64) -> String {
-    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
-    match (d, h, m) {
-        (0, 0, 0) => format!("{secs}s"),
-        (0, 0, m) => format!("{m}m"),
-        (0, h, m) => format!("{h}h {m}m"),
-        (d, h, _) => format!("{d}d {h}h"),
-    }
 }

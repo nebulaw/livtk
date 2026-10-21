@@ -3,11 +3,10 @@
 //! yours (this app's, private, in app.toml) and this project's (.livtk/config.toml, committed and
 //! shared with the team), which are written through the core, checked, comments and all.
 
-use gpui_component::Sizable;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_kit::prelude::FluentBuilder;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
+use super::form::{button, choice, field, segmented, toggle};
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
 use super::{Close, LivtkApp, NAV_ROW, NAV_TEXT, kbd, nav_item, section_label};
@@ -423,7 +422,11 @@ impl LivtkApp {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(field(&self.settings.docs, 160.))
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .child(field(&self.settings.docs, "settings-docs-field")),
+                    )
                     .child(
                         button("settings-docs-save", "Save", false).on_click(cx.listener(
                             |this, _, _, cx| {
@@ -640,7 +643,11 @@ impl LivtkApp {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(field(&self.settings.gate, 260.))
+                .child(
+                    div()
+                        .w(px(260.))
+                        .child(field(&self.settings.gate, "settings-gate-field")),
+                )
                 .child(
                     button("settings-gate-add", "Add", false)
                         .on_click(cx.listener(|this, _, window, cx| this.add_gate(window, cx))),
@@ -759,93 +766,6 @@ fn row(label: &str, what: &str, control: impl IntoElement) -> Div {
                 ),
         )
         .child(div().flex_none().child(control))
-}
-
-fn segmented() -> Div {
-    div()
-        .flex()
-        .p(px(2.))
-        .gap(px(2.))
-        .rounded_lg()
-        .bg(color(SURFACE))
-        .border_1()
-        .border_color(color(BORDER))
-}
-
-fn choice(id: String, label: &'static str, on: bool) -> Stateful<Div> {
-    div()
-        .id(SharedString::from(id.clone()))
-        .debug_selector(move || id.clone())
-        .h(px(26.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_md()
-        .text_sm()
-        .when(on, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
-        .when(!on, |d| {
-            d.text_color(color(TEXT_3))
-                .hover(|h| h.text_color(color(TEXT_2)))
-        })
-        .child(label)
-}
-
-/// A switch: lit and to the right when on.
-fn toggle(id: String, on: bool) -> Stateful<Div> {
-    let name = id.clone();
-    div()
-        .id(SharedString::from(id))
-        .debug_selector(move || format!("{name}-{}", if on { "on" } else { "off" }))
-        .w(px(34.))
-        .h(px(20.))
-        .p(px(2.))
-        .flex()
-        .when(on, |d| d.justify_end())
-        .rounded_full()
-        .bg(color(if on { ACCENT } else { BORDER_STRONG }))
-        .child(div().size(px(16.)).rounded_full().bg(color(TEXT)))
-}
-
-fn button(id: &'static str, label: &str, main: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .debug_selector(move || id.into())
-        .h(px(28.))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_lg()
-        .text_sm()
-        .when(main, |d| {
-            d.bg(color(ACCENT))
-                .text_color(color(TEXT))
-                .hover(|h| h.bg(color(ACCENT_HOVER)))
-        })
-        .when(!main, |d| {
-            d.border_1()
-                .border_color(color(BORDER_STRONG))
-                .text_color(color(TEXT_2))
-                .hover(|h| h.bg(color(HOVER)))
-        })
-        .child(label.to_owned())
-}
-
-fn field(state: &Entity<InputState>, w: f32) -> Div {
-    div()
-        .w(px(w))
-        .h(px(28.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_lg()
-        .bg(color(CONTENT))
-        .border_1()
-        .border_color(color(BORDER_STRONG))
-        .child(
-            div()
-                .flex_1()
-                .child(Input::new(state).appearance(false).small()),
-        )
 }
 
 fn capital(s: &str) -> String {

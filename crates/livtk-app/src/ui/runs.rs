@@ -13,10 +13,17 @@ use crate::model::runs::{self, RunRow};
 /// What the runs modal asks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Asking {
-    /// Quitting, with runs writing.
-    Quit,
+    /// Quitting, with runs writing: then quit, or restart to update.
+    Quit(Then),
     /// Starting again, with runs the last quit stopped.
     Continue,
+}
+
+/// What a quit is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Then {
+    Quit,
+    Update,
 }
 
 /// An answer to the runs modal.
@@ -55,7 +62,7 @@ impl Asking {
     /// Its answers, the main one last.
     const fn choices(self) -> &'static [Choice] {
         match self {
-            Asking::Quit => &[Choice::Cancel, Choice::StopAll, Choice::Keep],
+            Asking::Quit(_) => &[Choice::Cancel, Choice::StopAll, Choice::Keep],
             Asking::Continue => &[Choice::Leave, Choice::Continue],
         }
     }
@@ -91,32 +98,54 @@ impl LivtkApp {
         .detach();
     }
 
-    /// Quit, asking first while runs are writing.
-    pub(super) fn ask_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Quit (or restart to update), asking first while runs are writing: as they are now,
+    /// not as the last survey found them.
+    pub(super) fn ask_quit(&mut self, then: Then, cx: &mut Context<Self>) {
+        let (going, _) = runs::survey(&self.model.project_roots(), None);
+        self.model.runs.going = going;
         if self.model.runs.going.is_empty() {
-            cx.quit();
+            self.quit_for(then, cx);
             return;
         }
-        self.asking = Some(Asking::Quit);
-        self.modal_focus.focus(window, cx);
+        self.asking = Some(Asking::Quit(then));
         cx.notify();
+    }
+
+    /// Quit now, for what the quit is for.
+    fn quit_for(&mut self, then: Then, cx: &mut Context<Self>) {
+        match then {
+            Then::Quit => {
+                self.quitting = true;
+                cx.quit();
+            }
+            Then::Update => self.install_update(cx),
+        }
+    }
+
+    /// Whether the app has quit, or is quitting.
+    pub fn quitting(&self) -> bool {
+        self.quitting
     }
 
     fn answer_runs(&mut self, choice: Choice, window: &mut Window, cx: &mut Context<Self>) {
         let Some(asking) = self.asking.take() else {
             return;
         };
+        let then = match asking {
+            Asking::Quit(then) => then,
+            Asking::Continue => Then::Quit,
+        };
         let failed = match (choice, runner()) {
             (Choice::Cancel, _) => Vec::new(),
             (Choice::Keep, _) => {
-                cx.quit();
+                self.quit_for(then, cx);
                 return;
             }
             (_, None) => vec!["the claude command is not where livtk looks".to_owned()],
             (Choice::StopAll, Some(r)) => {
                 let failed = runs::stop_all(&self.model.runs.going, &r);
                 if failed.is_empty() {
-                    cx.quit();
+                    self.quit_for(then, cx);
                     return;
                 }
                 failed
@@ -138,10 +167,18 @@ impl LivtkApp {
     }
 
     /// The runs modal: what is asked, the runs it is about, and the answers.
-    pub(super) fn runs_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn runs_overlay(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let asking = self.asking?;
+        // Asked from a menu or the Dock: the keys come here, so Esc cancels.
+        if !self.modal_focus.is_focused(window) {
+            self.modal_focus.focus(window, cx);
+        }
         let (title, said, rows): (&str, String, &[RunRow]) = match asking {
-            Asking::Quit => (
+            Asking::Quit(_) => (
                 "Agents are working",
                 format!(
                     "{} working. They can go on without the app, and it finds them again \
@@ -203,7 +240,7 @@ impl LivtkApp {
         }
         let card = div()
             .debug_selector(move || match asking {
-                Asking::Quit => "quit-runs".into(),
+                Asking::Quit(_) => "quit-runs".into(),
                 Asking::Continue => "continue-runs".into(),
             })
             .w(px(460.))

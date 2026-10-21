@@ -87,17 +87,11 @@ pub fn run(ws: &mut Workspace, cmd: RunCmd, by: &Actor, json: bool) -> Result<()
             (key, "stopping; the work so far is kept")
         }
         RunCmd::Allow { key } => {
-            if !by.is_human() {
-                anyhow::bail!("letting a run do what it asks is the human's decision");
-            }
-            r.answer(ws, &key, true)?;
+            r.answer(ws, &key, true, by)?;
             (key, "allowed; it goes on")
         }
         RunCmd::Deny { key } => {
-            if !by.is_human() {
-                anyhow::bail!("refusing what a run asks is the human's decision");
-            }
-            r.answer(ws, &key, false)?;
+            r.answer(ws, &key, false, by)?;
             (key, "denied; it goes on without")
         }
         RunCmd::Continue { key } => {

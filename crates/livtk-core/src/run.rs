@@ -363,8 +363,41 @@ impl Runner {
         };
         note(ws, &n.key, &live, RunMark::Started, &text, by)?;
         let mut live = live;
-        self.turn(ws.dir(), &mut live, &stage.prompt(&n.key, &n.title), false)?;
+        let prompt = stage.prompt(&n.key, &n.title);
+        let run = ws
+            .runs()?
+            .into_iter()
+            .rev()
+            .find(|r| r.session == live.session)
+            .ok_or_else(|| Error::Refused("the run's start was not recorded".into()))?;
+        self.turn_or_fail(ws, &run, &mut live, &prompt, false)?;
         Ok(live)
+    }
+
+    /// Start a turn; if it cannot start, the run ends as failed, saying why, and the error is
+    /// returned.
+    fn turn_or_fail(
+        &self,
+        ws: &mut Workspace,
+        run: &Run,
+        live: &mut Live,
+        prompt: &str,
+        resume: bool,
+    ) -> Result<()> {
+        match self.turn(ws.dir(), live, prompt, resume) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                end(
+                    ws,
+                    run,
+                    live,
+                    Ending::Failed,
+                    &format!("It could not start: {e}"),
+                    &claude(),
+                )?;
+                Err(e)
+            }
+        }
     }
 
     /// Start a turn of `live`'s session with `prompt`: the first, or resumed.
@@ -419,6 +452,7 @@ impl Runner {
     /// Stop task `key`'s run: its turn ends cleanly (the work kept), and the run ends `how`
     /// (stopped, or stopped by a quit). A run waiting for you ends at once.
     pub fn stop(&self, ws: &mut Workspace, key: &str, how: Ending, by: &Actor) -> Result<()> {
+        let _hold = Hold::wait(ws.dir())?;
         let n = ws.node(key)?;
         let Some(run) = ws
             .runs()?
@@ -440,7 +474,12 @@ impl Runner {
 
     /// Answer task `key`'s waiting run: let it run what it asked for, or not. A note of yours
     /// answers a question the same way, on its own.
-    pub fn answer(&self, ws: &mut Workspace, key: &str, allow: bool) -> Result<()> {
+    pub fn answer(&self, ws: &mut Workspace, key: &str, allow: bool, by: &Actor) -> Result<()> {
+        if !by.is_human() {
+            return Err(Error::Refused(
+                "letting a run do what it asks is the human's decision".into(),
+            ));
+        }
         let n = ws.node(key)?;
         let Some(run) = ws
             .runs()?
@@ -465,7 +504,7 @@ impl Runner {
             (RunMark::Denied, format!("Denied: {}", asks.join(", ")))
         };
         let live = live(ws.dir(), &run.session).unwrap_or_else(|| gone(&run, ws.root()));
-        note(ws, &n.key, &live, mark, &text, &Actor::Human)?;
+        note(ws, &n.key, &live, mark, &text, by)?;
         settle(ws, self)?;
         Ok(())
     }
@@ -489,12 +528,13 @@ impl Runner {
             ),
             Answer::Note(text) => text.clone(),
         };
-        self.turn(&livtk, &mut live, &prompt, true)
+        self.turn_or_fail(ws, run, &mut live, &prompt, true)
     }
 
     /// Continue a run that stopped (by hand, or when the app quit): a new turn of the same
     /// session, where it left off.
     pub fn resume_stopped(&self, ws: &mut Workspace, key: &str, by: &Actor) -> Result<()> {
+        let _hold = Hold::wait(ws.dir())?;
         let n = ws.node(key)?;
         let Some(run) =
             ws.runs()?.into_iter().rev().find(|r| {
@@ -521,7 +561,13 @@ impl Runner {
             "Continued where it left off.",
             by,
         )?;
-        self.turn(&livtk, &mut live, "Continue where you left off.", true)
+        let run = ws
+            .runs()?
+            .into_iter()
+            .rev()
+            .find(|r| r.session == live.session)
+            .unwrap_or(run);
+        self.turn_or_fail(ws, &run, &mut live, "Continue where you left off.", true)
     }
 }
 
@@ -747,7 +793,7 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
     if !runs_dir(&livtk).exists() {
         return Ok(false);
     }
-    let Some(_hold) = Hold::take(&runs_dir(&livtk).join("settle.lock")) else {
+    let Some(_hold) = Hold::take(&hold_path(&livtk)) else {
         return Ok(false);
     };
     let mut changed = false;
@@ -836,7 +882,8 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
     for run in ws.runs()? {
         let started = live(&livtk, &run.session).is_some_and(|l| l.pid.is_some());
         if let (RunMark::Asks { .. }, Some(answer), false) = (&run.last, &run.answer, started) {
-            runner.resume(ws, &run, answer)?;
+            // One that cannot start has ended its run, saying why: the others go on.
+            let _ = runner.resume(ws, &run, answer);
             changed = true;
         }
     }
@@ -856,10 +903,33 @@ fn said(text: &str) -> String {
     }
 }
 
-/// A lock file held while it lives; taken from a holder that has held it too long.
+fn hold_path(livtk: &Path) -> PathBuf {
+    runs_dir(livtk).join("settle.lock")
+}
+
+/// How long a change to a run waits for a settle going to finish.
+const HOLD_WAIT: Duration = Duration::from_secs(5);
+
+/// A lock file held while it lives; taken from a holder that has held it too long. Settling
+/// and changing a run (stopping, continuing) hold it, so neither writes over the other.
 struct Hold(PathBuf);
 
 impl Hold {
+    /// Take it, waiting a while for a holder to let go.
+    fn wait(livtk: &Path) -> Result<Hold> {
+        ensure_dir(livtk)?;
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(h) = Hold::take(&hold_path(livtk)) {
+                return Ok(h);
+            }
+            if start.elapsed() > HOLD_WAIT {
+                return Err(Error::Refused("the runs are busy; try again".into()));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn take(path: &Path) -> Option<Hold> {
         let stale = fs::metadata(path)
             .and_then(|m| m.modified())

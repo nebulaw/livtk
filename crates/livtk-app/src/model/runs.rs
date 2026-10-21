@@ -38,7 +38,8 @@ pub struct Runs {
     pub surveyed: Option<Instant>,
 }
 
-/// The runs of the projects at `roots`, each settled first when `claude` is found.
+/// The runs of the projects at `roots`, each settled first when `runner` is given: those writing
+/// now, and those the last quit stopped.
 pub fn survey(roots: &[PathBuf], runner: Option<&Runner>) -> (Vec<RunRow>, Vec<RunRow>) {
     let (mut going, mut quit) = (Vec::new(), Vec::new());
     for root in roots {

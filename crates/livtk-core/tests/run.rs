@@ -185,7 +185,11 @@ fn a_build_asks_is_allowed_asks_again_is_answered_and_ends_done() {
             )
             .is_err()
     );
-    runner.answer(&mut ws, &key, true).unwrap();
+    assert!(
+        runner.answer(&mut ws, &key, true, &CLAUDE).is_err(),
+        "nor through the runner"
+    );
+    runner.answer(&mut ws, &key, true, &Actor::Human).unwrap();
     let resumed = turn_args(&root(&ws), 2);
     assert!(
         resumed.contains("--resume") && resumed.contains("Bash(cargo test)"),

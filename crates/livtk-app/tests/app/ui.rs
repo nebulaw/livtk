@@ -4704,15 +4704,21 @@ fn until_runs(
     redraw(cx);
 }
 
-/// Quitting while an agent works asks first: Cancel quits nothing and leaves it working; Stop
-/// them all ends its turn, the run noted as stopped by the quit.
+/// Quitting while an agent works asks first, as things are at that moment (a run the app found
+/// at its start, before a survey could): Cancel quits nothing and leaves it working; Stop them
+/// all ends its turn, the run noted as stopped by the quit, and quits.
 #[gpui_kit::test]
 fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
     let runner = a_run_writing(&root);
     let (app, cx) = open_app(cx, &root);
-    // Found by the app: working.
+    // Asked at once, before any survey: the quit looks for itself.
+    cx.simulate_keystrokes("secondary-q");
+    redraw(cx);
+    assert!(cx.debug_bounds("quit-runs").is_some(), "asked at once");
+    click_on(cx, "runs-cancel");
+    // A run kept working through a quit is found again by the next start.
     until_runs(&app, cx, |m| m.runs.going.len() == 1);
     cx.simulate_keystrokes("secondary-q");
     redraw(cx);
@@ -4735,6 +4741,7 @@ fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("secondary-q");
     redraw(cx);
     click_on(cx, "runs-stop");
+    assert!(app.read_with(cx, |a, _| a.quitting()), "and quits");
     let start = Instant::now();
     loop {
         livtk_core::run::settle(&mut ws, &runner).unwrap();
@@ -4789,4 +4796,29 @@ fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Keep them working: the app quits, the agent goes on.
+#[gpui_kit::test]
+fn keep_them_working_quits_and_leaves_the_agent_working(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let runner = a_run_writing(&root);
+    let (app, cx) = open_app(cx, &root);
+    cx.simulate_keystrokes("secondary-q");
+    redraw(cx);
+    click_on(cx, "runs-keep");
+    assert!(app.read_with(cx, |a, _| a.quitting()));
+    let mut ws = Workspace::open(&root).unwrap();
+    let live = livtk_core::run::lives(ws.dir()).pop().unwrap();
+    assert!(livtk_core::run::writing(&live), "still working");
+    // Done with it: stopped, so no stub is left behind.
+    runner
+        .stop(
+            &mut ws,
+            "LIV-1",
+            livtk_core::event::Ending::Stopped,
+            &Actor::Human,
+        )
+        .unwrap();
 }

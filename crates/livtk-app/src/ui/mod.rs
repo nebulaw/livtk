@@ -489,6 +489,9 @@ pub fn dock_actions(window: AnyWindowHandle, app: WeakEntity<LivtkApp>, cx: &mut
         });
     }
     on::<NewTask>(window, &app, cx, |_, app, w, cx| app.open_form(w, cx));
+    on::<Quit>(window, &app, cx, |_, app, _, cx| {
+        app.ask_quit(runs::Then::Quit, cx)
+    });
     on::<GoView>(window, &app, cx, |a, app, w, cx| app.go(a.view, w, cx));
     on::<menus::SwitchProject>(window, &app, cx, |a, app, w, cx| {
         app.switch_project(a.index, w, cx)
@@ -497,6 +500,8 @@ pub fn dock_actions(window: AnyWindowHandle, app: WeakEntity<LivtkApp>, cx: &mut
 
 /// What the app does whatever window, field or menu has the keys: quit, hide, Help's links.
 fn app_actions(cx: &mut App) {
+    // Quit is the window's to hear (it asks first while agents work); before there is one, or
+    // if it could not open, quitting asks nothing.
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &HideApp, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
@@ -767,6 +772,8 @@ pub struct LivtkApp {
     about: bool,
     /// The runs modal, when it asks something.
     asking: Option<runs::Asking>,
+    /// It has quit, or is on its way.
+    quitting: bool,
     /// The runs the last quit stopped were offered back this launch.
     runs_offered: bool,
     /// Settings, open.
@@ -996,6 +1003,7 @@ impl LivtkApp {
             help: false,
             about: false,
             asking: None,
+            quitting: false,
             runs_offered: false,
             settings,
             agent_form,
@@ -1869,6 +1877,13 @@ impl LivtkApp {
     /// Restart to Update: start the helper that installs the staged build once this app has
     /// quit, and quit (what the app remembers is written on the way out).
     fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+        if self.update.is_some() {
+            self.ask_quit(runs::Then::Update, cx);
+        }
+    }
+
+    /// Install the staged build once this app has quit, and quit.
+    fn install_update(&mut self, cx: &mut Context<Self>) {
         let Some(staged) = &self.update else { return };
         let exe = std::env::current_exe().and_then(std::fs::canonicalize);
         match exe
@@ -1877,6 +1892,7 @@ impl LivtkApp {
         {
             Ok(()) => {
                 log::info!("update: installing build {}", staged.manifest.build);
+                self.quitting = true;
                 cx.quit();
             }
             Err(e) => {
@@ -2760,7 +2776,7 @@ impl Render for LivtkApp {
         let form = self.form_overlay(cx);
         let help = self.help_overlay(cx);
         let about = self.about_overlay(cx);
-        let asking = self.runs_overlay(cx);
+        let asking = self.runs_overlay(window, cx);
         let palette = self.palette_overlay(cx);
         let peek = self.center_peek(window, cx);
         let notice = self.notice(cx);
@@ -2984,7 +3000,7 @@ impl Render for LivtkApp {
                 }
             }))
             // Quitting from the window asks first while agents are working.
-            .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
+            .on_action(cx.listener(|this, _: &Quit, _, cx| this.ask_quit(runs::Then::Quit, cx)))
             .on_action(cx.listener(|this, _: &About, window, cx| {
                 this.show_over_form(window, cx);
                 this.about = true;

@@ -4127,7 +4127,7 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
     std::fs::create_dir_all(plugin.join("agents")).unwrap();
     std::fs::write(
         plugin.join("agents/implementer.md"),
-        "---\nname: implementer\ndescription: Implements a task.\ntools: Read, Edit\n---\n\nYou implement.\n",
+        "---\nname: implementer\ndescription: Implements a task.\ntools:\n  - Read\n  - Edit\ncolor: blue\n---\n\nYou implement.\n",
     )
     .unwrap();
     std::fs::write(
@@ -4221,6 +4221,18 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
         "{text}"
     );
     assert!(cx.debug_bounds("agent-implementer-copy-project").is_some());
+    assert!(
+        text.contains("color: blue"),
+        "the keys livtk does not edit come along: {text}"
+    );
+    // Edited: a tool added, saved in place; the other keys stay.
+    click_on(cx, "agent-tool-bash-off");
+    redraw(cx);
+    click_on(cx, "agent-save");
+    redraw(cx);
+    let text = std::fs::read_to_string(&copy).unwrap();
+    assert!(text.contains("tools: Read, Edit, Bash"), "{text}");
+    assert!(text.contains("color: blue"), "{text}");
     // Removed only on the second press.
     click_on(cx, "agent-remove");
     redraw(cx);

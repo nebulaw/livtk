@@ -251,6 +251,8 @@ pub struct Agent {
     pub model: Option<String>,
     /// Its instructions.
     pub body: String,
+    /// The frontmatter's other keys (color, permissionMode, hooks…), as written: kept on save.
+    pub extra: String,
 }
 
 /// An agent and where its file is.
@@ -322,8 +324,10 @@ pub fn agents(root: &Path) -> Vec<AgentFile> {
     out
 }
 
-/// An agent file's text as an agent: its frontmatter (`name`, `description`, `tools`, `model`)
-/// and its body. `None` when it has no frontmatter or no name.
+/// An agent file's text as an agent: `name`, `description`, `tools` and `model` from its
+/// frontmatter, in any of the YAML forms Claude Code reads (a plain, quoted or block value; tools
+/// as a comma list, a `[flow]` list or one item a line), every other key kept as written, and
+/// its body. `None` when it has no frontmatter or no name.
 pub fn parse(text: &str) -> Option<Agent> {
     let rest = text.strip_prefix("---")?;
     let end = rest.find("\n---")?;
@@ -332,40 +336,104 @@ pub fn parse(text: &str) -> Option<Agent> {
         body: body.trim_start_matches(['\r', '\n']).trim_end().to_owned(),
         ..Agent::default()
     };
-    for line in head.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().trim_matches('"').to_owned();
-        match key.trim() {
-            "name" => agent.name = value,
-            "description" => agent.description = value,
-            "tools" => {
-                agent.tools = value
-                    .split(',')
-                    .map(|t| t.trim().to_owned())
-                    .filter(|t| !t.is_empty())
-                    .collect();
+    let mut extra = Vec::new();
+    for (key, lines) in entries(head) {
+        let first = lines[0].split_once(':').map_or("", |(_, v)| v).trim();
+        let more = &lines[1..];
+        match key.as_str() {
+            "name" => agent.name = scalar(first, more),
+            "description" => agent.description = scalar(first, more),
+            "model" => {
+                let m = scalar(first, more);
+                agent.model = (!m.is_empty() && m != "inherit").then_some(m);
             }
-            "model" if !value.is_empty() && value != "inherit" => agent.model = Some(value),
-            _ => {}
+            "tools" => agent.tools = list(first, more),
+            _ => extra.extend(lines.iter().map(|l| (*l).to_owned())),
         }
     }
+    agent.extra = extra.join("\n");
     (!agent.name.is_empty()).then_some(agent)
 }
 
-/// An agent as its file's text.
+/// The frontmatter's keys, each with its lines: the key's own, then those that continue it
+/// (indented, or a `- ` item under it).
+fn entries(head: &str) -> Vec<(String, Vec<&str>)> {
+    let mut out: Vec<(String, Vec<&str>)> = Vec::new();
+    for line in head.lines() {
+        let continues = line.starts_with([' ', '\t']) || line.starts_with("- ");
+        match (continues, out.last_mut()) {
+            (true, Some((_, lines))) => lines.push(line),
+            _ => {
+                if let Some((key, _)) = line.split_once(':')
+                    && !key.trim().is_empty()
+                    && !key.trim_start().starts_with('#')
+                {
+                    out.push((key.trim().to_owned(), vec![line]));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A YAML scalar: plain, `"double"` (as JSON reads it) or `'single'` quoted, or a block (`|`,
+/// `>`) from the lines under it, folded to one line.
+fn scalar(first: &str, more: &[&str]) -> String {
+    if first.starts_with('|') || first.starts_with('>') || (first.is_empty() && !more.is_empty()) {
+        let joiner = if first.starts_with('|') { "\n" } else { " " };
+        return more
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(joiner);
+    }
+    if first.starts_with('"') {
+        return serde_json::from_str(first).unwrap_or_else(|_| first.trim_matches('"').to_owned());
+    }
+    if let Some(inner) = first.strip_prefix('\'').and_then(|f| f.strip_suffix('\'')) {
+        return inner.replace("''", "'");
+    }
+    first.to_owned()
+}
+
+/// A YAML list of names: `a, b`, `[a, b]`, or one `- a` a line under the key.
+fn list(first: &str, more: &[&str]) -> Vec<String> {
+    let items: Vec<String> = if first.is_empty() {
+        more.iter()
+            .filter_map(|l| l.trim().strip_prefix('-'))
+            .map(|t| t.trim().to_owned())
+            .collect()
+    } else {
+        first
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|t| t.trim().to_owned())
+            .collect()
+    };
+    items
+        .into_iter()
+        .map(|t| t.trim_matches(['"', '\'']).to_owned())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// An agent as its file's text: its own keys first (the description always double quoted, so
+/// any text is valid YAML), then every key it had that livtk does not edit, as it was.
 pub fn render(agent: &Agent) -> String {
-    let mut text = format!(
-        "---\nname: {}\ndescription: {}\n",
-        agent.name,
-        agent.description.replace('\n', " ")
-    );
+    let description =
+        serde_json::to_string(&agent.description.replace('\n', " ")).unwrap_or_default();
+    let mut text = format!("---\nname: {}\ndescription: {description}\n", agent.name);
     if !agent.tools.is_empty() {
         text.push_str(&format!("tools: {}\n", agent.tools.join(", ")));
     }
     if let Some(m) = &agent.model {
         text.push_str(&format!("model: {m}\n"));
+    }
+    if !agent.extra.trim().is_empty() {
+        text.push_str(agent.extra.trim_end());
+        text.push('\n');
     }
     text.push_str("---\n\n");
     text.push_str(agent.body.trim());
@@ -443,6 +511,7 @@ mod tests {
             tools: vec!["Read".into(), "Grep".into()],
             model: Some("sonnet".into()),
             body: "You review code.\n\n- Be brief.".into(),
+            extra: String::new(),
         };
         assert_eq!(parse(&render(&agent)), Some(agent));
         assert_eq!(parse("no frontmatter"), None);
@@ -503,6 +572,33 @@ mod tests {
                 ..file
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn every_yaml_form_reads_and_other_keys_survive_a_save() {
+        let text = "---\nname: reviewer\ndescription: >\n  Reviews code: bugs,\n  and style.\ntools:\n  - Read\n  - Grep\ncolor: blue\nhooks:\n  Stop:\n    - command: echo hi\nmodel: 'opus'\n---\n\nYou review.\n";
+        let a = parse(text).unwrap();
+        assert_eq!(a.description, "Reviews code: bugs, and style.");
+        assert_eq!(a.tools, ["Read", "Grep"]);
+        assert_eq!(a.model.as_deref(), Some("opus"));
+        assert!(a.extra.contains("color: blue") && a.extra.contains("    - command: echo hi"));
+        // Written back: valid for a colon in the description, the other keys as they were.
+        let back = render(&a);
+        assert!(
+            back.contains("description: \"Reviews code: bugs, and style.\""),
+            "{back}"
+        );
+        assert!(
+            back.contains("hooks:\n  Stop:\n    - command: echo hi"),
+            "{back}"
+        );
+        assert_eq!(parse(&back), Some(a));
+        // A flow list and a double-quoted name.
+        let b = parse("---\nname: \"x\"\ndescription: d\ntools: [Read, \"Bash\"]\n---\nb").unwrap();
+        assert_eq!(
+            (b.name.as_str(), b.tools.clone()),
+            ("x", vec!["Read".to_owned(), "Bash".to_owned()])
         );
     }
 

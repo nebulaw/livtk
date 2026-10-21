@@ -28,6 +28,8 @@ pub(super) struct AgentForm {
     body: Entity<TextareaState>,
     tools: Vec<String>,
     model: Option<String>,
+    /// The file's other keys, kept as they were.
+    extra: String,
     place: Place,
     loaded: Option<Pick>,
     /// Sessions are being asked for.
@@ -48,6 +50,7 @@ impl AgentForm {
             }),
             tools: Vec::new(),
             model: None,
+            extra: String::new(),
             place: Place::Project,
             loaded: None,
             polling: false,
@@ -116,6 +119,7 @@ impl LivtkApp {
             .update(cx, |s, cx| s.set_value(agent.body.clone(), window, cx));
         f.tools = agent.tools;
         f.model = agent.model;
+        f.extra = agent.extra;
         f.place = place;
         f.loaded = open;
     }
@@ -129,6 +133,7 @@ impl LivtkApp {
             tools: f.tools.clone(),
             model: f.model.clone(),
             body: f.body.read(cx).value().to_string(),
+            extra: f.extra.clone(),
         }
     }
 

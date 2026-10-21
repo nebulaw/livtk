@@ -4158,11 +4158,11 @@ fn claude_stub() -> &'static std::path::Path {
     })
 }
 
-/// The Agents place, with a stub `claude`: this project's sessions only, Needs you first, Stop
-/// for a background one; the agents by place, livtk's copied, a copy saved and then removed
-/// after a second press.
+/// Sessions and Agents, two views, with a stub `claude`. Sessions: this project's only, Needs
+/// you first, Stop for a background one. Agents: no sessions; the agents by place, livtk's
+/// copied, a copy saved and then removed after a second press.
 #[gpui_kit::test]
-fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestAppContext) {
+fn sessions_and_agents_are_two_views(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
     claude_stub();
@@ -4185,9 +4185,10 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
     let (app, cx) = open_app(cx, &root);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
-    cx.simulate_keystrokes("g e");
+    cx.simulate_keystrokes("g s");
     redraw(cx);
     redraw(cx);
+    assert!(cx.debug_bounds("sessions-place").is_some());
     // This project's two, the one waiting for you first; not the one elsewhere.
     let waiting = cx
         .debug_bounds("session-bbbbbbbb-2")
@@ -4220,6 +4221,12 @@ fn the_agents_place_watches_sessions_and_makes_and_removes_agents(cx: &mut TestA
             .trim(),
         "bg1"
     );
+    // Agents: the agents, not the sessions, and no session's panel.
+    cx.simulate_keystrokes("g e");
+    redraw(cx);
+    assert!(cx.debug_bounds("agents-place").is_some());
+    assert!(cx.debug_bounds("session-aaaaaaaa-1").is_none());
+    assert!(cx.debug_bounds("session-page").is_none());
     // livtk's own agent: copied, not changed or removed.
     click_on(cx, "agent-implementer-livtk");
     redraw(cx);
@@ -4267,8 +4274,8 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
     let home = claude_stub();
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
-    // Claude worked on LIV-1 in session sess-x.
-    {
+    // Claude worked on LIV-1 in session sess-x, at `at`.
+    let at: jiff::Timestamp = {
         let mut ws = Workspace::open(&root).unwrap();
         ws.set_session(Some("sess-x".into()));
         ws.execute(
@@ -4278,28 +4285,33 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
             },
             &CLAUDE,
         )
-        .unwrap();
-    }
-    // Its transcript: a prompt long before, a call and its result, a reply long after.
+        .unwrap()[0]
+            .at
+            .parse()
+            .unwrap()
+    };
+    let t_at = |secs: i64| (at + jiff::SignedDuration::from_secs(secs)).to_string();
+    // Its transcript as a real one runs: a prompt before; the call that wrote the note just
+    // before it, the call's result just after; a reply later.
     let dir_t = livtk_core::claude::transcripts_in(home, &root);
     std::fs::create_dir_all(&dir_t).unwrap();
     let rec = |v: serde_json::Value| format!("{v}\n");
     let mut t = String::new();
     t += &rec(
-        serde_json::json!({"type": "user", "timestamp": "2000-01-01T00:00:00.000Z", "sessionId": "sess-x",
+        serde_json::json!({"type": "user", "timestamp": t_at(-10), "sessionId": "sess-x",
         "message": {"role": "user", "content": "Start the importer"}}),
     );
     t += &rec(
-        serde_json::json!({"type": "assistant", "timestamp": "2000-01-01T00:00:01.000Z", "sessionId": "sess-x",
+        serde_json::json!({"type": "assistant", "timestamp": t_at(-1), "sessionId": "sess-x",
         "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash",
-        "input": {"command": "livtk list", "description": "List the tasks"}}]}}),
+        "input": {"command": "livtk note LIV-1 'on it'", "description": "Note it"}}]}}),
     );
     t += &rec(
-        serde_json::json!({"type": "user", "timestamp": "2000-01-01T00:00:02.000Z", "sessionId": "sess-x",
-        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "PLANNED LIV-1"}]}}),
+        serde_json::json!({"type": "user", "timestamp": t_at(1), "sessionId": "sess-x",
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "LIV-1: note added"}]}}),
     );
     t += &rec(
-        serde_json::json!({"type": "assistant", "timestamp": "2999-01-01T00:00:00.000Z", "sessionId": "sess-x",
+        serde_json::json!({"type": "assistant", "timestamp": t_at(60), "sessionId": "sess-x",
         "message": {"role": "assistant", "content": [{"type": "text", "text": "Noted on LIV-1."}]}}),
     );
     t += &rec(
@@ -4336,22 +4348,24 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
     let (app, cx) = open_app(cx, &root);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
-    // The transcripts are read with the sessions, in the Agents place.
-    cx.simulate_keystrokes("g e");
-    redraw(cx);
-    redraw(cx);
-    assert!(cx.debug_bounds("session-sess-x").is_some());
-    cx.simulate_keystrokes("g i");
-    redraw(cx);
+    // Straight from a task, the Agents place never opened.
     open_detail(cx);
+    redraw(cx);
     assert!(
         cx.debug_bounds("task-session-sess-x").is_some(),
         "in its properties"
     );
+    let named = app.read_with(cx, |a, _| {
+        a.model()
+            .session_rows()
+            .into_iter()
+            .any(|r| r.id == "sess-x" && r.name == "Importer")
+    });
+    assert!(named, "by its title, the transcripts read for the panel");
     click_on(cx, "task-session-sess-x");
     redraw(cx);
     redraw(cx);
-    assert_eq!(app.read_with(cx, |a, _| a.model().view()), View::Agents);
+    assert_eq!(app.read_with(cx, |a, _| a.model().view()), View::Sessions);
     assert!(
         cx.debug_bounds("session-reader").is_some(),
         "read in the middle"
@@ -4360,6 +4374,14 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
         cx.debug_bounds("reader-focus").is_some(),
         "at the task's first event"
     );
+    // Marked: the call that wrote it, not its result after.
+    let marked = app.read_with(cx, |a, _| {
+        let r = a.model().agents.reader.as_ref().unwrap();
+        r.focus_index()
+            .and_then(|i| r.drawn().nth(i).cloned())
+            .map(|e| matches!(e, livtk_core::claude::Entry::Tool { .. }))
+    });
+    assert_eq!(marked, Some(true));
     // A call is one line until opened.
     click_on(cx, "call-toolu_1");
     redraw(cx);

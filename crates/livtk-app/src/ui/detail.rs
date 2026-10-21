@@ -47,7 +47,7 @@ impl LivtkApp {
                         ago(&first)
                     )))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.go(View::Agents, window, cx);
+                        this.go(View::Sessions, window, cx);
                         this.model.read_session(&session, Some(first.clone()));
                         cx.notify();
                     })),
@@ -642,8 +642,8 @@ impl LivtkApp {
     /// The detail panel, sliding in when it opens and out when it closes. Its width animates,
     /// so the list beside it makes room smoothly instead of jumping.
     pub(super) fn detail(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // The Agents place's panel: a session, or an agent's page.
-        if self.model.view() == View::Agents {
+        // The Agents or Sessions panel: a session, or an agent's page.
+        if matches!(self.model.view(), View::Agents | View::Sessions) {
             return self.agents_panel(width, cx);
         }
         // A node's detail opened another way is not the panel's: the panel keeps only a doc's.
@@ -740,6 +740,7 @@ impl LivtkApp {
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
         ));
         if !d.sessions.is_empty() {
+            self.load_transcripts(cx);
             props = props.child(prop_row("Sessions", self.task_sessions(&d.sessions, cx)));
         }
         let mut links = div()

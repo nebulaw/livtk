@@ -764,7 +764,7 @@ pub struct LivtkApp {
     about: bool,
     /// Settings, open.
     settings: settings::Settings,
-    /// The Agents place's page for an agent, and its sessions' polling.
+    /// Agents' page for an agent, and the Sessions view's polling.
     agent_form: agents::AgentForm,
     /// What the menu bar and the Dock menu were last made from.
     menu_state: Option<menus::MenuState>,
@@ -2432,6 +2432,7 @@ impl LivtkApp {
             (View::Graph, _) => self.graph_view(cx),
             (View::Docs, _) => self.docs_view(window, cx),
             (View::Agents, _) => self.agents_view(window, cx),
+            (View::Sessions, _) => self.sessions_view(cx),
             // Drawn in the list's place, outside its keys: `terminal_view`.
             (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
@@ -2792,10 +2793,10 @@ impl Render for LivtkApp {
                 {
                     // Done reading: the list again.
                     this.leave_reading(window, cx);
-                } else if this.model.view() == View::Agents
+                } else if matches!(this.model.view(), View::Agents | View::Sessions)
                     && (this.model.agents.reader.is_some() || this.model.agents.open.is_some())
                 {
-                    // In Agents: the session being read gives way to the list, then the panel.
+                    // A session being read gives way to the list, then the panel to nothing.
                     if !this.model.close_reader() {
                         this.model.pick_agent(None);
                     }
@@ -3306,6 +3307,7 @@ pub fn view_icon(view: View) -> Icon {
         View::Inbox => Icon::Inbox,
         View::Activity => Icon::Activity,
         View::Agents => Icon::Agents,
+        View::Sessions => Icon::Sessions,
         View::Graph => Icon::Graph,
         View::Terminal => Icon::Terminal,
         View::Docs => Icon::Docs,

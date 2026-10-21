@@ -1,6 +1,6 @@
-//! The Agents place: the Claude sessions working in the project, and the agents they can run
-//! as. The sessions come from outside (the window asks Claude Code for them off its thread);
-//! the agents are files, read here.
+//! Agents and Sessions: the agents Claude sessions can run as, and the Claude sessions of the
+//! project. The sessions come from outside (the window asks Claude Code for them off its
+//! thread); the agents are files, read here.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use livtk_core::claude::{Entry, Transcript};
 use super::Model;
 use crate::agents::{self, Agent, AgentFile, Place, Session};
 
-/// What the Agents place holds.
+/// What Agents and Sessions hold.
 #[derive(Debug, Default)]
 pub struct AgentsPlace {
     /// The sessions working under the project's folder, Needs you first; `None` until asked.
@@ -67,12 +67,36 @@ pub struct Reader {
     /// The session this one was opened from (a subagent's, from its parent's call): Esc goes
     /// back to it, where it was.
     pub parent: Option<Box<Reader>>,
+    /// Read from a little before `focus`, not from the start: found before the first page.
+    pub seek: bool,
+    /// Where the reading began, in bytes: past 0, what came before can be read too.
+    pub begun: u64,
+}
+
+impl Reader {
+    /// The entry `focus` points at, among those drawn (results are drawn under their calls):
+    /// the last one at or before it, which is the call that wrote the event.
+    pub fn focus_index(&self) -> Option<usize> {
+        let f = self.focus.as_deref()?;
+        self.drawn()
+            .enumerate()
+            .take_while(|(_, e)| e.at() <= f)
+            .last()
+            .map(|(i, _)| i)
+    }
+
+    /// The entries drawn as rows: all but the results, which show under their calls.
+    pub fn drawn(&self) -> impl Iterator<Item = &Entry> {
+        self.entries
+            .iter()
+            .filter(|e| !matches!(e, Entry::Result { .. }))
+    }
 }
 
 /// How many entries a page of a session holds.
 pub const PAGE: usize = 200;
 
-/// What is open in the Agents place's panel.
+/// What is open in the panel: an agent in Agents, a session in Sessions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pick {
     /// A session, by its key.
@@ -221,15 +245,23 @@ impl Model {
             .cloned()
     }
 
-    /// Read session `session` in the middle, from its start, or on to `focus` (a time in it).
+    /// Read session `session` in the middle, from its start, or from a little before `focus` (a
+    /// time in it). Its transcript is the one listed, or its file where Claude Code keeps it.
     pub fn read_session(&mut self, session: &str, focus: Option<String>) -> bool {
-        let Some(path) = self
+        let listed = self
             .agents
             .transcripts
             .iter()
             .find(|t| t.session == session)
-            .map(|t| t.path.clone())
-        else {
+            .map(|t| t.path.clone());
+        let on_disk = || {
+            let root = self.project_root()?;
+            let home = agents::claude_home()?;
+            let path =
+                livtk_core::claude::transcripts_in(&home, &root).join(format!("{session}.jsonl"));
+            path.is_file().then_some(path)
+        };
+        let Some(path) = listed.or_else(on_disk) else {
             self.warn("Claude Code no longer keeps this session's transcript.");
             return false;
         };
@@ -238,22 +270,39 @@ impl Model {
             session: session.to_owned(),
             path,
             next: Some(0),
+            seek: focus.is_some(),
             focus,
             ..Reader::default()
         });
         true
     }
 
-    /// A page read: added to the reader's entries.
-    pub fn add_page(&mut self, session: &str, page: livtk_core::claude::Page) {
+    /// Read the session open from its very start.
+    pub fn read_from_start(&mut self) {
+        if let Some(r) = self.agents.reader.as_mut() {
+            r.entries.clear();
+            r.next = Some(0);
+            r.focus = None;
+            r.seek = false;
+            r.begun = 0;
+            r.loading = false;
+        }
+    }
+
+    /// A page read, from byte `from`: added to the reader's entries.
+    pub fn add_page(&mut self, session: &str, from: u64, page: livtk_core::claude::Page) {
         if let Some(r) = self
             .agents
             .reader
             .as_mut()
             .filter(|r| r.session == session && r.loading)
         {
+            if r.entries.is_empty() {
+                r.begun = from;
+            }
             r.entries.extend(page.entries);
             r.next = page.next;
+            r.seek = false;
             r.loading = false;
             r.want = false;
         }
@@ -261,17 +310,19 @@ impl Model {
 
     /// Whether the reader should read on: a page is wanted, none is being read, and the focus
     /// (if any) is not reached yet, or nothing is read yet.
-    pub fn wants_page(&self) -> Option<(PathBuf, u64)> {
+    pub fn wants_page(&self) -> Option<(PathBuf, u64, Option<String>)> {
         let r = self.agents.reader.as_ref()?;
         if r.loading {
             return None;
         }
         let next = r.next?;
+        // Read until past the focus, so the entry at it is the last one before it.
         let reached = r
             .focus
             .as_ref()
-            .is_none_or(|f| r.entries.last().is_some_and(|e| e.at() >= f.as_str()));
-        (r.entries.is_empty() || r.want || !reached).then(|| (r.path.clone(), next))
+            .is_none_or(|f| r.entries.last().is_some_and(|e| e.at() > f.as_str()));
+        let seek = r.seek.then(|| r.focus.clone()).flatten();
+        (r.entries.is_empty() || r.want || !reached).then(|| (r.path.clone(), next, seek))
     }
 
     /// Mark a page as being read, so it is asked for once.

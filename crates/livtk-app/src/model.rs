@@ -51,14 +51,16 @@ pub enum View {
     Terminal,
     /// The project's docs: its markdown files.
     Docs,
-    /// The Claude sessions working in the project, and the agents they can run as.
+    /// The agents Claude sessions can run as: livtk's, the project's, yours.
     Agents,
+    /// The project's Claude sessions, past and running, to read.
+    Sessions,
     /// A kind the project declares (`[[kinds]]` in its config), listed as the built-in kinds are.
     Of(Kind),
 }
 
 impl View {
-    pub const ALL: [View; 11] = [
+    pub const ALL: [View; 12] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
@@ -68,6 +70,7 @@ impl View {
         View::Findings,
         View::Docs,
         View::Agents,
+        View::Sessions,
         View::Graph,
         View::Terminal,
     ];
@@ -86,6 +89,7 @@ impl View {
             View::Terminal => "Terminal",
             View::Docs => "Docs",
             View::Agents => "Agents",
+            View::Sessions => "Sessions",
         }
     }
 
@@ -103,6 +107,7 @@ impl View {
             View::Findings => "G F",
             View::Docs => "G O",
             View::Agents => "G E",
+            View::Sessions => "G S",
             View::Graph => "G R",
             View::Terminal => "G X",
             View::Of(_) => return None,
@@ -136,7 +141,8 @@ impl View {
             | View::Graph
             | View::Terminal
             | View::Docs
-            | View::Agents => None,
+            | View::Agents
+            | View::Sessions => None,
             View::Tasks => Some(Kind::Task),
             View::Projects => Some(Kind::Project),
             View::Lessons => Some(Kind::Lesson),
@@ -632,7 +638,7 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
     pub activity: Vec<livtk_core::Activity>,
-    /// The Agents place: its sessions and agent files.
+    /// Agents and Sessions: the agent files, and the sessions.
     pub agents: agents::AgentsPlace,
     /// The project's flow, as the activity view shows it: what waits on the human and for how
     /// long, and the time tasks spend in each state.

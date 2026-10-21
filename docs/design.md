@@ -42,29 +42,30 @@ list's place, behind a header bar, and Esc gives the list back.
 - The terminal is one view holding several terminals, as VS Code does: a list beside it once
   there are two, a click shows one, its × kills it.
 
-## Agents
+## Agents and Sessions
 
-The first of the agentic views. Agents is a place in the sidebar with the same three places:
-- **The middle** lists the Claude sessions working in the project. They come from Claude Code's
-  own list, refreshed while the place is open, with **Needs you** first, then Working and Idle.
-  Below them come the agents they can run as, by where they live: livtk's, this project's, yours.
-- **The panel** shows the one picked. A session shows its standing and what it did in livtk, with
-  Open (in the terminal) and Stop. An agent shows its page: name, description, tools, model and
-  instructions, with Save, Copy and Remove.
+The first of the agentic views: two views under one Agents heading in the sidebar, each with the
+same three places.
 
-livtk's own agents can be copied, never changed or removed. Remove asks once, on the button
-itself, before it removes.
+**Agents** (G E) lists the agents Claude sessions can run as, by where they live: livtk's, this
+project's, yours. The panel shows the one picked as its page: name, description, tools, model and
+instructions, with Save, Copy and Remove. livtk's own agents can be copied, never changed or
+removed. Remove asks once, on the button itself, before it removes.
 
-**Reading a session.** Sessions are every session of the project, past and running, merged from
-three sources: Claude Code's transcripts (title, when), its live list (where it stands) and the
-log (who wrote what to which task).
+**Sessions** (G S) lists every session of the project, past and running, with **Needs you**
+first, then Working and Idle. The list is merged from three sources: Claude Code's transcripts
+(title, when), its live list (where it stands, refreshed while the view is open) and the log (who
+wrote what to which task). The panel shows the one picked: its standing and what it did in livtk,
+with Read, Open (in the terminal) and Stop.
+
+**Reading a session.**
 
 - **Read** (or a double click) takes the list's place with the conversation: what was asked, what
   Claude said, each tool call one line until opened, its result under it. A call that started a
   subagent offers its work, which takes the session's place until Esc brings it back.
 - It reads a page at a time, so a long transcript never stalls the window. Esc gives back the list.
 - **From a task.** Its properties name the sessions that worked on it, and a click reads one from
-  that task's first event in it.
+  that task's first event in it, in Sessions.
 - **Read-only.** livtk never writes Claude Code's files.
 
 ## Settings

@@ -251,6 +251,41 @@ pub fn read(path: &Path, from: u64, limit: usize) -> std::io::Result<Page> {
     }
 }
 
+/// Where to start reading the transcript at `path` to see what happened at `at`: the byte
+/// offset of the line `back` records before the first one at or after `at` (or of the start).
+/// Only the timestamps are looked at, so a long transcript is crossed quickly.
+pub fn offset_near(path: &Path, at: &str, back: usize) -> std::io::Result<u64> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut starts: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+    let mut offset = 0u64;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Ok(starts.front().copied().unwrap_or(0));
+        }
+        if starts.len() > back {
+            starts.pop_front();
+        }
+        starts.push_back(offset);
+        offset += n as u64;
+        if let Some(t) = timestamp(&line)
+            && t >= at
+        {
+            return Ok(starts.front().copied().unwrap_or(0));
+        }
+    }
+}
+
+/// A record's timestamp, read without parsing the record.
+fn timestamp(line: &str) -> Option<&str> {
+    let key = "\"timestamp\":\"";
+    let i = line.find(key)? + key.len();
+    let rest = &line[i..];
+    Some(&rest[..rest.find('"')?])
+}
+
 /// What a person reads of one record: none for the bookkeeping and the hidden parts (thinking,
 /// injected context, attachments), several for an assistant turn with text and calls.
 pub fn entry(v: &Value) -> Vec<Entry> {

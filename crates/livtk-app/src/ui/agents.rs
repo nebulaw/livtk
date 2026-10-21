@@ -1,6 +1,6 @@
-//! The Agents place: in the middle, the Claude sessions working in the project (Needs you
-//! first) and the agents they can run as; in the panel, the one picked: a session with what it
-//! did, or an agent's page to change, copy or remove it.
+//! Agents and Sessions, two views side by side in the sidebar. Agents: the agents Claude
+//! sessions can run as, each with a page to change, copy or remove it. Sessions: the project's
+//! Claude sessions, past and running (Needs you first), each with what it did, to read.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,6 +21,9 @@ use crate::model::agents::Pick;
 use crate::model::agents::{PAGE, SessionRow};
 use livtk_core::claude::Entry;
 
+/// How many records before a moment a session opened at it begins: the turn that led to it.
+const READ_BEFORE: usize = 6;
+
 /// How often the sessions are asked for while the place is open.
 const POLL: Duration = Duration::from_secs(3);
 
@@ -39,6 +42,8 @@ pub(super) struct AgentForm {
     pub polling: bool,
     /// Where the session being read is scrolled.
     pub reader_scroll: ScrollHandle,
+    /// The project whose transcripts were last asked for, outside the Sessions view's poll.
+    pub transcripts_for: Option<std::path::PathBuf>,
 }
 
 impl AgentForm {
@@ -60,14 +65,20 @@ impl AgentForm {
             loaded: None,
             polling: false,
             reader_scroll: ScrollHandle::new(),
+            transcripts_for: None,
         }
     }
 }
 
 impl LivtkApp {
-    /// Whether the panel shows the Agents place's pick.
+    /// Whether the panel shows this view's pick: an agent in Agents, a session in Sessions.
     pub(super) fn agents_panel_open(&self) -> bool {
-        self.model.view() == View::Agents && self.model.agents.open.is_some()
+        // Each view's own: a session in Sessions, an agent in Agents.
+        matches!(
+            (self.model.view(), &self.model.agents.open),
+            (View::Sessions, Some(Pick::Session(_)))
+                | (View::Agents, Some(Pick::Agent(_) | Pick::New(_)))
+        )
     }
 
     /// Ask Claude Code for the sessions, off the window's thread, again every few seconds while
@@ -99,7 +110,7 @@ impl LivtkApp {
             cx.background_executor().timer(POLL).await;
             let _ = this.update(cx, |app, cx| {
                 app.agent_form.polling = false;
-                if app.model.view() == View::Agents {
+                if app.model.view() == View::Sessions {
                     cx.notify();
                 }
             });
@@ -152,18 +163,14 @@ impl LivtkApp {
         }
     }
 
-    /// The middle: the sessions, then the agents by place.
-    pub(super) fn agents_view(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// The middle of Sessions: the project's sessions, past and running, Needs you first; or the
+    /// one being read.
+    pub(super) fn sessions_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.poll_sessions(cx);
-        self.sync_form(window, cx);
         let open = self.model.agents.open.clone();
         let mut list = div()
-            .id("agents-place")
-            .debug_selector(|| "agents-place".into())
+            .id("sessions-place")
+            .debug_selector(|| "sessions-place".into())
             .size_full()
             .overflow_y_scroll()
             .flex()
@@ -189,6 +196,24 @@ impl LivtkApp {
             let on = open.as_ref() == Some(&pick);
             list = list.child(self.session_row(row, on, pick, cx));
         }
+        list.into_any_element()
+    }
+
+    /// The middle of Agents: the agents by where they live.
+    pub(super) fn agents_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.sync_form(window, cx);
+        let open = self.model.agents.open.clone();
+        let mut list = div()
+            .id("agents-place")
+            .debug_selector(|| "agents-place".into())
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
         // Agents, by place.
         let new = div()
             .id("agent-new")
@@ -319,11 +344,7 @@ impl LivtkApp {
                 div()
                     .text_xs()
                     .text_color(color(TEXT_4))
-                    .child(if row.nodes > 0 {
-                        format!("{} node(s)", row.nodes)
-                    } else {
-                        String::new()
-                    }),
+                    .child(row_detail(row)),
             )
             .child(
                 div()
@@ -529,10 +550,11 @@ impl LivtkApp {
     }
 
     /// The session being read, in the middle: what was asked, what Claude said, each call one
-    /// line until opened, its result under it; read a page at a time.
+    /// line until opened, its result under it; read a page at a time, from a little before the
+    /// moment it was opened at, if any.
     fn reader_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.read_pages(cx);
-        let Some(r) = self.model.agents.reader.clone() else {
+        let Some(r) = self.model.agents.reader.as_ref() else {
             return div().into_any_element();
         };
         let name = self
@@ -542,6 +564,7 @@ impl LivtkApp {
             .find(|row| row.id == r.session)
             .map_or_else(|| r.session.clone(), |row| row.name);
         let results = livtk_core::claude::results(&r.entries);
+        let focus = r.focus_index();
         let mut body = div()
             .id("session-reader-scroll")
             .flex_1()
@@ -553,12 +576,17 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .gap_3();
-        let focus = r
-            .focus
-            .as_deref()
-            .and_then(|f| r.entries.iter().position(|e| e.at() >= f));
-        for (i, e) in r.entries.iter().enumerate() {
-            let lit = focus == Some(i);
+        // Begun past the start: what came before is a press away.
+        let earlier = r.begun > 0;
+        if earlier {
+            body = body.child(button("reader-start", "From the start", false).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.model.read_from_start();
+                    cx.notify();
+                }),
+            ));
+        }
+        for (i, e) in r.drawn().enumerate() {
             let el = match e {
                 Entry::Prompt { text, at } => said("You", text, at, ACCENT),
                 Entry::Reply { text, at } => said("Claude", text, at, TEXT_3),
@@ -573,66 +601,11 @@ impl LivtkApp {
                     summary,
                     input,
                     ..
-                } => {
-                    let open = r.open.contains(id);
-                    let call = id.clone();
-                    let mut d = div().flex().flex_col().gap_1().child(
-                        div()
-                            .id(SharedString::from(format!("call-{id}")))
-                            .debug_selector({
-                                let id = id.clone();
-                                move || format!("call-{id}")
-                            })
-                            .flex()
-                            .gap_2()
-                            .text_xs()
-                            .text_color(color(TEXT_3))
-                            .hover(|h| h.text_color(color(TEXT_2)))
-                            .child(div().text_color(color(TEXT_2)).child(name.clone()))
-                            .child(div().truncate().child(summary.clone()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.model.toggle_call(&call);
-                                cx.notify();
-                            })),
-                    );
-                    if open {
-                        // A call that started a subagent: its work, to read.
-                        if let Some(sub) = self.model.subagent_of(id) {
-                            let call = id.clone();
-                            let label = format!(
-                                "Read {}'s work",
-                                sub.agent_type.as_deref().unwrap_or("the subagent")
-                            );
-                            d = d.child(
-                                div()
-                                    .id(SharedString::from(format!("subagent-{id}")))
-                                    .debug_selector({
-                                        let id = id.clone();
-                                        move || format!("subagent-{id}")
-                                    })
-                                    .text_xs()
-                                    .text_color(color(ACCENT))
-                                    .hover(|h| h.text_color(color(ACCENT_HOVER)))
-                                    .child(label)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.model.read_subagent(&call);
-                                        cx.notify();
-                                    })),
-                            );
-                        }
-                        d = d.child(code(input));
-                        if let Some((text, error)) = results.get(id.as_str()) {
-                            d = d.child(
-                                code(&clip(text)).when(*error, |c| c.text_color(color(RED))),
-                            );
-                        }
-                    }
-                    d
-                }
+                } => self.call(id, name, summary, input, r.open.contains(id), &results, cx),
             };
             body = body.child(
                 div()
-                    .when(lit, |d| {
+                    .when(focus == Some(i), |d| {
                         d.debug_selector(|| "reader-focus".into())
                             .border_l_2()
                             .border_color(color(ACCENT))
@@ -654,8 +627,11 @@ impl LivtkApp {
                 })),
             );
         }
+        // The rows drawn, the button above them counted.
         if let Some(i) = focus {
-            self.agent_form.reader_scroll.scroll_to_item(i);
+            self.agent_form
+                .reader_scroll
+                .scroll_to_item(i + usize::from(earlier));
         }
         div()
             .debug_selector(|| "session-reader".into())
@@ -690,27 +666,123 @@ impl LivtkApp {
             .into_any_element()
     }
 
-    /// Read the next page of the session being read, off the window's thread, when it wants one.
+    /// A tool call in the reader: one line until opened; opened, its input and result, and for a
+    /// call that started a subagent, its work to read.
+    #[allow(clippy::too_many_arguments)]
+    fn call(
+        &self,
+        id: &str,
+        name: &str,
+        summary: &str,
+        input: &str,
+        open: bool,
+        results: &std::collections::HashMap<&str, (&str, bool)>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let call = id.to_owned();
+        let sel = format!("call-{id}");
+        let mut d = div().flex().flex_col().gap_1().child(
+            div()
+                .id(SharedString::from(sel.clone()))
+                .debug_selector(move || sel.clone())
+                .flex()
+                .gap_2()
+                .text_xs()
+                .text_color(color(TEXT_3))
+                .hover(|h| h.text_color(color(TEXT_2)))
+                .child(div().text_color(color(TEXT_2)).child(name.to_owned()))
+                .child(div().truncate().child(summary.to_owned()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.model.toggle_call(&call);
+                    cx.notify();
+                })),
+        );
+        if !open {
+            return d;
+        }
+        if let Some(sub) = self.model.subagent_of(id) {
+            let call = id.to_owned();
+            let sel = format!("subagent-{id}");
+            let label = format!(
+                "Read {}'s work",
+                sub.agent_type.as_deref().unwrap_or("the subagent")
+            );
+            d = d.child(
+                div()
+                    .id(SharedString::from(sel.clone()))
+                    .debug_selector(move || sel.clone())
+                    .text_xs()
+                    .text_color(color(ACCENT))
+                    .hover(|h| h.text_color(color(ACCENT_HOVER)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.read_subagent(&call);
+                        cx.notify();
+                    })),
+            );
+        }
+        d = d.child(code(input));
+        if let Some((text, error)) = results.get(id) {
+            d = d.child(code(&clip(text)).when(*error, |c| c.text_color(color(RED))));
+        }
+        d
+    }
+
+    /// Read the next page of the session being read, off the window's thread, when it wants one:
+    /// first finding where to begin, when it was opened at a moment.
     fn read_pages(&mut self, cx: &mut Context<Self>) {
-        let Some((path, from)) = self.model.wants_page() else {
+        let Some((path, from, seek)) = self.model.wants_page() else {
             return;
         };
         let Some(session) = self.model.agents.reader.as_ref().map(|r| r.session.clone()) else {
             return;
         };
         self.model.page_asked();
-        let read = cx.background_spawn(async move { livtk_core::claude::read(&path, from, PAGE) });
+        let read = cx.background_spawn(async move {
+            let from = match seek {
+                Some(at) => livtk_core::claude::offset_near(&path, &at, READ_BEFORE)?,
+                None => from,
+            };
+            livtk_core::claude::read(&path, from, PAGE).map(|page| (from, page))
+        });
         cx.spawn(async move |this, cx| {
-            let page = read.await;
+            let read = read.await;
             let _ = this.update(cx, |app, cx| {
-                match page {
-                    Ok(page) => app.model.add_page(&session, page),
+                match read {
+                    Ok((from, page)) => app.model.add_page(&session, from, page),
                     Err(e) => {
                         app.model.close_reader();
                         app.model
                             .warn(format!("The transcript could not be read: {e}"));
                     }
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Have the project's transcripts read, once, off the window's thread: a task's panel names
+    /// its sessions by them, before Sessions was ever opened.
+    pub(super) fn load_transcripts(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.model.project_root() else {
+            return;
+        };
+        if self.agent_form.transcripts_for.as_ref() == Some(&root) {
+            return;
+        }
+        self.agent_form.transcripts_for = Some(root.clone());
+        let read = cx.background_spawn(async move {
+            agents::claude_home()
+                .map(|h| {
+                    livtk_core::claude::transcripts(&livtk_core::claude::transcripts_in(&h, &root))
+                })
+                .unwrap_or_default()
+        });
+        cx.spawn(async move |this, cx| {
+            let transcripts = read.await;
+            let _ = this.update(cx, |app, cx| {
+                app.model.set_transcripts(transcripts);
                 cx.notify();
             });
         })
@@ -969,4 +1041,19 @@ fn clip(text: &str) -> String {
         .last()
         .unwrap_or(0);
     format!("{}\n… {} more characters", &text[..cut], text.len() - cut)
+}
+
+/// A session row's quiet detail: who worked in it, and on how many nodes.
+fn row_detail(row: &SessionRow) -> String {
+    let by: Vec<&str> = row
+        .by
+        .iter()
+        .map(|b| b.strip_prefix("claude:").unwrap_or(b))
+        .collect();
+    match (by.is_empty(), row.nodes) {
+        (true, 0) => String::new(),
+        (true, n) => format!("{n} node(s)"),
+        (false, 0) => by.join(", "),
+        (false, n) => format!("{} · {n} node(s)", by.join(", ")),
+    }
 }

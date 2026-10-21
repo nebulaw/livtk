@@ -133,3 +133,24 @@ fn a_session_reads_as_a_person_reads_it_a_page_at_a_time() {
     let joined: Vec<Entry> = first.entries.into_iter().chain(rest.entries).collect();
     assert_eq!(joined, all.entries);
 }
+
+#[test]
+fn reading_starts_a_little_before_a_time_without_reading_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let path = dir.path().join("11111111-aaaa.jsonl");
+    // One record before the first at or after 08:00:06 (the result): the call's turn.
+    let from = livtk_core::claude::offset_near(&path, "2026-10-16T08:00:06.000Z", 1).unwrap();
+    let page = read(&path, from, 100).unwrap();
+    assert!(
+        matches!(page.entries[0], Entry::Reply { .. }),
+        "{:?}",
+        page.entries[0]
+    );
+    // Before everything: the start; after everything: a little before the end.
+    assert_eq!(
+        livtk_core::claude::offset_near(&path, "2000-01-01T00:00:00.000Z", 3).unwrap(),
+        0
+    );
+    assert!(livtk_core::claude::offset_near(&path, "2999-01-01T00:00:00.000Z", 1).unwrap() > 0);
+}

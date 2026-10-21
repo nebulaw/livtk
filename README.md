@@ -79,8 +79,8 @@ project that already briefs Claude at session start gets two overlapping blocks.
     '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
   ```
 
-**A project's own kinds and relations.** livtk ships four kinds (task, lesson, decision,
-finding) and five relations (waits for, relates, supersedes, learned from, part of). A project
+**A project's own kinds and relations.** livtk ships five kinds (task, lesson, decision,
+finding, project) and five relations (waits for, relates, supersedes, learned from, part of). A project
 that needs its own words declares them in `.livtk/config.toml`; one that declares nothing gets
 exactly the built-in set.
 

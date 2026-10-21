@@ -4,6 +4,36 @@ From TAS-65, 2026-10-21. The question: how should the app run Claude on tasks, s
 keeps a terminal open to watch for acks? They want to create a task in the app, give it to an agent (or take
 a suggested one), start it by hand or automatically, see the sessions that are running, and manage them.
 
+## What the spike settled (TAS-66, FND-1)
+
+Tried on this machine on 2026-10-21. **The runner is livtk's own, not Claude Code's `--bg`
+supervisor.** livtk starts each run as headless `claude -p` with a fixed session id, streaming
+JSON, in its own process group, and writes its stream to a file beside the log (`.livtk/runs/`,
+local, not committed).
+
+- **The conversation.** Each turn's text becomes a note on the task. A note from you resumes the
+  session with `--resume <id>` and your note as the next message.
+- **Needs you.** The run uses `--permission-prompts none`, so anything that would ask is refused
+  and listed with its exact input in the turn's result.
+  - livtk writes that as a needs-you note with **Allow / Deny**.
+  - Allow resumes the run with exactly those commands permitted, each simple command of a compound
+    one separately.
+  - A turn that ends on a question waits for your note the same way.
+- **Writing…** shows from a turn's start to its result. For sessions livtk did not start, the
+  UserPromptSubmit and Stop hooks set and clear it.
+- **Quitting.**
+  - **Keep them working** leaves runs going: they are their own processes, writing to their own
+    files, and the app picks them up again by session id on its next start.
+  - **Stop them all** sends SIGINT to each run's group. The turn ends cleanly, the work is kept,
+    and the session can resume later.
+- **Agents.** A plugin agent runs as the session's own agent (`--agent livtk:implementer`). Its
+  hooks know it, and an environment variable naming the task reaches them.
+- **Claude Code's `--bg` sessions** still show in the Agents place, read from `claude agents
+  --json`, with Open and Stop. livtk does not start its runs that way.
+
+What follows is the plan as first written. Where it says the supervisor runs livtk's sessions, read
+the runner above.
+
 ## The short answer
 
 Claude Code already ships a local supervisor for background sessions:

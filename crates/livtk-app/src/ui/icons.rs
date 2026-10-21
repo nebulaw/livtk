@@ -36,7 +36,7 @@ macro_rules! icons {
 icons! {
     Inbox => "inbox",
     Activity => "bolt-alt",
-    Tasks => "ticket-star",
+    Tasks => "task",
     Lessons => "light-bulb-alt",
     Decisions => "route",
     Findings => "medical-flask",

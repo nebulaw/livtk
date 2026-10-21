@@ -52,14 +52,14 @@ fn the_app_bundle_is_the_app_it_says_it_is() {
     );
 }
 
-/// Each view's icon, by its file: tasks a starred ticket, projects a bullseye, lessons a light
+/// Each view's icon, by its file: tasks a check, projects a bullseye, lessons a light
 /// bulb, agents the cognition head, the graph a mesh.
 #[test]
 fn views_wear_their_icons() {
     use livtk_app::model::View;
     use livtk_app::ui::view_icon;
     for (view, file) in [
-        (View::Tasks, "ticket-star"),
+        (View::Tasks, "task"),
         (View::Projects, "bullseye"),
         (View::Lessons, "light-bulb-alt"),
         (View::Agents, "cognition"),

@@ -3966,3 +3966,66 @@ fn settings_take_the_sidebar_and_write_the_projects_config(cx: &mut TestAppConte
     assert!(cx.debug_bounds("settings-sidebar").is_none());
     assert!(cx.debug_bounds("view-Tasks").is_some());
 }
+
+/// Settings › Opening work hides the state graph in a node's detail, in every mode, keeping the
+/// state menu; on brings it back; the choice is saved, and a file without it shows the graph.
+#[gpui_kit::test]
+fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    assert!(cx.debug_bounds("state-flow").is_some(), "shown by default");
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    click_on(cx, "settings-opening-work");
+    redraw(cx);
+    click_on(cx, "settings-state-graph-on");
+    redraw(cx);
+    assert!(cx.debug_bounds("settings-state-graph-off").is_some());
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-state").is_some(),
+        "the state menu stays"
+    );
+    assert!(
+        cx.debug_bounds("state-flow").is_none(),
+        "hidden beside the list"
+    );
+    for mode in [
+        livtk_app::model::DetailMode::Center,
+        livtk_app::model::DetailMode::Full,
+    ] {
+        app.update(cx, |a, cx| {
+            a.model_mut().detail_mode = mode;
+            cx.notify();
+        });
+        settle(cx);
+        assert!(cx.debug_bounds("detail-state").is_some(), "{mode:?}");
+        assert!(
+            cx.debug_bounds("state-flow").is_none(),
+            "hidden in {mode:?}"
+        );
+    }
+    // Saved, and brought back.
+    let saved = app.read_with(cx, |a, _| a.model().saved());
+    assert!(saved.hide_state_flow);
+    app.update(cx, |a, cx| {
+        a.model_mut().restore(&livtk_app::model::Saved::default());
+        cx.notify();
+    });
+    settle(cx);
+    assert!(
+        !app.read_with(cx, |a, _| a.model().hide_state_flow),
+        "a file without it shows the graph"
+    );
+    assert!(cx.debug_bounds("state-flow").is_some(), "shown again");
+    app.update(cx, |a, cx| {
+        a.model_mut().restore(&saved);
+        cx.notify();
+    });
+    settle(cx);
+    assert!(cx.debug_bounds("state-flow").is_none(), "restored hidden");
+}

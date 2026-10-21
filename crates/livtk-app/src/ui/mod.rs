@@ -5211,7 +5211,9 @@ impl LivtkApp {
                     .flex_col()
                     .gap_5()
                     .child(title)
-                    .when(has_flow(n.kind), |d| d.child(flow))
+                    .when(has_flow(n.kind) && !self.model.hide_state_flow, |d| {
+                        d.child(flow)
+                    })
                     .child(props)
                     // What it waits for and what it blocks come before what it says.
                     .child(links)

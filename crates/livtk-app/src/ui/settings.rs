@@ -358,11 +358,23 @@ impl LivtkApp {
                 })),
             );
         }
-        group().child(row(
-            "Open a task as",
-            "Beside the list, in a card over the window, or in the list's place.",
-            modes,
-        ))
+        let shown = !self.model.hide_state_flow;
+        group()
+            .child(row(
+                "Open a task as",
+                "Beside the list, in a card over the window, or in the list's place.",
+                modes,
+            ))
+            .child(row(
+                "State graph",
+                "The states it moves through, above its body.",
+                toggle("settings-state-graph".into(), shown).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.model.hide_state_flow = shown;
+                        cx.notify();
+                    },
+                )),
+            ))
     }
 
     fn updates(&self, cx: &mut Context<Self>) -> Div {

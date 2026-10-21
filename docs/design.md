@@ -51,6 +51,10 @@ a header bar; Esc goes back. Sections are yours (this app's, private) or this pr
 written through the core, checked, comments kept; one that does not hold says why and changes
 nothing.
 
+What a detail shows that some want and others want the room for (its state graph) is a personal
+switch under Opening work, never a per-node toggle; hidden, nothing it offered is lost (the state
+menu still moves it).
+
 ## Parts
 
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the

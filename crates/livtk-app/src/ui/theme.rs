@@ -99,12 +99,17 @@ pub fn state_color(kind: Kind, state: State) -> u32 {
     match state {
         State::Backlog => BACKLOG,
         State::Planned | State::Acked | State::Proposed => TODO,
-        State::Doing => PROGRESS,
+        State::Doing | State::Active => PROGRESS,
         State::Review => REVIEW,
         State::Done | State::Ratified | State::Accepted => DONE,
         State::Recorded => TEXT_3,
         State::Rejected => RED,
-        State::Parked | State::Canceled | State::Retired | State::Superseded => CANCELED,
+        State::Parked
+        | State::Paused
+        | State::Canceled
+        | State::Dropped
+        | State::Retired
+        | State::Superseded => CANCELED,
         // A declared kind's state: settled when its kind closes there, else in hand.
         s if kind.is_closed(s) => DONE,
         _ => PROGRESS,
@@ -122,13 +127,13 @@ pub fn state_mark(kind: Kind, state: State) -> Div {
         .border_2()
         .border_color(color(c));
     match state {
-        State::Backlog | State::Parked => ring.opacity(0.55),
+        State::Backlog | State::Parked | State::Paused => ring.opacity(0.55),
         State::Acked => ring
             .flex()
             .items_center()
             .justify_center()
             .child(div().size(px(4.)).rounded_full().bg(color(c))),
-        State::Doing | State::Review => ring
+        State::Doing | State::Review | State::Active => ring
             .flex()
             .items_center()
             .justify_center()
@@ -136,7 +141,7 @@ pub fn state_mark(kind: Kind, state: State) -> Div {
         State::Done | State::Ratified | State::Accepted | State::Recorded => {
             div().size(px(14.)).flex_none().rounded_full().bg(color(c))
         }
-        State::Canceled | State::Rejected => div()
+        State::Canceled | State::Rejected | State::Dropped => div()
             .size(px(14.))
             .flex_none()
             .rounded_full()

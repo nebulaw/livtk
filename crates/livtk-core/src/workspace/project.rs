@@ -133,9 +133,31 @@ impl Workspace {
         self.store.list(Kind::Project, &[])
     }
 
-    /// The nearest project each node is part of; empty, and free, while there is none.
-    pub fn projects_of(&self) -> Result<HashMap<Uuid, Brief>> {
-        Ok(self.store.projects_of()?.into_iter().collect())
+    /// The nearest project each node is part of, by the project's id; empty, and free, while
+    /// there is none.
+    pub fn projects_of(&self) -> Result<HashMap<Uuid, (Uuid, Brief)>> {
+        Ok(self
+            .store
+            .projects_of()?
+            .into_iter()
+            .map(|(node, id, brief)| (node, (id, brief)))
+            .collect())
+    }
+
+    /// A project's updates, newest first.
+    pub fn updates(&self, key: &str) -> Result<Vec<Update>> {
+        let p = self.node(key)?;
+        self.store
+            .updates(p.id)?
+            .into_iter()
+            .map(|(at, health, text)| {
+                Ok(Update {
+                    at,
+                    health: health.parse()?,
+                    text,
+                })
+            })
+            .collect()
     }
 
     /// The states a node of `kind` waits on the human in: those with a move only the human may

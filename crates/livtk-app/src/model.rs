@@ -39,6 +39,8 @@ pub enum View {
     /// Every change in the project, newest first.
     Activity,
     Tasks,
+    /// Outcomes above tasks, with their progress.
+    Projects,
     Lessons,
     Decisions,
     Findings,
@@ -53,10 +55,11 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 9] = [
+    pub const ALL: [View; 10] = [
         View::Inbox,
         View::Activity,
         View::Tasks,
+        View::Projects,
         View::Lessons,
         View::Decisions,
         View::Findings,
@@ -71,6 +74,7 @@ impl View {
             View::Inbox => "Inbox",
             View::Activity => "Activity",
             View::Tasks => "Tasks",
+            View::Projects => "Projects",
             View::Lessons => "Lessons",
             View::Decisions => "Decisions",
             View::Findings => "Findings",
@@ -89,7 +93,12 @@ impl View {
     pub const fn shows_dismissed(self) -> bool {
         matches!(
             self,
-            View::Tasks | View::Lessons | View::Decisions | View::Findings | View::Graph
+            View::Tasks
+                | View::Projects
+                | View::Lessons
+                | View::Decisions
+                | View::Findings
+                | View::Graph
         )
     }
 
@@ -99,6 +108,7 @@ impl View {
             View::Of(kind) => Some(kind),
             View::Inbox | View::Activity | View::Graph | View::Terminal | View::Docs => None,
             View::Tasks => Some(Kind::Task),
+            View::Projects => Some(Kind::Project),
             View::Lessons => Some(Kind::Lesson),
             View::Decisions => Some(Kind::Decision),
             View::Findings => Some(Kind::Finding),
@@ -223,6 +233,8 @@ pub enum Layout {
 pub enum Grouping {
     State,
     Priority,
+    /// By the project a task is part of (tasks only).
+    Project,
     None,
 }
 
@@ -279,6 +291,19 @@ impl Display {
 /// acknowledged, doing, review, done, then parked and canceled). Without a kind (the inbox mixes
 /// them), the order of all states.
 pub fn state_order(kind: Option<Kind>, state: State) -> u8 {
+    // Projects: the active ones on top, those waiting to be committed to next.
+    if kind == Some(Kind::Project) {
+        const ORDER: [State; 5] = [
+            State::Active,
+            State::Proposed,
+            State::Paused,
+            State::Done,
+            State::Dropped,
+        ];
+        if let Some(i) = ORDER.iter().position(|s| *s == state) {
+            return i as u8;
+        }
+    }
     kind.and_then(|k| k.states().iter().position(|s| *s == state))
         .map_or(state.rank(), |i| u8::try_from(i).unwrap_or(u8::MAX))
 }
@@ -288,6 +313,8 @@ pub fn state_order(kind: Option<Kind>, state: State) -> u8 {
 pub enum GroupKey {
     State(State),
     Priority(u8),
+    /// The project, by its id; `None` gathers the tasks part of none.
+    Project(Option<Uuid>),
     All,
 }
 
@@ -421,6 +448,8 @@ pub struct Detail {
     pub choices: Vec<Choice>,
     /// The docs it is linked to, by path, each with its title (`None` once it is gone).
     pub docs: Vec<(String, Option<String>)>,
+    /// A project's progress and updates, newest first.
+    pub project: Option<(livtk_core::Progress, Vec<livtk_core::Update>)>,
 }
 
 /// Links of one relation and direction, as the detail panel lists them.
@@ -695,6 +724,12 @@ pub struct Pane {
     pub depth: HashMap<Uuid, usize>,
     /// Each parent's sub-tasks: how many are done, of how many.
     pub progress: HashMap<Uuid, (usize, usize)>,
+    /// In the projects view, each project's progress.
+    pub projects: HashMap<Uuid, livtk_core::Progress>,
+    /// Grouped by project, the project each row is part of, by its id, and the projects in
+    /// key order with their titles.
+    pub project_of: HashMap<Uuid, Uuid>,
+    pub project_names: Vec<(Uuid, Brief)>,
 }
 
 impl Pane {
@@ -713,6 +748,9 @@ impl Pane {
             all: Vec::new(),
             depth: HashMap::new(),
             progress: HashMap::new(),
+            projects: HashMap::new(),
+            project_of: HashMap::new(),
+            project_names: Vec::new(),
         }
     }
 }
@@ -1027,6 +1065,16 @@ impl Model {
     /// The rows the pane acted on shows, in display order.
     pub fn rows(&self) -> &[Summary] {
         &self.pane().rows
+    }
+
+    /// Grouped by project, the projects the rows are part of, in key order.
+    pub fn project_names(&self) -> &[(Uuid, Brief)] {
+        &self.pane().project_names
+    }
+
+    /// In the projects view, a project's progress.
+    pub fn project_progress(&self, id: Uuid) -> Option<&livtk_core::Progress> {
+        self.pane().projects.get(&id)
     }
 
     pub fn groups(&self) -> &[Group] {
@@ -1989,6 +2037,8 @@ impl Model {
         let mut d = self.display();
         edit(&mut d);
         self.displays.insert(self.pane().view, d);
+        // Grouped by project now: which project each row is part of.
+        self.load_projects();
         self.arrange();
         self.reselect();
     }
@@ -2120,15 +2170,24 @@ impl Model {
             .filter(|r| d.states.is_empty() || d.states.contains(&r.state))
             .cloned()
             .collect();
+        let project_of = self.pane().project_of.clone();
         let group_of = |r: &Summary| match d.grouping {
             Grouping::State => GroupKey::State(r.state),
             Grouping::Priority => GroupKey::Priority(r.priority),
+            Grouping::Project => GroupKey::Project(project_of.get(&r.id).copied()),
             Grouping::None => GroupKey::All,
         };
         let kind = self.pane().view.kind();
+        let names = self.pane().project_names.clone();
         let group_rank = |k: GroupKey| match k {
             GroupKey::State(s) => state_order(kind, s),
             GroupKey::Priority(p) => p,
+            // Projects in key order, then the tasks part of none.
+            GroupKey::Project(Some(id)) => names
+                .iter()
+                .position(|(p, _)| *p == id)
+                .map_or(u8::MAX - 1, |i| u8::try_from(i).unwrap_or(u8::MAX - 1)),
+            GroupKey::Project(None) => u8::MAX,
             GroupKey::All => 0,
         };
         rows.sort_by(|a, b| {
@@ -2224,6 +2283,13 @@ impl Model {
                 .map(|&s| GroupKey::State(s))
                 .collect(),
             (Grouping::Priority, Some(_)) => (1..=4).map(GroupKey::Priority).collect(),
+            (Grouping::Project, Some(_)) => self
+                .pane()
+                .project_names
+                .iter()
+                .map(|(id, _)| GroupKey::Project(Some(*id)))
+                .chain([GroupKey::Project(None)])
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -2273,6 +2339,8 @@ impl Model {
         let d = self.display();
         let keys: Vec<GroupKey> = if d.grouping == Grouping::Priority {
             (1..=4u8).map(GroupKey::Priority).collect()
+        } else if d.grouping == Grouping::Project {
+            self.every_group(&d)
         } else {
             // The kind's states in their own order, as the list's groups; dismissed ones only
             // while shown. The filter says what the board is about: no column for a state it
@@ -2295,6 +2363,7 @@ impl Model {
                     .filter(|r| match key {
                         GroupKey::State(s) => r.state == s,
                         GroupKey::Priority(p) => r.priority == p,
+                        GroupKey::Project(p) => self.pane().project_of.get(&r.id).copied() == p,
                         GroupKey::All => true,
                     })
                     .collect::<Vec<_>>();
@@ -2321,6 +2390,60 @@ impl Model {
         {
             self.detail = load_detail(&project.ws, id).ok();
         }
+    }
+
+    /// What the pane needs of projects: each project's progress in the projects view, and the
+    /// project each row is part of while grouped by project. Nothing, at no cost, otherwise.
+    fn load_projects(&mut self) {
+        let view = self.pane().view;
+        let by_project = self.display().grouping == Grouping::Project;
+        let Some(project) = self.projects.get(self.current) else {
+            return;
+        };
+        let mut progress = HashMap::new();
+        if view == View::Projects {
+            let now = jiff::Timestamp::now();
+            for r in &self.pane().all {
+                if let Ok(g) = project.ws.progress(&r.key, now) {
+                    progress.insert(r.id, g);
+                }
+            }
+        }
+        let (mut of, mut names) = (HashMap::new(), Vec::new());
+        if by_project && let Ok(map) = project.ws.projects_of() {
+            for (node, (id, brief)) in map {
+                of.insert(node, id);
+                if !names.iter().any(|(p, _): &(Uuid, Brief)| *p == id) {
+                    names.push((id, brief));
+                }
+            }
+            // In key order: PRJ-2 before PRJ-10.
+            names.sort_by_key(|(_, b)| {
+                b.key
+                    .rsplit('-')
+                    .next()
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .unwrap_or(u32::MAX)
+            });
+        }
+        let pane = self.pane_mut();
+        pane.projects = progress;
+        pane.project_of = of;
+        pane.project_names = names;
+    }
+
+    /// How many projects are active, when more are than is wise at once.
+    pub fn too_many_active(&self) -> Option<usize> {
+        if self.pane().view != View::Projects {
+            return None;
+        }
+        let active = self
+            .pane()
+            .all
+            .iter()
+            .filter(|r| r.state == State::Active)
+            .count();
+        (active > livtk_core::ACTIVE_AT_ONCE).then_some(active)
     }
 
     /// Read again what the pane acted on shows.
@@ -2363,6 +2486,7 @@ impl Model {
             Ok(rows) => self.pane_mut().all = rows,
             Err(e) => self.warn(e.to_string()),
         }
+        self.load_projects();
         self.arrange();
         if self.selected().is_none() {
             self.pane_mut().selected = self.pane().rows.first().map(|r| r.id);
@@ -2376,7 +2500,8 @@ pub fn drop_allowed(kind: Kind, state: State, priority: u8, target: GroupKey) ->
     match target {
         GroupKey::State(s) => state != s && kind.can_move(state, s),
         GroupKey::Priority(p) => kind == Kind::Task && priority != p,
-        GroupKey::All => false,
+        // A task joins a project by a link, from its panel, not by a drop.
+        GroupKey::Project(_) | GroupKey::All => false,
     }
 }
 
@@ -2402,6 +2527,12 @@ pub fn choices_with(kind: Kind, state: State, gates: &[Gate]) -> Vec<Choice> {
             (Kind::Task, State::Backlog) => "Back to backlog",
             (Kind::Task, State::Parked) => "Park",
             (Kind::Task, State::Canceled) => "Cancel",
+            (Kind::Project, State::Active) if state == State::Proposed => "Commit to it",
+            (Kind::Project, State::Active) if state == State::Paused => "Resume",
+            (Kind::Project, State::Active) => "Reopen",
+            (Kind::Project, State::Done) => "Done",
+            (Kind::Project, State::Paused) => "Pause",
+            (Kind::Project, State::Dropped) => "Drop",
             (_, State::Ratified) => "Ratify",
             (_, State::Accepted) => "Accept",
             (_, State::Rejected) => "Reject",
@@ -2446,33 +2577,65 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         outgoing,
         briefs: briefs.clone(),
     };
-    let link_groups: Vec<LinkGroup> = [
-        group("Part of", Rel::Parent, true, &part_of),
-        group("Sub-tasks", Rel::Parent, false, &parts),
-        group("Waits for", Rel::DependsOn, true, &links.depends_on),
-        group("Blocks", Rel::DependsOn, false, &links.blocks),
-        group("Related to", Rel::Relates, true, &related),
-        group("Replaces", Rel::Supersedes, true, &replaces),
-        group("Replaced by", Rel::Supersedes, false, &replaced_by),
-        group("Learned from", Rel::LearnedFrom, true, &learned_from),
-        group("Taught", Rel::LearnedFrom, false, &taught),
-    ]
-    .into_iter()
-    // The project's own relations, each from either end: by its name, and by its inverse.
-    .chain(declared_rels(ws).into_iter().flat_map(|rel| {
-        let (to, from) = ws.related(&key, rel).unwrap_or_default();
-        [
-            group(heading(rel.as_str()), rel, true, &to),
-            group(
-                heading(rel.inverse().unwrap_or(rel.as_str())),
-                rel,
-                false,
-                &from,
-            ),
-        ]
-    }))
-    .filter(|g| !g.briefs.is_empty())
-    .collect();
+    // A project's parts: the projects in it, then its tasks by state, in working order.
+    let parts_groups: Vec<LinkGroup> = if node.kind == Kind::Project {
+        let mut out = vec![group(
+            "Projects",
+            Rel::Parent,
+            false,
+            &parts
+                .iter()
+                .filter(|b| b.kind == Kind::Project)
+                .cloned()
+                .collect(),
+        )];
+        for &s in Kind::Task.states() {
+            let at: Vec<Brief> = parts
+                .iter()
+                .filter(|b| b.kind == Kind::Task && b.state == s)
+                .cloned()
+                .collect();
+            out.push(group(state_name(s), Rel::Parent, false, &at));
+        }
+        out
+    } else {
+        vec![group("Sub-tasks", Rel::Parent, false, &parts)]
+    };
+    let project = if node.kind == Kind::Project {
+        Some((
+            ws.progress(&key, jiff::Timestamp::now())?,
+            ws.updates(&key)?,
+        ))
+    } else {
+        None
+    };
+    let link_groups: Vec<LinkGroup> = [group("Part of", Rel::Parent, true, &part_of)]
+        .into_iter()
+        .chain(parts_groups)
+        .chain([
+            group("Waits for", Rel::DependsOn, true, &links.depends_on),
+            group("Blocks", Rel::DependsOn, false, &links.blocks),
+            group("Related to", Rel::Relates, true, &related),
+            group("Replaces", Rel::Supersedes, true, &replaces),
+            group("Replaced by", Rel::Supersedes, false, &replaced_by),
+            group("Learned from", Rel::LearnedFrom, true, &learned_from),
+            group("Taught", Rel::LearnedFrom, false, &taught),
+        ])
+        // The project's own relations, each from either end: by its name, and by its inverse.
+        .chain(declared_rels(ws).into_iter().flat_map(|rel| {
+            let (to, from) = ws.related(&key, rel).unwrap_or_default();
+            [
+                group(heading(rel.as_str()), rel, true, &to),
+                group(
+                    heading(rel.inverse().unwrap_or(rel.as_str())),
+                    rel,
+                    false,
+                    &from,
+                ),
+            ]
+        }))
+        .filter(|g| !g.briefs.is_empty())
+        .collect();
     Ok(Detail {
         choices: choices_with(node.kind, node.state, ws.gates()),
         links,
@@ -2483,6 +2646,7 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         learned_from,
         link_groups,
         node,
+        project,
     })
 }
 

@@ -4048,3 +4048,55 @@ fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
     settle(cx);
     assert!(cx.debug_bounds("state-flow").is_none(), "restored hidden");
 }
+
+/// The projects view: each row's progress, health, target and what waits; the panel's own
+/// section; and grouping by project offered for tasks alone.
+#[gpui_kit::test]
+fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let _ws = crate::projects::setup(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g p");
+    redraw(cx);
+    for part in ["progress", "health", "target", "waiting"] {
+        assert!(
+            cx.debug_bounds(named(format!("project-{part}-PRJ-1")))
+                .is_some(),
+            "{part}"
+        );
+    }
+    assert!(
+        cx.debug_bounds("project-waiting-PRJ-2").is_none(),
+        "nothing waits"
+    );
+    assert!(cx.debug_bounds("too-many-active").is_none());
+    open_detail(cx);
+    assert!(cx.debug_bounds("project-section").is_some());
+    assert!(cx.debug_bounds("project-waits-planned").is_some());
+    assert!(cx.debug_bounds("project-waits-review").is_some());
+    assert!(cx.debug_bounds("project-update-0").is_some());
+    // Grouping by project: offered in Tasks, not in Projects.
+    app.update(cx, |a, cx| {
+        a.model_mut().close_detail();
+        cx.notify();
+    });
+    click_on(cx, "dock-grouping");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("group-project").is_none(),
+        "not for projects"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    click_on(cx, "dock-grouping");
+    redraw(cx);
+    click_on(cx, "group-project");
+    redraw(cx);
+    assert_eq!(
+        app.read_with(cx, |a, _| a.model().display().grouping),
+        livtk_app::model::Grouping::Project
+    );
+}

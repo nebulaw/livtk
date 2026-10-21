@@ -138,6 +138,8 @@ fn group_name(key: GroupKey) -> String {
     match key {
         GroupKey::State(s) => format!("state:{}", s.as_str()),
         GroupKey::Priority(p) => format!("priority:{p}"),
+        GroupKey::Project(Some(id)) => format!("project:{id}"),
+        GroupKey::Project(None) => "project:none".to_owned(),
         GroupKey::All => "all".to_owned(),
     }
 }
@@ -146,14 +148,17 @@ fn group_key(name: &str) -> Option<GroupKey> {
     match name.split_once(':') {
         Some(("state", s)) => s.parse::<State>().ok().map(GroupKey::State),
         Some(("priority", p)) => p.parse().ok().map(GroupKey::Priority),
+        Some(("project", "none")) => Some(GroupKey::Project(None)),
+        Some(("project", id)) => id.parse().ok().map(|id| GroupKey::Project(Some(id))),
         None if name == "all" => Some(GroupKey::All),
         _ => None,
     }
 }
 
-const GROUPINGS: [(Grouping, &str); 3] = [
+const GROUPINGS: [(Grouping, &str); 4] = [
     (Grouping::State, "state"),
     (Grouping::Priority, "priority"),
+    (Grouping::Project, "project"),
     (Grouping::None, "none"),
 ];
 

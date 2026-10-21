@@ -83,6 +83,7 @@ actions!(
         GoInbox,
         GoActivity,
         GoTasks,
+        GoProjects,
         GoLessons,
         GoDecisions,
         GoFindings,
@@ -503,6 +504,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("g i", GoInbox, nav),
         KeyBinding::new("g a", GoActivity, nav),
         KeyBinding::new("g t", GoTasks, nav),
+        KeyBinding::new("g p", GoProjects, nav),
         KeyBinding::new("g l", GoLessons, nav),
         KeyBinding::new("g d", GoDecisions, nav),
         KeyBinding::new("g f", GoFindings, nav),
@@ -3081,7 +3083,12 @@ impl LivtkApp {
         let wide = self.content_width(window) >= DOCK_WIDE;
         let lists = matches!(
             view,
-            View::Tasks | View::Lessons | View::Decisions | View::Findings | View::Of(_)
+            View::Tasks
+                | View::Projects
+                | View::Lessons
+                | View::Decisions
+                | View::Findings
+                | View::Of(_)
         );
         let mut groups: Vec<Vec<AnyElement>> = Vec::new();
         if view == View::Tasks {
@@ -3360,8 +3367,10 @@ impl LivtkApp {
         // A board needs columns: as in Linear, it is never ungrouped.
         let board = self.model.view().has_board() && self.model.layout() == Layout::Board;
         let mut panel = menu_panel(180.).debug_selector(|| "grouping-menu".into());
+        // By project: tasks only.
+        let tasks = self.model.view() == View::Tasks;
         for &(id, label, g) in GROUPINGS {
-            if board && g == Grouping::None {
+            if (board && g == Grouping::None) || (!tasks && g == Grouping::Project) {
                 continue;
             }
             panel = panel.child(
@@ -4560,7 +4569,7 @@ impl LivtkApp {
         // The rows, then the dock's room at the end of what scrolls.
         let count = self.items().len() + DOCK_ROWS;
         let pane = self.model.focused();
-        uniform_list(
+        let list = uniform_list(
             "rows",
             count,
             cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
@@ -4585,8 +4594,35 @@ impl LivtkApp {
             }),
         )
         .track_scroll(&self.list_scroll())
-        .size_full()
-        .into_any_element()
+        .size_full();
+        // More projects active than is wise: said plainly above them, a nudge and not a lock.
+        match self.model.too_many_active() {
+            Some(n) => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .debug_selector(|| "too-many-active".into())
+                        .h(px(ROW))
+                        .flex_none()
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(color(BORDER))
+                        .text_xs()
+                        .text_color(color(TEXT_3))
+                        .child(icon(Icon::Projects, 12., TEXT_4))
+                        .child(format!(
+                            "{n} projects are active at once; fewer at a time finish sooner."
+                        )),
+                )
+                .child(div().flex_1().min_h_0().child(list))
+                .into_any_element(),
+            None => list.into_any_element(),
+        }
     }
 
     /// A group's solid header band: its mark, name and count. Click to collapse; drop a row on
@@ -4595,7 +4631,11 @@ impl LivtkApp {
         let Some(g) = self.model.groups().get(gi).cloned() else {
             return div().into_any_element();
         };
-        let (mark, label) = group_label(g.key, g.kind.unwrap_or(Kind::Task));
+        let (mark, label) = group_label(
+            g.key,
+            g.kind.unwrap_or(Kind::Task),
+            self.model.project_names(),
+        );
         let key = g.key;
         div()
             .id(SharedString::from(format!("band-{gi}")))
@@ -4671,6 +4711,80 @@ impl LivtkApp {
         )
     }
 
+    /// A project's row, after its title: how far it has come (a bar and done of all), how it
+    /// stands, its target, and what waits on the human.
+    fn project_parts(&self, r: &Summary) -> Option<Div> {
+        let g = self.model.project_progress(r.id)?;
+        let key = r.key.clone();
+        let share = if g.total == 0 {
+            0.
+        } else {
+            g.done as f32 / g.total as f32
+        };
+        let bar = div()
+            .w(px(48.))
+            .h(px(4.))
+            .flex_none()
+            .rounded_full()
+            .bg(color(BORDER_STRONG))
+            .child(
+                div()
+                    .h_full()
+                    .w(px(48. * share))
+                    .rounded_full()
+                    .bg(color(DONE)),
+            );
+        let k = key.clone();
+        let mut parts = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_3()
+            .text_xs()
+            .text_color(color(TEXT_4))
+            .child(
+                div()
+                    .debug_selector(move || format!("project-progress-{k}"))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(bar)
+                    .child(format!("{}/{}", g.done, g.total)),
+            );
+        let (health, c) = if g.update_missing {
+            ("Update missing", TEXT_3)
+        } else {
+            match g.update.as_ref().map(|u| u.health) {
+                Some(livtk_core::Health::OnTrack) => ("On track", REVIEW),
+                Some(livtk_core::Health::AtRisk) => ("At risk", URGENT),
+                Some(livtk_core::Health::OffTrack) => ("Off track", RED),
+                None => ("", TEXT_4),
+            }
+        };
+        if !health.is_empty() {
+            let k = key.clone();
+            parts =
+                parts.child(tag(health, c).debug_selector(move || format!("project-health-{k}")));
+        }
+        if let Some(t) = &g.target {
+            let k = key.clone();
+            parts = parts.child(
+                div()
+                    .debug_selector(move || format!("project-target-{k}"))
+                    .child(t.clone()),
+            );
+        }
+        let waiting: usize = g.waiting.iter().map(|w| w.count).sum();
+        if waiting > 0 {
+            let k = key.clone();
+            parts = parts.child(
+                icon_tag(Icon::You, &format!("{waiting} waiting on you"), ACCENT)
+                    .debug_selector(move || format!("project-waiting-{k}")),
+            );
+        }
+        Some(parts)
+    }
+
     fn row(
         &self,
         r: &Summary,
@@ -4734,7 +4848,8 @@ impl LivtkApp {
                     .child(r.title.clone()),
             )
             .children(self.model.parent_key(r).map(parent_chip))
-            .children(self.sub_task_count(id));
+            .children(self.sub_task_count(id))
+            .children(self.project_parts(r));
         if blocked {
             row = row.child(icon_tag(Icon::Blocked, "Blocked", TEXT_3));
         }
@@ -4746,6 +4861,7 @@ impl LivtkApp {
                 Kind::Task => "Acknowledge",
                 Kind::Lesson => "Ratify",
                 Kind::Decision => "Accept",
+                Kind::Project => "Commit",
                 _ => "",
             };
             row = row.child(tag(label, ACCENT));
@@ -4811,12 +4927,16 @@ impl LivtkApp {
             .gap(px(6.))
             .p_2();
         for (key, rows) in self.model.columns() {
-            let (mark, label) = group_label(key, Kind::Task);
+            let (mark, label) = group_label(key, Kind::Task, self.model.project_names());
             let mut col = div()
                 .id(SharedString::from(format!("col-{key:?}")))
                 .debug_selector(move || match key {
                     GroupKey::State(s) => format!("column-{}", s.as_str()),
                     GroupKey::Priority(p) => format!("column-priority-{p}"),
+                    GroupKey::Project(p) => format!(
+                        "column-project-{}",
+                        p.map_or_else(|| "none".to_owned(), |id| id.to_string())
+                    ),
                     GroupKey::All => "column-all".to_owned(),
                 })
                 .w(px(BOARD_COLUMN))
@@ -5109,6 +5229,14 @@ impl LivtkApp {
                 icon_tag(Icon::Standing, "Standing rule", DONE),
             ));
         }
+        if let Some((g, _)) = &d.project {
+            if let Some(o) = &g.owner {
+                props = props.child(prop_row("Owner", div().child(o.clone())));
+            }
+            if let Some(t) = &g.target {
+                props = props.child(prop_row("Target", div().child(t.clone())));
+            }
+        }
         props = props.child(prop_row(
             "Created",
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
@@ -5215,6 +5343,7 @@ impl LivtkApp {
                         d.child(flow)
                     })
                     .child(props)
+                    .children(project_section(d))
                     // What it waits for and what it blocks come before what it says.
                     .child(links)
                     .child(body)
@@ -6456,6 +6585,7 @@ impl Render for LivtkApp {
             .on_action(cx.listener(|this, _: &GoInbox, w, cx| this.go(View::Inbox, w, cx)))
             .on_action(cx.listener(|this, _: &GoActivity, w, cx| this.go(View::Activity, w, cx)))
             .on_action(cx.listener(|this, _: &GoTasks, w, cx| this.go(View::Tasks, w, cx)))
+            .on_action(cx.listener(|this, _: &GoProjects, w, cx| this.go(View::Projects, w, cx)))
             .on_action(cx.listener(|this, _: &GoLessons, w, cx| this.go(View::Lessons, w, cx)))
             .on_action(cx.listener(|this, _: &GoDecisions, w, cx| this.go(View::Decisions, w, cx)))
             .on_action(cx.listener(|this, _: &GoFindings, w, cx| this.go(View::Findings, w, cx)))
@@ -6872,6 +7002,7 @@ fn edge_glow(h: EdgeHover, dragging: bool, len: f32, leaving: bool) -> AnyElemen
 const GROUPINGS: &[(&str, &str, Grouping)] = &[
     ("group-state", "State", Grouping::State),
     ("group-priority", "Priority", Grouping::Priority),
+    ("group-project", "Project", Grouping::Project),
     ("group-none", "No grouping", Grouping::None),
 ];
 
@@ -6889,6 +7020,112 @@ enum Item {
 }
 
 // ---- small pieces ---------------------------------------------------------------------------------
+
+/// A project's own section in its panel: how far it has come, what waits on the human, and
+/// how it stands, from its updates, newest first.
+fn project_section(d: &Detail) -> Option<Div> {
+    let (g, updates) = d.project.as_ref()?;
+    let share = if g.total == 0 {
+        0.
+    } else {
+        g.done as f32 / g.total as f32
+    };
+    let mut out = div()
+        .debug_selector(|| "project-section".into())
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(section_label("Progress"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .text_sm()
+                .text_color(color(TEXT_2))
+                .child(
+                    div()
+                        .flex_1()
+                        .h(px(6.))
+                        .rounded_full()
+                        .bg(color(BORDER_STRONG))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(share))
+                                .rounded_full()
+                                .bg(color(DONE)),
+                        ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "project-done".into())
+                        .flex_none()
+                        .child(format!("{} of {} tasks done", g.done, g.total)),
+                ),
+        );
+    for w in &g.waiting {
+        let state = w.state;
+        out = out.child(
+            div()
+                .debug_selector(move || format!("project-waits-{}", state.as_str()))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .text_color(color(TEXT_2))
+                .child(icon(Icon::You, 14., ACCENT))
+                .child(format!(
+                    "{} {} waiting on you; {} the longest, since {}",
+                    w.count,
+                    state_name(state).to_lowercase(),
+                    w.oldest,
+                    ago(&w.since)
+                )),
+        );
+    }
+    if g.update_missing {
+        out = out.child(
+            div()
+                .debug_selector(|| "project-update-missing".into())
+                .text_sm()
+                .text_color(color(TEXT_3))
+                .child("Update missing: none for a week while active."),
+        );
+    }
+    if !updates.is_empty() {
+        out = out.child(section_label("Updates"));
+        for (i, u) in updates.iter().enumerate() {
+            let (label, c) = match u.health {
+                livtk_core::Health::OnTrack => ("On track", REVIEW),
+                livtk_core::Health::AtRisk => ("At risk", URGENT),
+                livtk_core::Health::OffTrack => ("Off track", RED),
+            };
+            out = out.child(
+                div()
+                    .debug_selector(move || format!("project-update-{i}"))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(tag(label, c))
+                            .child(div().text_xs().text_color(color(TEXT_4)).child(ago(&u.at))),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(color(TEXT_2))
+                            .child(u.text.clone()),
+                    ),
+            );
+        }
+    }
+    Some(out)
+}
 
 fn section_label(text: &str) -> Div {
     div()
@@ -6954,6 +7191,7 @@ fn kind_slot(kind: Kind) -> Div {
         Kind::Lesson => Icon::Lessons,
         Kind::Decision => Icon::Decisions,
         Kind::Finding => Icon::Findings,
+        Kind::Project => Icon::Projects,
         _ => Icon::Grouping,
     };
     div()
@@ -6973,6 +7211,7 @@ fn view_icon(view: View) -> Icon {
         View::Inbox => Icon::Inbox,
         View::Activity => Icon::Activity,
         View::Tasks => Icon::Tasks,
+        View::Projects => Icon::Projects,
         View::Lessons => Icon::Lessons,
         View::Decisions => Icon::Decisions,
         View::Findings => Icon::Findings,
@@ -7295,14 +7534,23 @@ fn prop_row(label: &str, value: Div) -> Div {
         .child(value.text_color(color(TEXT_2)))
 }
 
-/// A group's mark and name, for list bands and board columns alike.
-fn group_label(key: GroupKey, kind: Kind) -> (Div, String) {
+/// A group's mark and name, for list bands and board columns alike; a project's by its key and
+/// title, from `names`.
+fn group_label(key: GroupKey, kind: Kind, names: &[(Uuid, livtk_core::Brief)]) -> (Div, String) {
     match key {
         GroupKey::State(s) => (state_mark(kind, s), title_case(s.as_str())),
         GroupKey::Priority(p) => (
             priority_mark(p),
             PRIORITY_NAMES[usize::from(p.clamp(1, 4) - 1)].to_owned(),
         ),
+        GroupKey::Project(Some(id)) => (
+            kind_slot(Kind::Project),
+            names.iter().find(|(p, _)| *p == id).map_or_else(
+                || "A project".to_owned(),
+                |(_, b)| format!("{}  {}", b.key, b.title),
+            ),
+        ),
+        GroupKey::Project(None) => (div(), "No project".to_owned()),
         GroupKey::All => (div(), "All".to_owned()),
     }
 }

@@ -124,7 +124,7 @@ pub fn list_fields(ws: &Workspace, rows: &[Summary], fields: &[String]) -> Resul
 /// is empty while there is none, and the rows read as they always have).
 pub fn list(
     tasks: &[Summary],
-    projects: &std::collections::HashMap<uuid::Uuid, livtk_core::Brief>,
+    projects: &std::collections::HashMap<uuid::Uuid, (uuid::Uuid, livtk_core::Brief)>,
     json: bool,
 ) -> Result<()> {
     if json {
@@ -135,7 +135,7 @@ pub fn list(
             .iter()
             .map(|t| {
                 let mut row = serde_json::to_value(t)?;
-                if let Some(p) = projects.get(&t.id) {
+                if let Some((_, p)) = projects.get(&t.id) {
                     row["project"] = json!(p.key);
                 }
                 Ok(row)
@@ -168,7 +168,7 @@ pub fn list(
         };
         let project = projects
             .get(&t.id)
-            .map(|p| format!("  [{}]", p.key))
+            .map(|(_, p)| format!("  [{}]", p.key))
             .unwrap_or_default();
         if t.kind == Kind::Task {
             writeln!(

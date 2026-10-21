@@ -356,7 +356,8 @@ fn sort_key(n: &GraphNode) -> (u8, u64, String) {
         Kind::Decision => 1,
         Kind::Lesson => 2,
         Kind::Finding => 3,
-        _ => 4,
+        Kind::Project => 4,
+        _ => 5,
     };
     let number = n
         .key
@@ -530,7 +531,13 @@ impl Model {
         let mut all = Vec::new();
         let mut failed = None;
         let show_dismissed = self.display().show_dismissed;
-        for kind in [Kind::Task, Kind::Decision, Kind::Lesson, Kind::Finding] {
+        for kind in [
+            Kind::Project,
+            Kind::Task,
+            Kind::Decision,
+            Kind::Lesson,
+            Kind::Finding,
+        ] {
             let states: Vec<State> = if show_dismissed {
                 Vec::new()
             } else {

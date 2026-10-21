@@ -384,7 +384,7 @@ impl Store {
 
     /// Each node under a project, with the nearest project it is part of: none when no
     /// project exists, at no cost.
-    pub fn projects_of(&self) -> Result<Vec<(Uuid, Brief)>> {
+    pub fn projects_of(&self) -> Result<Vec<(Uuid, Uuid, Brief)>> {
         let any: Option<i64> = self
             .conn
             .prepare_cached("SELECT 1 FROM nodes WHERE kind = 'project' LIMIT 1")?
@@ -399,7 +399,7 @@ impl Store {
                  WHERE e.rel = 'parent' AND p.kind = 'project' \
                  UNION ALL SELECT e.src, u.project, u.depth + 1 FROM edges e \
                  JOIN under u ON e.dst = u.id WHERE e.rel = 'parent' AND u.depth < 64) \
-             SELECT u.id, p.key, p.title, p.state, min(u.depth) FROM under u \
+             SELECT u.id, p.key, p.title, p.state, min(u.depth), p.id FROM under u \
              JOIN nodes p ON p.id = u.project GROUP BY u.id",
         )?;
         let mut rows = stmt.query([])?;
@@ -407,8 +407,10 @@ impl Store {
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
             let state: String = row.get(3)?;
+            let project: String = row.get(5)?;
             out.push((
                 parse_uuid(&id)?,
+                parse_uuid(&project)?,
                 Brief {
                     key: row.get(1)?,
                     title: row.get(2)?,
@@ -418,6 +420,19 @@ impl Store {
             ));
         }
         Ok(out)
+    }
+
+    /// A node's notes that carry a health, newest first: when, the health, the text.
+    pub fn updates(&self, id: Uuid) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT at, json_extract(line, '$.data.health'), json_extract(line, '$.data.text') \
+             FROM events WHERE node = ?1 AND op = 'node.note' \
+             AND json_extract(line, '$.data.health') IS NOT NULL ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
     }
 
     /// When a node last changed state, or was created if it never has.

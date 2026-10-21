@@ -60,6 +60,8 @@ menu still moves it).
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the
   highlight glides from row to row. A row leads with the same slot (priority or kind), then key,
   state, title, and ends with when it changed. Rows say something at a glance, never a bare name.
+  What a row knows beyond that sits after the title, small and quiet: a parent's sub-tasks done,
+  a project's progress bar with done of all, its health, its target and what waits on you.
 - **Groups**: solid `SURFACE` bands, the same height as a row, with a caret, a name and a count;
   click to collapse.
 - **Header bars**: 46px, `px_4`, a hairline below: what this is on the left, its actions and close

@@ -466,6 +466,7 @@ impl Model {
             Kind::Lesson => View::Lessons,
             Kind::Decision => View::Decisions,
             Kind::Finding => View::Findings,
+            Kind::Project => View::Projects,
             k => View::Of(k),
         };
         // The inbox shows it already, if it waits for the human.
@@ -602,6 +603,7 @@ impl Model {
             (View::Inbox, "G I"),
             (View::Activity, "G A"),
             (View::Tasks, "G T"),
+            (View::Projects, "G P"),
             (View::Lessons, "G L"),
             (View::Decisions, "G D"),
             (View::Findings, "G F"),
@@ -653,9 +655,11 @@ impl Model {
         for (label, g) in [
             ("Group by state", Grouping::State),
             ("Group by priority", Grouping::Priority),
+            ("Group by project", Grouping::Project),
             ("No grouping", Grouping::None),
         ] {
-            if d.grouping != g && !(board && g == Grouping::None) {
+            let tasks_only = g == Grouping::Project && self.pane().view != View::Tasks;
+            if d.grouping != g && !(board && g == Grouping::None) && !tasks_only {
                 out.push(plain(label, None, Run::Group(g)));
             }
         }

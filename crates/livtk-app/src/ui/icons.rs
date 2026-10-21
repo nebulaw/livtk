@@ -40,6 +40,7 @@ icons! {
     Lessons => "cognition",
     Decisions => "route",
     Findings => "medical-flask",
+    Projects => "bullseye",
     Graph => "circuit-board",
     /// The project's docs.
     Docs => "book",

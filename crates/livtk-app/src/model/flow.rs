@@ -72,6 +72,10 @@ pub fn flow_of(kind: Kind) -> (&'static [State], &'static [State]) {
             &[State::Rejected],
         ),
         Kind::Finding => (&[State::Recorded], &[]),
+        Kind::Project => (
+            &[State::Proposed, State::Active, State::Done],
+            &[State::Paused, State::Dropped],
+        ),
         // A declared kind's states, in the order it declares them.
         _ => (kind.states(), &[]),
     }

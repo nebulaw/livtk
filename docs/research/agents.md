@@ -115,6 +115,25 @@ What they share:
 - **What goes away:** the terminal running `scripts/watch` and waiting for acks. The app starts the work
   itself.
 
+## The conversation lives on the task
+
+Added 2026-10-21 from your notes on TAS-65 and LES-3.
+
+- **No terminal by default.** Runs are headless (`claude -p` with stream-json, resumed by session
+  id), so livtk sees every turn. The terminal stays as an optional Watch.
+- **"Needs you" is a note on the task.** When Claude needs you, whether for a question or for a
+  permission it may not take on its own, livtk writes it as a note on that task marked
+  **needs you**. The task comes to your Inbox with the flag, and a permission shows Allow / Deny
+  on the note.
+- **You answer with a note.** livtk resumes the session with your note as its next message.
+  Claude's replies come back as notes, so the task's history is the conversation.
+- **"Claude is writing…"** shows on the task while a turn runs. No server is needed:
+  - livtk starts the run, so it knows when a turn begins and ends;
+  - for a session it did not start, Claude Code's own hooks (UserPromptSubmit at a turn's start,
+    Stop at its end) set and clear the mark.
+
+  The mark sits beside the log, never in it, so typing never fills the history.
+
 ## The hard parts
 
 1. **Worktrees and the log.** `.livtk/events.jsonl` is in git. An agent working in a worktree would write

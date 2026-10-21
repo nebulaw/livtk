@@ -19,6 +19,10 @@ with their chats, terminals and the rest. When that comes, it changes here first
   side peek (this panel), center peek (a large card over the dimmed window; Esc or a press
   outside closes it, the list behind keeps the keys) or full page (in the list's place in the
   pane it was opened from; Esc gives the list back). The choice sticks.
+- **A node named anywhere opens on a click.** A link, a sub-task's parent chip, a session's work
+  or a doc's tasks all name a node the same way (state mark, key, title). A click goes to it in
+  its own view, past a filter, a collapsed group or hidden dismissed work. A doc's tasks open
+  beside the doc instead. A link's × only unlinks.
 
 The flow is always the same: a list in the middle → open one → its details in the panel. A
 thing that wants the whole middle (the terminal, a doc being read, a doc being edited) takes the

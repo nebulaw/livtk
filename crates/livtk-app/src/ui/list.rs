@@ -372,7 +372,7 @@ impl LivtkApp {
                     .text_color(color(if blocked { TEXT_3 } else { TEXT }))
                     .child(r.title.clone()),
             )
-            .children(self.model.parent_key(r).map(parent_chip))
+            .children(self.model.parent_key(r).map(|k| self.parent_chip(k, cx)))
             .children(self.sub_task_count(id))
             .children(self.project_parts(r));
         if blocked {
@@ -558,7 +558,7 @@ impl LivtkApp {
                                 cx,
                             ))
                             .child(div().pl_1().child(r.key.clone()))
-                            .children(self.model.parent_of(r).map(parent_chip))
+                            .children(self.model.parent_of(r).map(|k| self.parent_chip(k, cx)))
                             .child(div().flex_1())
                             .children(self.sub_task_count(id))
                             .when(blocked, |d| {
@@ -656,17 +656,4 @@ pub(super) fn group_label(
         GroupKey::Project(None) => (div(), "No project".to_owned()),
         GroupKey::All => (div(), "All".to_owned()),
     }
-}
-
-/// A sub-task shown away from its parent: the parent's key, quietly.
-pub(super) fn parent_chip(key: &str) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .gap_1()
-        .text_xs()
-        .text_color(color(TEXT_4))
-        .child(icon(Icon::SubTask, 12., TEXT_4))
-        .child(key.to_owned())
 }

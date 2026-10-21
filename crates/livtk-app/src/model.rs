@@ -132,6 +132,14 @@ impl View {
         )
     }
 
+    /// The view that lists `kind`: its own, or a declared kind's.
+    pub fn listing(kind: Kind) -> View {
+        View::ALL
+            .into_iter()
+            .find(|v| v.kind() == Some(kind))
+            .unwrap_or(View::Of(kind))
+    }
+
     /// The kind a view lists; the inbox mixes kinds, and the activity feed lists events.
     pub const fn kind(self) -> Option<Kind> {
         match self {

@@ -4554,3 +4554,85 @@ fn a_kind_has_one_icon_and_a_declared_one_may_name_it(cx: &mut TestAppContext) {
     assert!(said);
     assert_eq!(kind_icon(Kind::named("chore").unwrap()).file(), "blocks");
 }
+
+/// A node named elsewhere opens on a click, in its own view, even where the view hid it: a sub-
+/// task's parent chip in its row, a link in a task's panel. A link's × only unlinks.
+#[gpui_kit::test]
+fn a_named_node_opens_on_a_click(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let part = {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        // LIV-1 canceled: hidden in Tasks until dismissed work is shown.
+        ws.execute(
+            Command::Move {
+                node: "LIV-1".into(),
+                to: State::Canceled,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+        let e = ws
+            .execute(
+                Command::Create {
+                    kind: Kind::Task,
+                    title: "a part".into(),
+                    body: String::new(),
+                    priority: None,
+                    links: vec![],
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        let key = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+        ws.execute(
+            Command::Link {
+                src: key.clone(),
+                rel: livtk_core::Rel::Parent,
+                dst: "LIV-2".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+        assert_eq!(
+            ws.related(&key, livtk_core::Rel::Parent).unwrap().0[0].key,
+            "LIV-2"
+        );
+        key
+    };
+    let (app, cx) = open_app(cx, dir.path());
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g t");
+    // Not nested: the part names its parent in its row.
+    app.update(cx, |a, _| {
+        if a.model().display().nest {
+            a.model_mut().toggle_nest();
+        }
+    });
+    redraw(cx);
+    let detail = |cx: &mut gpui_kit::VisualTestContext| {
+        app.read_with(cx, |a, _| {
+            a.model().detail.as_ref().map(|d| d.node.key.clone())
+        })
+    };
+    click_on(cx, "parent-LIV-2");
+    settle(cx);
+    assert_eq!(
+        detail(cx).as_deref(),
+        Some("LIV-2"),
+        "the chip went to the parent"
+    );
+    assert_ne!(detail(cx).as_deref(), Some(part.as_str()));
+    // The link to the hidden LIV-1: its view, dismissed work shown, it selected and open.
+    click_on(cx, "link-waits-for-LIV-1");
+    settle(cx);
+    assert_eq!(detail(cx).as_deref(), Some("LIV-1"));
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view(), View::Tasks);
+        assert!(a.model().display().show_dismissed, "shown, to be seen");
+    });
+    // The × takes the link away and opens nothing.
+    click_on(cx, "unlink-blocks-LIV-2");
+    assert_eq!(detail(cx).as_deref(), Some("LIV-1"));
+    let ws = Workspace::open(dir.path()).unwrap();
+    assert!(ws.links("LIV-1").unwrap().blocks.is_empty());
+}

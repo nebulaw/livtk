@@ -13,6 +13,7 @@ use gpui_kit::*;
 
 use super::form::{button, chip, choice, field, segmented};
 use super::icons::{Icon, icon};
+use super::node_ref::OpenIn;
 use super::theme::*;
 use super::{LivtkApp, ago, event_line, section_label};
 use crate::agents::{self, Agent, MODELS, Place, Standing, TOOLS};
@@ -516,16 +517,16 @@ impl LivtkApp {
         if !nodes.is_empty() {
             page = page.child(section_label("Worked on"));
             for b in &nodes {
-                let key = b.key.clone();
-                page = page.child(
-                    div()
-                        .debug_selector(move || format!("session-node-{key}"))
-                        .flex()
-                        .gap_2()
-                        .text_sm()
-                        .child(div().text_color(color(TEXT_3)).child(b.key.clone()))
-                        .child(div().text_color(color(TEXT_2)).child(b.title.clone())),
-                );
+                page = page.child(self.node_ref(
+                    format!("session-node-{}", b.key),
+                    &b.key,
+                    b.kind,
+                    b.state,
+                    &b.title,
+                    OpenIn::View,
+                    None,
+                    cx,
+                ));
             }
         }
         let seen = self.model.session_activity(&row.id);
@@ -538,9 +539,19 @@ impl LivtkApp {
                     .child("Nothing on record."),
             );
         }
-        for a in &seen {
+        for (i, a) in seen.iter().enumerate() {
             let key = a.node.as_ref().map(|n| n.key.clone()).unwrap_or_default();
-            page = page.child(event_line(&a.event, &key));
+            let line = event_line(&a.event, &key);
+            page = page.child(if key.is_empty() {
+                line.into_any_element()
+            } else {
+                let el = div()
+                    .id(SharedString::from(format!("session-did-{i}")))
+                    .rounded_md()
+                    .hover(|h| h.bg(color(HOVER)))
+                    .child(line);
+                self.goes_to(el, &key, OpenIn::View, cx).into_any_element()
+            });
         }
         Some(page)
     }

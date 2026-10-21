@@ -18,6 +18,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::icons::{Icon, icon, icon_hover};
+use super::node_ref::{OpenIn, unlink_button};
 use super::theme::*;
 use super::{FollowLink, LivtkApp, RevealInDoc, ease_out_cubic, state_mark};
 use crate::model::docs::{CalloutKind, DocRow, Saved, callout, capitalised, find_in};
@@ -749,54 +750,22 @@ impl LivtkApp {
             );
         }
         for n in &self.model.docs.linked {
-            let key = n.key.clone();
-            let (open_key, unlink_key) = (key.clone(), key.clone());
-            let unlink_path = path.to_owned();
-            out = out.child(
-                link_row(format!("doc-link-{key}"))
-                    .child(state_mark(n.kind, n.state))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(color(TEXT_4))
-                            .child(key.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(color(TEXT_2))
-                            .child(n.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("doc-unlink-{key}")))
-                            .debug_selector(move || format!("doc-unlink-{unlink_key}"))
-                            .group("doc-unlink")
-                            .size(px(20.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .hover(|h| h.bg(color(HOVER)))
-                            .child(icon_hover(Icon::Unlink, 14., TEXT_4, "doc-unlink", TEXT))
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Remove the link")
-                                    .build(window, cx)
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.model.link_doc(&key, &unlink_path, false);
-                                cx.notify();
-                            })),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.show_node(&open_key);
-                        cx.notify();
-                    })),
+            let (key, path) = (n.key.clone(), path.to_owned());
+            let unlink = unlink_button(
+                format!("doc-unlink-{key}"),
+                move |this, _| this.model.link_doc(&key, &path, false),
+                cx,
             );
+            out = out.child(self.node_ref(
+                format!("doc-link-{}", n.key),
+                &n.key,
+                n.kind,
+                n.state,
+                &n.title,
+                OpenIn::Beside,
+                Some(unlink),
+                cx,
+            ));
         }
         out
     }
@@ -834,29 +803,16 @@ impl LivtkApp {
             );
         }
         for n in &docs.mentions {
-            let key = n.key.clone();
-            list = list.child(
-                link_row(format!("doc-mention-{key}"))
-                    .child(state_mark(n.kind, n.state))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(color(TEXT_4))
-                            .child(key.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(color(TEXT_2))
-                            .child(n.title.clone()),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.show_node(&key);
-                        cx.notify();
-                    })),
-            );
+            list = list.child(self.node_ref(
+                format!("doc-mention-{}", n.key),
+                &n.key,
+                n.kind,
+                n.state,
+                &n.title,
+                OpenIn::Beside,
+                None,
+                cx,
+            ));
         }
         Some(list)
     }

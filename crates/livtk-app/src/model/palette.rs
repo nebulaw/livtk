@@ -401,7 +401,7 @@ impl Model {
     fn run_item(&mut self, item: Item) -> Option<Ask> {
         match item {
             Item::Node(found) => {
-                self.reveal(&found);
+                self.reveal(found.id, found.kind, found.state);
                 None
             }
             Item::Doc(d) => {
@@ -458,26 +458,30 @@ impl Model {
         }
     }
 
+    /// Go to the node `key` wherever it is: the one way a node named anywhere is gone to.
+    pub fn go_to(&mut self, key: &str) {
+        let node = self
+            .projects
+            .get(self.current)
+            .and_then(|p| p.ws.node(key).ok());
+        match node {
+            Some(n) => self.reveal(n.id, n.kind, n.state),
+            None => self.warn(format!("{key} is not a node of this project")),
+        }
+    }
+
     /// Go to a node wherever it is: its view, past any filter, collapsed group or hidden
     /// dismissed state, selected and open in the detail panel.
-    fn reveal(&mut self, found: &Found) {
-        let view = match found.kind {
-            Kind::Task => View::Tasks,
-            Kind::Lesson => View::Lessons,
-            Kind::Decision => View::Decisions,
-            Kind::Finding => View::Findings,
-            Kind::Project => View::Projects,
-            k => View::Of(k),
-        };
+    fn reveal(&mut self, id: Uuid, kind: Kind, state: State) {
         // The inbox shows it already, if it waits for the human.
-        let in_view = self.pane().all.iter().any(|r| r.id == found.id);
+        let in_view = self.pane().all.iter().any(|r| r.id == id);
         if !(self.pane().view == View::Inbox && in_view) {
-            self.set_view(view);
+            self.set_view(View::listing(kind));
         }
-        if found.kind.is_dismissed(found.state) && !self.display().show_dismissed {
+        if kind.is_dismissed(state) && !self.display().show_dismissed {
             self.toggle_dismissed();
         }
-        if !self.pane().rows.iter().any(|r| r.id == found.id) {
+        if !self.pane().rows.iter().any(|r| r.id == id) {
             let view = self.pane().view;
             let d = self
                 .displays
@@ -489,7 +493,7 @@ impl Model {
             self.collapsed.retain(|(v, _)| *v != view);
             self.arrange();
         }
-        self.pane_mut().selected = Some(found.id);
+        self.pane_mut().selected = Some(id);
         self.open_detail();
     }
 

@@ -418,7 +418,7 @@ impl LivtkApp {
         })
     }
 
-    /// One group of the open node's links, each with an × that removes it.
+    /// One group of the open node's links: a click on one goes to it, its × removes the link.
     pub(super) fn link_group(&self, g: &LinkGroup, cx: &mut Context<Self>) -> Div {
         let mut out = div().flex().flex_col().gap_1().child(
             div()
@@ -431,57 +431,21 @@ impl LivtkApp {
         let group = g.label.to_lowercase().replace(' ', "-");
         for b in &g.briefs {
             let key = b.key.clone();
-            let unlink = format!("unlink-{group}-{key}");
-            out = out.child(
-                div()
-                    .h(px(28.))
-                    .pl_2()
-                    .pr_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .bg(color(CONTENT))
-                    .border_1()
-                    .border_color(color(BORDER))
-                    .child(state_mark(Kind::Task, b.state))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(color(TEXT_4))
-                            .child(b.key.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(color(TEXT_2))
-                            .child(b.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(unlink.clone()))
-                            .debug_selector(move || unlink.clone())
-                            .group("unlink")
-                            .size(px(20.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .hover(|s| s.bg(color(HOVER)))
-                            .child(icon_hover(Icon::Unlink, 14., TEXT_4, "unlink", TEXT))
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Remove the link")
-                                    .build(window, cx)
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.model.unlink(rel, outgoing, &key);
-                                cx.notify();
-                            })),
-                    ),
+            let unlink = unlink_button(
+                format!("unlink-{group}-{key}"),
+                move |this, _| this.model.unlink(rel, outgoing, &key),
+                cx,
             );
+            out = out.child(self.node_ref(
+                format!("link-{group}-{}", b.key),
+                &b.key,
+                b.kind,
+                b.state,
+                &b.title,
+                OpenIn::View,
+                Some(unlink),
+                cx,
+            ));
         }
         out
     }

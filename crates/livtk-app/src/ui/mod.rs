@@ -19,6 +19,7 @@ mod graph;
 pub mod icons;
 mod list;
 pub mod menus;
+mod node_ref;
 mod notices;
 mod overlays;
 mod panes;
@@ -32,6 +33,7 @@ mod theme;
 
 use detail::*;
 use dock::*;
+use node_ref::*;
 use overlays::*;
 use sidebar::*;
 use std::cell::Cell;

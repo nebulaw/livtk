@@ -32,6 +32,7 @@ pub struct Invocation {
 /// Every place `cmd` mentions the livtk program as a word: `livtk`, a path ending in it, or the
 /// `livtk-cli` package run through cargo.
 pub fn invocations(cmd: &str) -> Vec<Invocation> {
+    let code = code_mask(cmd);
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(pos) = cmd[from..].find("livtk") {
@@ -59,12 +60,113 @@ pub fn invocations(cmd: &str) -> Vec<Invocation> {
         out.push(Invocation {
             start,
             end: at + word,
-            runs: runs_at(&cmd[..start]),
+            runs: code.get(at).copied().unwrap_or(false)
+                && runs_at(&code_prefix(cmd, &code, start)),
             verb,
             args,
         });
     }
     out
+}
+
+/// For each byte of `cmd`, whether the shell reads it as code: not inside quotes, and not in a
+/// heredoc's body (its closing word included). A mention of livtk outside code is text the
+/// command passes on, never a command it runs.
+fn code_mask(cmd: &str) -> Vec<bool> {
+    let b = cmd.as_bytes();
+    let mut mask = vec![true; b.len()];
+    // Heredocs opened on the current line, their bodies starting at its end: (word, strip tabs).
+    let mut pending: Vec<(String, bool)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 2,
+            q @ (b'\'' | b'"') => {
+                let from = i;
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    if q == b'"' && b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                for m in &mut mask[from..b.len().min(i + 1)] {
+                    *m = false;
+                }
+                i += 1;
+            }
+            b'<' if b.get(i + 1) == Some(&b'<') && b.get(i + 2) != Some(&b'<') => {
+                i += 2;
+                let strip = b.get(i) == Some(&b'-');
+                if strip {
+                    i += 1;
+                }
+                while b.get(i).is_some_and(|c| *c == b' ' || *c == b'\t') {
+                    i += 1;
+                }
+                let quote = b.get(i).copied().filter(|c| *c == b'\'' || *c == b'"');
+                if quote.is_some() {
+                    i += 1;
+                }
+                let from = i;
+                while b
+                    .get(i)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-')
+                {
+                    i += 1;
+                }
+                if i > from {
+                    pending.push((cmd[from..i].to_owned(), strip));
+                }
+                if quote.is_some() && b.get(i) == quote.as_ref() {
+                    i += 1;
+                }
+            }
+            b'\n' if !pending.is_empty() => {
+                i += 1;
+                // Each pending heredoc's body, one after the other, through its closing word.
+                for (word, strip) in std::mem::take(&mut pending) {
+                    loop {
+                        let end = cmd[i..].find('\n').map_or(b.len(), |n| i + n);
+                        let line = &cmd[i..end];
+                        let line = if strip {
+                            line.trim_start_matches('\t')
+                        } else {
+                            line
+                        };
+                        for m in &mut mask[i..end] {
+                            *m = false;
+                        }
+                        let last = end >= b.len();
+                        i = (end + 1).min(b.len());
+                        if line == word || last {
+                            break;
+                        }
+                        // The newline inside the body is the body's too.
+                        if let Some(m) = mask.get_mut(end) {
+                            *m = false;
+                        }
+                    }
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    mask
+}
+
+/// `cmd` up to `end`, each newline the shell reads as code turned into the `;` it means there.
+fn code_prefix(cmd: &str, code: &[bool], end: usize) -> String {
+    cmd[..end]
+        .char_indices()
+        .map(|(i, c)| {
+            if c == '\n' && code.get(i).copied().unwrap_or(false) {
+                ';'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Why a Bash command must not run, if it must not.
@@ -351,6 +453,30 @@ mod tests {
         assert_eq!(
             verbs("livtk --session s1 --agent a move 1 acked"),
             [Some("move".into())]
+        );
+    }
+
+    #[test]
+    fn a_livtk_on_a_new_line_runs_and_one_in_text_does_not() {
+        let runs = |cmd: &str| -> Vec<bool> { invocations(cmd).iter().map(|i| i.runs).collect() };
+        // A new line is a new command, as `;` is.
+        assert_eq!(runs("livtk note A x\nlivtk move A planned"), [true, true]);
+        // After a heredoc: its body is text; the command after it runs.
+        assert_eq!(
+            runs("cat > f <<'EOF'\nlivtk move A planned\nEOF\nlivtk note A x"),
+            [false, true]
+        );
+        assert_eq!(
+            runs("python3 - <<EOF\nprint(1)\nEOF\nlivtk note A x; livtk list"),
+            [true, true]
+        );
+        // Text inside quotes never runs, across lines too.
+        assert_eq!(runs("echo \"x\nlivtk list\""), [false]);
+        assert_eq!(runs("echo 'livtk list'\nlivtk list"), [false, true]);
+        // Signing touches only what runs: the heredoc's text is left as written.
+        assert_eq!(
+            sign("cat > f <<EOF\nlivtk list\nEOF\nlivtk next", "--session s").as_deref(),
+            Some("cat > f <<EOF\nlivtk list\nEOF\nlivtk --session s next")
         );
     }
 

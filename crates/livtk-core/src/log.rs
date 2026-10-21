@@ -29,6 +29,8 @@ pub struct Mark {
 pub struct Parsed {
     pub events: Vec<Event>,
     pub warnings: Vec<String>,
+    /// Events naming what the config no longer declares, each why and the node it is about.
+    pub undeclared: Vec<(String, Option<String>)>,
 }
 
 impl Log {
@@ -156,6 +158,7 @@ pub fn parse(bytes: &[u8], offset: u64) -> Parsed {
             Line::Garbage(why) => parsed.warnings.push(format!(
                 "skipped a line at byte {at} that is not an event: {why}"
             )),
+            Line::Undeclared { why, node } => parsed.undeclared.push((why, node)),
         }
     }
     parsed

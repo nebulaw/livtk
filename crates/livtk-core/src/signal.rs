@@ -193,7 +193,7 @@ impl Signals {
                             Detail::State { state: to },
                         ));
                     }
-                    if to.is_closed() && !from.is_closed() {
+                    if kind.is_closed(to) && !kind.is_closed(from) {
                         out.extend(self.unblocked(*node).into_iter().map(|(id, k, kind)| {
                             signal("work.unblocked", id, &k, kind, Detail::None {})
                         }));
@@ -218,7 +218,10 @@ impl Signals {
                 // Whether it waited on something open before this link changed: only then
                 // can taking a dependency away unblock it.
                 let was_blocked = self.unblocked_one(data.src).is_none()
-                    && self.nodes.get(&data.src).is_some_and(|n| !n.2.is_closed());
+                    && self
+                        .nodes
+                        .get(&data.src)
+                        .is_some_and(|n| !n.1.is_closed(n.2));
                 if data.rel == Rel::DependsOn {
                     let waits = self.waits.entry(data.src).or_default();
                     if added {
@@ -281,7 +284,7 @@ impl Signals {
     /// `id`, if nothing it waits for is still open and it is itself still open.
     fn unblocked_one(&self, id: Uuid) -> Option<(Uuid, String, Kind)> {
         let (key, kind, state) = self.nodes.get(&id)?;
-        if state.is_closed() {
+        if kind.is_closed(*state) {
             return None;
         }
         let open = self
@@ -289,7 +292,7 @@ impl Signals {
             .get(&id)
             .into_iter()
             .flatten()
-            .any(|d| self.nodes.get(d).is_some_and(|n| !n.2.is_closed()));
+            .any(|d| self.nodes.get(d).is_some_and(|n| !n.1.is_closed(n.2)));
         (!open).then(|| (id, key.clone(), *kind))
     }
 }

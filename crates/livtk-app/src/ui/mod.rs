@@ -2905,7 +2905,7 @@ impl LivtkApp {
                 .states()
                 .iter()
                 .copied()
-                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .filter(|&s| d.show_dismissed || !kind.is_dismissed(s))
                 .collect();
             if states.len() > 1 {
                 panel = panel.child(menu_divider()).child(menu_heading("State"));
@@ -4095,7 +4095,7 @@ impl LivtkApp {
             }
             let on = g.selected == Some(i);
             if dots {
-                dot_quads.push((sx, sy, w, h, state_color(n.state), on, lit(i)));
+                dot_quads.push((sx, sy, w, h, state_color(n.kind, n.state), on, lit(i)));
                 continue;
             }
             let key = n.key.clone();
@@ -4119,7 +4119,7 @@ impl LivtkApp {
                     .text_size(px(13. * z))
                     .line_height(px(18. * z))
                     .when(!lit(i), |d| d.opacity(0.35))
-                    .child(state_dot(n.state, 10. * z))
+                    .child(state_dot(n.kind, n.state, 10. * z))
                     .child(
                         div()
                             .flex_none()
@@ -4681,7 +4681,7 @@ impl LivtkApp {
     ) -> AnyElement {
         let id = r.id;
         let flash = self.model.flashed.get(&id).copied();
-        let blocked = r.blocked && !r.state.is_closed();
+        let blocked = r.blocked && !r.kind.is_closed(r.state);
         let (own, moving) = self.highlight(&r.key, selected);
         let mut row = div()
             .id(SharedString::from(format!("row-{}", r.key)))
@@ -4870,7 +4870,7 @@ impl LivtkApp {
             for r in rows {
                 let id = r.id;
                 let sel = Some(id) == selected;
-                let blocked = r.blocked && !r.state.is_closed();
+                let blocked = r.blocked && !r.kind.is_closed(r.state);
                 let flash = self.model.flashed.get(&id).copied();
                 let card = div()
                     .id(SharedString::from(format!("card-{}", r.key)))
@@ -7105,13 +7105,16 @@ fn avatar(human: bool) -> Div {
 
 /// A state as a dot of its colour, `size` across: the graph's cards shrink with the zoom, and
 /// the full mark does not.
-fn state_dot(state: State, size: f32) -> Div {
-    let faint = matches!(state, State::Backlog | State::Parked) || state.is_dismissed();
+fn state_dot(kind: Kind, state: State, size: f32) -> Div {
+    let faint = matches!(state, State::Backlog | State::Parked) || kind.is_dismissed(state);
     div()
         .size(px(size))
         .flex_none()
         .rounded_full()
-        .bg(with_alpha(state_color(state), if faint { 0.5 } else { 1. }))
+        .bg(with_alpha(
+            state_color(kind, state),
+            if faint { 0.5 } else { 1. },
+        ))
 }
 
 /// The section an item of the palette sits in.

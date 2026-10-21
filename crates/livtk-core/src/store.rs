@@ -164,6 +164,9 @@ pub struct Brief {
     pub key: String,
     pub title: String,
     pub state: State,
+    /// Its kind, which says whether its state is closed. Not in the JSON, which stays as it was.
+    #[serde(skip)]
+    pub kind: Kind,
 }
 
 /// The full projected state, in a fixed order. Two stores built from the same events give equal
@@ -324,20 +327,39 @@ impl Store {
 
     /// Nodes of a kind in the given states (all states when empty), work in hand first.
     /// Each kind nodes are of, as stored, with their keys.
-    pub fn kinds_in_use(&self) -> Result<Vec<(String, Vec<String>)>> {
+    /// Each kind and state nodes are in, as stored: one pass over their index.
+    pub fn kind_states(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self
             .conn
-            .prepare_cached("SELECT kind, key FROM nodes ORDER BY kind, key")?;
-        let mut rows = stmt.query([])?;
-        let mut out: Vec<(String, Vec<String>)> = Vec::new();
-        while let Some(row) = rows.next()? {
-            let (kind, key): (String, String) = (row.get(0)?, row.get(1)?);
-            match out.last_mut() {
-                Some((k, keys)) if *k == kind => keys.push(key),
-                _ => out.push((kind, vec![key])),
-            }
-        }
-        Ok(out)
+            .prepare_cached("SELECT DISTINCT kind, state FROM nodes")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The first `n` keys of nodes of `kind`, in `state` if given.
+    pub fn keys_in(&self, kind: &str, state: Option<&str>, n: u32) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT key FROM nodes WHERE kind = ?1 AND (?2 IS NULL OR state = ?2) \
+             ORDER BY id LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![kind, state, n], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The key of the node with this id, if the store has it.
+    pub fn key_of(&self, id: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT key FROM nodes WHERE id = ?1")?;
+        let mut rows = stmt.query([id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row.get(0)?),
+            None => None,
+        })
     }
 
     pub fn list(&self, kind: Kind, states: &[State]) -> Result<Vec<Summary>> {
@@ -403,13 +425,13 @@ impl Store {
     /// The nodes `id` points to over `rel`, and the nodes pointing to it.
     pub fn links(&self, id: Uuid, rel: Rel) -> Result<(Vec<Brief>, Vec<Brief>)> {
         let out = self.briefs(
-            "SELECT d.key, d.title, d.state FROM edges e JOIN nodes d ON d.id = e.dst \
+            "SELECT d.key, d.title, d.state, d.kind FROM edges e JOIN nodes d ON d.id = e.dst \
              WHERE e.src = ?1 AND e.rel = ?2 ORDER BY d.id",
             id,
             rel,
         )?;
         let inc = self.briefs(
-            "SELECT s.key, s.title, s.state FROM edges e JOIN nodes s ON s.id = e.src \
+            "SELECT s.key, s.title, s.state, s.kind FROM edges e JOIN nodes s ON s.id = e.src \
              WHERE e.dst = ?1 AND e.rel = ?2 ORDER BY s.id",
             id,
             rel,
@@ -423,10 +445,12 @@ impl Store {
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
             let state: String = row.get(2)?;
+            let kind: String = row.get(3)?;
             out.push(Brief {
                 key: row.get(0)?,
                 title: row.get(1)?,
                 state: state.parse()?,
+                kind: kind.parse()?,
             });
         }
         Ok(out)
@@ -604,16 +628,19 @@ impl Store {
 
     /// A node's key, title and state, if it exists.
     pub fn brief(&self, id: Uuid) -> Result<Option<Brief>> {
-        let row: Option<(String, String, String)> = self
+        let row: Option<(String, String, String, String)> = self
             .conn
-            .prepare_cached("SELECT key, title, state FROM nodes WHERE id = ?1")?
-            .query_row([id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .prepare_cached("SELECT key, title, state, kind FROM nodes WHERE id = ?1")?
+            .query_row([id.to_string()], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
             .optional()?;
-        row.map(|(key, title, state)| {
+        row.map(|(key, title, state, kind)| {
             Ok(Brief {
                 key,
                 title,
                 state: state.parse()?,
+                kind: kind.parse()?,
             })
         })
         .transpose()
@@ -783,6 +810,7 @@ impl Store {
                     key,
                     title,
                     state: state.parse()?,
+                    kind: Kind::Lesson,
                 })
             })
             .collect()

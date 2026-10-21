@@ -930,3 +930,109 @@ fn a_declared_relation_is_added_shown_from_both_ends_and_removed() {
     let out = livtk(d, As::Claude, &["link", "LIV-1", "implementz", "DEC-1"]);
     assert!(String::from_utf8_lossy(&out.stderr).contains("implemented_by"));
 }
+
+#[test]
+fn a_declared_kind_is_over_in_its_own_closed_states_whatever_their_names() {
+    let dir = project();
+    let d = dir.path();
+    declare(
+        d,
+        "[[kinds]]\nname = \"bug\"\nstates = [\"open\", \"done\", \"verified\"]\nkey = \"BUG\"\n\
+         [[kinds]]\nname = \"rfc\"\nstates = [\"draft\", \"accepted\"]\nkey = \"RFC\"\n\
+         [[kinds]]\nname = \"pattern\"\nstates = [\"draft\", \"closed\", \"archived\"]\nclosed = [\"archived\"]\nkey = \"PAT\"\n",
+    );
+    let active = |kind: &str| json(d, &["list", "--kind", kind]).as_array().unwrap().len();
+    // `done` is a built-in name, but bug closes at `verified`.
+    ok(d, As::Claude, &["new", "--kind", "bug", "crash"]);
+    ok(d, As::Claude, &["move", "BUG-1", "done"]);
+    assert_eq!(active("bug"), 1, "done is not over for a bug");
+    ok(d, As::Claude, &["move", "BUG-1", "verified"]);
+    assert_eq!(active("bug"), 0);
+    // `accepted` is rfc's closed state.
+    ok(d, As::Claude, &["new", "--kind", "rfc", "an rfc"]);
+    ok(d, As::Claude, &["move", "RFC-1", "accepted"]);
+    assert_eq!(active("rfc"), 0, "accepted is over for an rfc");
+    // Another kind closing at a state of that name does not close pattern's.
+    declare(
+        d,
+        "[[kinds]]\nname = \"ticket\"\nstates = [\"new\", \"closed\"]\nkey = \"TKT\"\n",
+    );
+    ok(d, As::Claude, &["new", "--kind", "pattern", "a pattern"]);
+    ok(d, As::Claude, &["move", "PAT-1", "closed"]);
+    assert_eq!(active("pattern"), 1, "closed is not over for a pattern");
+}
+
+#[test]
+fn a_dropped_kind_or_state_is_refused_naming_the_node_with_or_without_the_database() {
+    let refused = |d: &Path, says: &[&str]| {
+        let out = livtk(d, As::Claude, &["list"]);
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        for s in says {
+            assert!(err.contains(s), "{s}: {err}");
+        }
+    };
+    let fresh = |d: &Path| {
+        for f in ["livtk.db", "livtk.db-wal", "livtk.db-shm"] {
+            let _ = std::fs::remove_file(d.join(".livtk").join(f));
+        }
+    };
+    // A kind, taken out of the config.
+    let dir = project();
+    let d = dir.path();
+    let config = std::fs::read_to_string(d.join(".livtk/config.toml")).unwrap();
+    declare(d, INCIDENT);
+    ok(
+        d,
+        As::Claude,
+        &["new", "--kind", "incident", "checkout is down"],
+    );
+    std::fs::write(d.join(".livtk/config.toml"), &config).unwrap();
+    refused(d, &["incident", "INC-1"]);
+    fresh(d);
+    refused(d, &["incident", "INC-1"]);
+    // A state, taken out of its kind.
+    let dir = project();
+    let d = dir.path();
+    let config = std::fs::read_to_string(d.join(".livtk/config.toml")).unwrap();
+    declare(d, INCIDENT);
+    ok(
+        d,
+        As::Claude,
+        &["new", "--kind", "incident", "checkout is down"],
+    );
+    ok(d, As::Claude, &["move", "INC-1", "mitigated"]);
+    std::fs::write(d.join(".livtk/config.toml"), &config).unwrap();
+    declare(
+        d,
+        "[[kinds]]\nname = \"incident\"\nstates = [\"open\", \"closed\"]\nkey = \"INC\"\n",
+    );
+    refused(d, &["mitigated", "INC-1"]);
+    fresh(d);
+    refused(d, &["mitigated", "INC-1"]);
+}
+
+#[test]
+fn declared_relations_are_in_show_json_and_a_bad_kind_is_a_usage_error() {
+    let dir = project();
+    let d = dir.path();
+    // Nothing declared: no such field.
+    ok(d, As::Claude, &["new", "the importer"]);
+    assert!(json(d, &["show", "LIV-1"]).get("declared").is_none());
+    declare(
+        d,
+        "[[relations]]\nname = \"implements\"\ninverse = \"implemented_by\"\n",
+    );
+    ok(d, As::Claude, &["decision", "Import in one pass"]);
+    ok(d, As::Claude, &["link", "LIV-1", "implements", "DEC-1"]);
+    let from = json(d, &["show", "LIV-1"]);
+    assert_eq!(from["declared"]["implements"]["to"][0]["key"], "DEC-1");
+    let back = json(d, &["show", "DEC-1"]);
+    assert_eq!(back["declared"]["implements"]["from"][0]["key"], "LIV-1");
+    assert_eq!(back["declared"]["implements"]["inverse"], "implemented_by");
+    // A kind or state no one declares: exit 2, as clap's own usage errors.
+    let out = livtk(d, As::Claude, &["list", "--kind", "incidnet"]);
+    assert_eq!(out.status.code(), Some(2));
+    let out = livtk(d, As::Claude, &["move", "LIV-1", "nowhere"]);
+    assert_eq!(out.status.code(), Some(2));
+}

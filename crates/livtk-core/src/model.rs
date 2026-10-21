@@ -168,6 +168,29 @@ impl Kind {
         }
     }
 
+    /// Whether `state` means a node of this kind is over: a built-in kind's done or canceled; a
+    /// declared kind's own closed states, whatever they are named.
+    pub fn is_closed(self, state: State) -> bool {
+        match self.declared() {
+            Some(d) => d.closed.contains(&state),
+            None => state.is_closed(),
+        }
+    }
+
+    /// Whether a node of this kind in `state` is still part of the picture.
+    pub fn is_active(self, state: State) -> bool {
+        match self.declared() {
+            Some(d) => !d.closed.contains(&state),
+            None => state.is_active(),
+        }
+    }
+
+    /// Whether `state` sets a node of this kind aside without it being done (hidden unless
+    /// asked). A declared kind has none: its closed states are what is over.
+    pub fn is_dismissed(self, state: State) -> bool {
+        !self.is_declared() && state.is_dismissed()
+    }
+
     /// The kind named `name`, built-in or declared.
     pub fn named(name: &str) -> Option<Kind> {
         Kind::ALL
@@ -315,12 +338,10 @@ impl State {
             .map_or(u8::MAX, |i| i as u8)
     }
 
-    /// Finished one way or another. A closed dependency no longer blocks. A declared state is
-    /// closed when a declared kind says so.
+    /// Finished one way or another, as the built-in kinds finish: done or canceled. A closed
+    /// dependency no longer blocks. Whether a declared kind's node is over is its kind's to say
+    /// (`Kind::is_closed`).
     pub fn is_closed(self) -> bool {
-        if self.is_declared() {
-            return registry().kinds.iter().any(|d| d.closed.contains(&self));
-        }
         matches!(self, State::Done | State::Canceled)
     }
 
@@ -333,11 +354,9 @@ impl State {
         )
     }
 
-    /// Still part of the picture: shown in lists unless asked for everything.
+    /// Still part of the picture, as the built-in kinds see it: shown in lists unless asked for
+    /// everything. A declared kind's is `Kind::is_active`.
     pub fn is_active(self) -> bool {
-        if self.is_declared() {
-            return !self.is_closed();
-        }
         !matches!(
             self,
             State::Done | State::Canceled | State::Rejected | State::Retired | State::Superseded
@@ -379,7 +398,12 @@ impl FromStr for State {
         State::named(s).ok_or_else(|| {
             Error::Invalid(format!(
                 "unknown state `{s}`; one of: {}",
-                State::ALL.map(State::as_str).join(", ")
+                State::ALL
+                    .iter()
+                    .map(|st| st.as_str())
+                    .chain(registry().states.iter().copied())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ))
         })
     }
@@ -446,6 +470,10 @@ pub struct KindSpec {
 /// A declared kind as the rules read it.
 #[derive(Clone, Debug)]
 struct KindDef {
+    /// The project that declared it, by its folder.
+    owner: std::path::PathBuf,
+    /// The declaration as written, to tell another one apart.
+    spec: KindSpec,
     name: &'static str,
     states: &'static [State],
     start: State,
@@ -461,8 +489,8 @@ struct KindDef {
 struct Registry {
     kinds: Vec<KindDef>,
     states: Vec<&'static str>,
-    /// Declared relations: each name, and what it reads as from its other end.
-    rels: Vec<(&'static str, Option<&'static str>)>,
+    /// Declared relations: each name, what it reads as from its other end, and its project.
+    rels: Vec<(&'static str, Option<&'static str>, std::path::PathBuf)>,
 }
 
 static REGISTRY: std::sync::RwLock<Registry> = std::sync::RwLock::new(Registry {
@@ -486,7 +514,7 @@ fn forever<T>(v: Vec<T>) -> &'static [T] {
 /// states distinct and named, its start, closed states and human moves among them, its key a
 /// valid prefix no other kind uses. A kind declared again (another project, or the same one read
 /// again) takes its newest declaration.
-pub fn declare_kinds(specs: &[KindSpec]) -> Result<(), Error> {
+pub fn declare_kinds(owner: &std::path::Path, specs: &[KindSpec]) -> Result<(), Error> {
     let bad = |name: &str, msg: String| Error::Invalid(format!("[[kinds]] `{name}`: {msg}"));
     let mut seen_names = Vec::new();
     let mut seen_keys = vec!["LES", "DEC", "FND"];
@@ -545,6 +573,21 @@ pub fn declare_kinds(specs: &[KindSpec]) -> Result<(), Error> {
             }
         }
         validate_prefix(&spec.key).map_err(|e| bad(name, e.to_string()))?;
+        // One process, one meaning per name: another project open here that declares the same
+        // kind otherwise would have this one's nodes take its states and keys.
+        if let Some(other) = registry()
+            .kinds
+            .iter()
+            .find(|d| d.name == name && d.owner != owner && d.spec != *spec)
+        {
+            return Err(bad(
+                name,
+                format!(
+                    "{} declares a kind of this name differently, and is open here too; give one of them another name",
+                    other.owner.display()
+                ),
+            ));
+        }
         if seen_keys.contains(&spec.key.as_str()) {
             return Err(bad(name, format!("key `{}` is another kind's", spec.key)));
         }
@@ -590,6 +633,8 @@ pub fn declare_kinds(specs: &[KindSpec]) -> Result<(), Error> {
                 .collect(),
         );
         let def = KindDef {
+            owner: owner.to_path_buf(),
+            spec: spec.clone(),
             name: Box::leak(spec.name.trim().to_owned().into_boxed_str()),
             states,
             start,
@@ -699,7 +744,9 @@ pub fn validate_prefix(prefix: &str) -> Result<(), Error> {
 /// A prefix a project may choose for its tasks: valid, and not one the other kinds use.
 pub fn validate_project_prefix(prefix: &str) -> Result<(), Error> {
     validate_prefix(prefix)?;
-    if Kind::all().iter().any(|k| k.fixed_prefix() == Some(prefix)) {
+    // The built-in kinds' only: another project's declared keys are not this one's to avoid, and
+    // its own are checked against its prefix where it declares them.
+    if Kind::ALL.iter().any(|k| k.fixed_prefix() == Some(prefix)) {
         return Err(Error::Invalid(format!(
             "prefix `{prefix}` is reserved for lessons, decisions or findings; pick another"
         )));
@@ -766,7 +813,7 @@ impl Rel {
 
     fn declared(self) -> Option<(&'static str, Option<&'static str>)> {
         let i = usize::from(self.0.checked_sub(Rel::BUILT_IN)?);
-        registry().rels.get(i).copied()
+        registry().rels.get(i).map(|d| (d.0, d.1))
     }
 
     /// What a declared relation reads as from its other end (`implemented_by`), if it says.
@@ -842,7 +889,7 @@ pub struct RelSpec {
 
 /// Register the relations a project declares, checked: each name new (no built-in, no kind of
 /// relation declared twice), lowercase and underscores, its inverse too.
-pub fn declare_relations(specs: &[RelSpec]) -> Result<(), Error> {
+pub fn declare_relations(owner: &std::path::Path, specs: &[RelSpec]) -> Result<(), Error> {
     let word = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '_');
     let mut seen: Vec<&str> = Rel::NAMES.to_vec();
     for spec in specs {
@@ -858,6 +905,16 @@ pub fn declare_relations(specs: &[RelSpec]) -> Result<(), Error> {
             }
             seen.push(name);
         }
+        if let Some(other) = registry()
+            .rels
+            .iter()
+            .find(|d| d.0 == spec.name && d.2 != owner && d.1 != spec.inverse.as_deref())
+        {
+            return Err(bad(format!(
+                "{} declares a relation of this name differently, and is open here too",
+                other.2.display()
+            )));
+        }
     }
     let mut reg = REGISTRY
         .write()
@@ -868,9 +925,10 @@ pub fn declare_relations(specs: &[RelSpec]) -> Result<(), Error> {
             .inverse
             .as_ref()
             .map(|i| &*Box::leak(i.clone().into_boxed_str()));
+        let entry = (name, inverse, owner.to_path_buf());
         match reg.rels.iter().position(|d| d.0 == name) {
-            Some(i) => reg.rels[i] = (name, inverse),
-            None => reg.rels.push((name, inverse)),
+            Some(i) => reg.rels[i] = entry,
+            None => reg.rels.push(entry),
         }
     }
     Ok(())

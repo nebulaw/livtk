@@ -478,14 +478,17 @@ impl Workspace {
             seen: Mark::default(),
             vectors: None,
         };
-        if !ws.store.has_current_schema()? {
+        // Checked before the log is read again, so a kind or state taken out of the config is
+        // named, not skipped.
+        if ws.store.has_current_schema()? {
+            ws.check_kinds()?;
+        } else {
             let _lock = ws.lock()?;
             if !ws.store.has_current_schema()? {
                 ws.store.reset_schema()?;
             }
             ws.catch_up()?;
         }
-        ws.check_kinds()?;
         ws.refresh()?;
         Ok(ws)
     }
@@ -601,20 +604,77 @@ impl Workspace {
     /// Every kind the project's nodes are of is still declared: a kind taken out of the config
     /// while nodes of it exist would orphan them, so livtk refuses and names them.
     fn check_kinds(&self) -> Result<()> {
-        for (kind, keys) in self.store.kinds_in_use()? {
-            if Kind::named(&kind).is_none() {
+        // Its own: the built-in kinds and the ones its config declares, not another project's.
+        let own = |name: &str| {
+            Kind::ALL.iter().any(|k| k.as_str() == name)
+                || self.config.kinds.iter().any(|k| k.name == name)
+        };
+        let config = || self.dir.join("config.toml");
+        for (kind, state) in self.store.kind_states()? {
+            let Some(k) = Kind::named(&kind).filter(|_| own(&kind)) else {
+                let keys = self.store.keys_in(&kind, None, 6)?;
                 let shown: Vec<&str> = keys.iter().take(5).map(String::as_str).collect();
                 return Err(Error::Config {
-                    path: self.dir.join("config.toml"),
+                    path: config(),
                     msg: format!(
                         "nodes of kind `{kind}` exist ({}{}) but no [[kinds]] declares it; declare it again",
                         shown.join(", "),
                         if keys.len() > 5 { ", ..." } else { "" }
                     ),
                 });
+            };
+            // Each node in a state its kind still has.
+            if !k.states().iter().any(|s| s.as_str() == state) {
+                let keys = self.store.keys_in(&kind, Some(&state), 1)?;
+                let key = keys.first().map_or("a node", String::as_str);
+                return Err(Error::Config {
+                    path: config(),
+                    msg: format!(
+                        "{key} is `{state}`, a state kind `{kind}` no longer has; declare it again, or move {key} first"
+                    ),
+                });
             }
         }
         Ok(())
+    }
+
+    /// Refuse a log that names a kind, state or relation the config no longer declares, naming
+    /// the node, rather than skip the line and lose the node or its move.
+    fn refuse_undeclared(&self, parsed: &log::Parsed) -> Result<()> {
+        let undeclared = &parsed.undeclared;
+        let Some((why, node)) = undeclared.first() else {
+            return Ok(());
+        };
+        // Its key: from the store, or from its creation read alongside.
+        let created = |id: &str| {
+            parsed.events.iter().find_map(|e| match &e.op {
+                Op::NodeCreate { node, data } if node.to_string() == id => Some(data.key.clone()),
+                _ => None,
+            })
+        };
+        let node = match node {
+            Some(n) => match self.store.key_of(n)? {
+                Some(k) => k,
+                None => created(n).unwrap_or_else(|| n.clone()),
+            },
+            None => "a node".to_owned(),
+        };
+        Err(Error::Config {
+            path: self.dir.join("config.toml"),
+            msg: format!(
+                "the log has {node} with {why}{}; declare it again in config.toml",
+                match undeclared.len() {
+                    1 => String::new(),
+                    n => format!(" (and {} more event(s) like it)", n - 1),
+                }
+            ),
+        })
+    }
+
+    /// Whether `kind` is this project's: built in, or declared in its own config (another
+    /// project open in the same process may declare kinds this one does not).
+    pub fn owns(&self, kind: Kind) -> bool {
+        !kind.is_declared() || self.config.kinds.iter().any(|k| k.name == kind.as_str())
     }
 
     pub fn dir(&self) -> &Path {
@@ -1230,6 +1290,7 @@ impl Workspace {
         }
         let bytes = self.log.read_from(applied.mark.len)?;
         let parsed = log::parse(&bytes, applied.mark.len);
+        self.refuse_undeclared(&parsed)?;
         let mut max = applied.max_id;
         for e in &parsed.events {
             if Some(e.id) <= max {
@@ -1251,6 +1312,7 @@ impl Workspace {
     fn rebuild_locked(&mut self) -> Result<()> {
         let bytes = self.log.read_from(0)?;
         let mut parsed = log::parse(&bytes, 0);
+        self.refuse_undeclared(&parsed)?;
         parsed.events.sort_by_key(|e| e.id);
         parsed.events.dedup_by_key(|e| e.id);
         let applied = Applied {
@@ -1273,6 +1335,11 @@ impl Workspace {
                 priority,
                 links,
             } => {
+                if !self.owns(kind) {
+                    return Err(Error::Invalid(format!(
+                        "this project does not declare kind `{kind}`; add it to [[kinds]] in config.toml"
+                    )));
+                }
                 let title = clean_title(&title)?;
                 let priority = match (kind, priority) {
                     (Kind::Task, Some(p)) => Priority::new(p)?,
@@ -1530,7 +1597,7 @@ impl Workspace {
             let (deps, _) = self.store.links(n.id, Rel::DependsOn)?;
             let waiting: Vec<String> = deps
                 .iter()
-                .filter(|d| !d.state.is_closed())
+                .filter(|d| !d.kind.is_closed(d.state))
                 .map(|d| format!("{} ({})", d.key, d.state))
                 .collect();
             if !waiting.is_empty() {
@@ -1635,8 +1702,10 @@ fn parse_config(path: &Path, text: &str) -> Result<Config> {
     }
     validate_project_prefix(&config.prefix).map_err(|e| bad(e.to_string()))?;
     // The project's own kinds, known before its gates and its log are read.
-    crate::model::declare_kinds(&config.kinds).map_err(|e| bad(e.to_string()))?;
-    crate::model::declare_relations(&config.relations).map_err(|e| bad(e.to_string()))?;
+    // Whose they are: the project's own folder, above `.livtk`.
+    let owner = path.parent().and_then(Path::parent).unwrap_or(path);
+    crate::model::declare_kinds(owner, &config.kinds).map_err(|e| bad(e.to_string()))?;
+    crate::model::declare_relations(owner, &config.relations).map_err(|e| bad(e.to_string()))?;
     if let Some(k) = config.kinds.iter().find(|k| k.key == config.prefix) {
         return Err(bad(format!(
             "[[kinds]] `{}`: key `{}` is the project's own prefix",

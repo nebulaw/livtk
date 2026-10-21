@@ -900,3 +900,76 @@ fn settings_are_written_checked_and_keep_the_files_comments() {
         "{written}"
     );
 }
+
+// ---- declared kinds, one process ----------------------------------------------------------------
+
+fn declare(dir: &Path, toml: &str) {
+    let path = dir.join(".livtk/config.toml");
+    let mut config = fs::read_to_string(&path).unwrap();
+    config.push('\n');
+    config.push_str(toml);
+    fs::write(path, config).unwrap();
+}
+
+#[test]
+fn two_projects_in_one_process_keep_their_own_kinds() {
+    // Names only this test uses: the test binary shares one process.
+    let tempdir = || tempfile::tempdir().unwrap();
+    let (a, b, c) = (tempdir(), tempdir(), tempdir());
+    init(a.path());
+    Workspace::init(b.path(), Some("OPS")).unwrap();
+    init(c.path());
+    declare(
+        a.path(),
+        "[[kinds]]\nname = \"outage\"\nstates = [\"open\", \"closed\"]\nkey = \"OUT\"\n",
+    );
+    let mut wa = Workspace::open(a.path()).unwrap();
+    // Another project declaring the same name differently is refused, naming the first.
+    declare(
+        b.path(),
+        "[[kinds]]\nname = \"outage\"\nstates = [\"new\", \"triaged\", \"resolved\"]\nkey = \"OPX\"\n",
+    );
+    let err = Workspace::open(b.path())
+        .err()
+        .expect("refused")
+        .to_string();
+    assert!(
+        err.contains("outage") && err.contains(&a.path().display().to_string()),
+        "{err}"
+    );
+    // The first project's nodes keep its own key and states.
+    let outage = Kind::named("outage").unwrap();
+    let events = wa
+        .execute(
+            Command::Create {
+                kind: outage,
+                title: "checkout is down".into(),
+                body: String::new(),
+                priority: None,
+                links: Vec::new(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    match &events[0].op {
+        Op::NodeCreate { data, .. } => {
+            assert_eq!(data.key, "OUT-1");
+            assert_eq!(data.state.as_str(), "open");
+        }
+        other => panic!("{other:?}"),
+    }
+    // A project that declares nothing does not take on another's kinds.
+    let mut wc = Workspace::open(c.path()).unwrap();
+    assert!(!wc.owns(outage));
+    let refused = wc.execute(
+        Command::Create {
+            kind: outage,
+            title: "x".into(),
+            body: String::new(),
+            priority: None,
+            links: Vec::new(),
+        },
+        &CLAUDE,
+    );
+    assert!(refused.is_err(), "not its kind");
+}

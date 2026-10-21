@@ -95,7 +95,7 @@ pub fn apply(cx: &mut App) {
 }
 
 /// The colour of a state, as Linear colours its status icons.
-pub fn state_color(state: State) -> u32 {
+pub fn state_color(kind: Kind, state: State) -> u32 {
     match state {
         State::Backlog => BACKLOG,
         State::Planned | State::Acked | State::Proposed => TODO,
@@ -105,8 +105,8 @@ pub fn state_color(state: State) -> u32 {
         State::Recorded => TEXT_3,
         State::Rejected => RED,
         State::Parked | State::Canceled | State::Retired | State::Superseded => CANCELED,
-        // A declared state: settled when closed, else in hand.
-        s if s.is_closed() => DONE,
+        // A declared kind's state: settled when its kind closes there, else in hand.
+        s if kind.is_closed(s) => DONE,
         _ => PROGRESS,
     }
 }
@@ -114,7 +114,7 @@ pub fn state_color(state: State) -> u32 {
 /// A status icon in Linear's manner: a faint ring for backlog, a ring for what is ready, half
 /// filled in hand, filled once settled.
 pub fn state_mark(kind: Kind, state: State) -> Div {
-    let c = state_color(state);
+    let c = state_color(kind, state);
     let ring = div()
         .size(px(14.))
         .flex_none()
@@ -142,7 +142,7 @@ pub fn state_mark(kind: Kind, state: State) -> Div {
             .rounded_full()
             .bg(with_alpha(c, 0.7)),
         // A declared kind's: a ring where it starts, filled once closed, half filled between.
-        s if s.is_declared() && s.is_closed() => {
+        s if kind.is_declared() && kind.is_closed(s) => {
             div().size(px(14.)).flex_none().rounded_full().bg(color(c))
         }
         s if s.is_declared() && s == kind.initial_state() => ring.border_color(color(TODO)),

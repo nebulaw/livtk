@@ -139,7 +139,7 @@ pub fn list(tasks: &[Summary], json: bool) -> Result<()> {
             text.push('\n');
             current = Some(t.state);
         }
-        let flag = if t.blocked && !t.state.is_closed() {
+        let flag = if t.blocked && !t.kind.is_closed(t.state) {
             "  (blocked)"
         } else {
             ""
@@ -182,13 +182,30 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
                 _ => None,
             })
             .collect();
-        return print_json(&json!({
+        let mut out = json!({
             "node": node, "notes": notes, "links": links, "history": history,
             "supersedes": replaces, "superseded_by": replaced_by,
             "learned_from": learned_from, "taught": taught,
             "part_of": part_of, "sub_tasks": parts, "related": related,
             "docs": docs,
-        }));
+        });
+        // The project's own relations, each with the nodes it points to and those pointing here;
+        // absent when it declares none.
+        if !ws.config().relations.is_empty() {
+            let mut declared = serde_json::Map::new();
+            for spec in &ws.config().relations {
+                let Some(rel) = Rel::named(&spec.name) else {
+                    continue;
+                };
+                let (to, from) = ws.related(key, rel)?;
+                declared.insert(
+                    rel.as_str().to_owned(),
+                    json!({"to": to, "from": from, "inverse": rel.inverse()}),
+                );
+            }
+            out["declared"] = serde_json::Value::Object(declared);
+        }
+        return print_json(&out);
     }
     println!("{}  {}", node.key, node.title);
     let mut facts = vec![node.state.to_string()];

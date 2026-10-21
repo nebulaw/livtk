@@ -2079,7 +2079,9 @@ impl Model {
             d.show_dismissed = !d.show_dismissed;
             // A dismissed state chosen in the filter would show nothing while hidden.
             if !d.show_dismissed {
-                d.states.retain(|s| !s.is_dismissed());
+                let kind = self.pane().view.kind();
+                d.states
+                    .retain(|&s| !kind.map_or(s.is_dismissed(), |k| k.is_dismissed(s)));
             }
             self.displays.insert(self.pane().view, d);
             self.reload();
@@ -2214,7 +2216,7 @@ impl Model {
             (Grouping::State, Some(kind)) => kind
                 .states()
                 .iter()
-                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .filter(|&&s| d.show_dismissed || !kind.is_dismissed(s))
                 .filter(|s| d.states.is_empty() || d.states.contains(s))
                 .map(|&s| GroupKey::State(s))
                 .collect(),
@@ -2272,14 +2274,11 @@ impl Model {
             // The kind's states in their own order, as the list's groups; dismissed ones only
             // while shown. The filter says what the board is about: no column for a state it
             // leaves out.
-            self.pane()
-                .view
-                .kind()
-                .unwrap_or(Kind::Task)
-                .states()
+            let kind = self.pane().view.kind().unwrap_or(Kind::Task);
+            kind.states()
                 .iter()
                 .copied()
-                .filter(|s| d.show_dismissed || !s.is_dismissed())
+                .filter(|&s| d.show_dismissed || !kind.is_dismissed(s))
                 .filter(|s| d.states.is_empty() || d.states.contains(s))
                 .map(GroupKey::State)
                 .collect()
@@ -2351,7 +2350,7 @@ impl Model {
                     kind.states()
                         .iter()
                         .copied()
-                        .filter(|s| !s.is_dismissed())
+                        .filter(|&s| !kind.is_dismissed(s))
                         .collect()
                 };
                 project.ws.list(kind, &states)

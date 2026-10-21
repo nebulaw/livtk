@@ -293,7 +293,9 @@ impl Model {
             d.show_dismissed = s.show_dismissed && view.shows_dismissed();
             d.nest = !s.flat;
             if !d.show_dismissed {
-                d.states.retain(|st| !st.is_dismissed());
+                let kind = view.kind();
+                d.states
+                    .retain(|&st| !kind.map_or(st.is_dismissed(), |k| k.is_dismissed(st)));
             }
             self.displays.insert(view, d);
             self.collapsed.retain(|(v, _)| *v != view);

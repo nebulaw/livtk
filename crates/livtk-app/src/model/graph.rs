@@ -537,7 +537,7 @@ impl Model {
                 kind.states()
                     .iter()
                     .copied()
-                    .filter(|s| !s.is_dismissed())
+                    .filter(|&s| !kind.is_dismissed(s))
                     .collect()
             };
             match p.ws.list(kind, &states) {

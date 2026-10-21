@@ -177,6 +177,13 @@ pub enum Line {
     },
     /// Not an event at all. Skipped with a warning.
     Garbage(String),
+    /// An event naming a kind, state or relation the project's config does not declare (any
+    /// more). Never skipped: that would quietly lose the node or its move.
+    Undeclared {
+        why: String,
+        /// The node it is about: its key when the line creates it, its id otherwise.
+        node: Option<String>,
+    },
 }
 
 pub fn parse_line(line: &str) -> Line {
@@ -193,7 +200,23 @@ pub fn parse_line(line: &str) -> Line {
                 .as_ref()
                 .and_then(|h| h.get("v"))
                 .and_then(Value::as_u64);
+            let why = err.to_string();
+            let undeclared = ["unknown kind", "unknown state", "unknown relation"]
+                .iter()
+                .any(|w| why.contains(w));
             match v {
+                Some(v) if undeclared && v <= u64::from(FORMAT_VERSION) => {
+                    // Just what is unknown: not the list of what is known, nor serde's place.
+                    let why = why.split(';').next().unwrap_or(&why).to_owned();
+                    let h = header.as_ref();
+                    let node = h
+                        .and_then(|h| h.get("data"))
+                        .and_then(|d| d.get("key"))
+                        .or_else(|| h.and_then(|h| h.get("node")))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    Line::Undeclared { why, node }
+                }
                 Some(v) if v > u64::from(FORMAT_VERSION) => Line::Newer {
                     id: header
                         .as_ref()
@@ -202,7 +225,7 @@ pub fn parse_line(line: &str) -> Line {
                         .and_then(|s| s.parse().ok()),
                     v,
                 },
-                _ => Line::Garbage(err.to_string()),
+                _ => Line::Garbage(why),
             }
         }
     }

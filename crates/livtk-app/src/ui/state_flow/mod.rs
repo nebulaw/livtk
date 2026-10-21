@@ -362,7 +362,7 @@ fn paint_thread(
 fn node(kind: Kind, s: &Step, n: &geometry::Node, light: Light) -> AnyElement {
     let change = light.change;
     let name = s.state.as_str();
-    let c = state_color(s.state);
+    let c = state_color(kind, s.state);
     let at = n.at;
     // The node at `size` across, `lit` (0 to 1) of the way to being the current one.
     let shape = move |el: Stateful<Div>, size: f32, lit: f32| {

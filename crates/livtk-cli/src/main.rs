@@ -381,10 +381,29 @@ fn main() -> ExitCode {
             eprintln!("livtk: {e:#}");
             match e.downcast_ref::<Error>() {
                 Some(Error::Refused(_)) => ExitCode::from(3),
+                _ if e.downcast_ref::<Usage>().is_some() => ExitCode::from(2),
                 _ => ExitCode::FAILURE,
             }
         }
     }
+}
+
+/// A word on the command line that names no kind or state: a usage error, as clap's own are.
+#[derive(Debug)]
+struct Usage(String);
+
+impl std::fmt::Display for Usage {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Usage {}
+
+/// `r`, its error a usage error: the kinds and states a project has are known only once its
+/// config is read, after clap has had its say.
+fn usage<T>(r: std::result::Result<T, Error>) -> Result<T> {
+    r.map_err(|e| Usage(e.to_string()).into())
 }
 
 /// Claude Code sets CLAUDECODE=1 in every shell it runs; its plugin hook names subagents with
@@ -486,7 +505,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 .chain(parent.map(|k| (Rel::Parent, k)))
                 .collect();
             let body = read_body(body)?.unwrap_or_default();
-            let kind = kind.as_deref().map_or(Ok(Kind::Task), str::parse)?;
+            let kind = usage(kind.as_deref().map_or(Ok(Kind::Task), str::parse))?;
             create(ws, kind, title, body, priority, links, by, json)
         }
         Cmd::Lesson {
@@ -536,11 +555,13 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             all,
             fields,
         } => {
-            let kind: Kind = kind.parse()?;
-            let state = state
-                .iter()
-                .map(|s| s.parse::<State>())
-                .collect::<Result<Vec<_>, _>>()?;
+            let kind: Kind = usage(kind.parse())?;
+            let state = usage(
+                state
+                    .iter()
+                    .map(|s| s.parse::<State>())
+                    .collect::<Result<Vec<_>, _>>(),
+            )?;
             let states: Vec<State> = if !state.is_empty() {
                 state
             } else if all {
@@ -549,7 +570,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
                 kind.states()
                     .iter()
                     .copied()
-                    .filter(|s| s.is_active())
+                    .filter(|&s| kind.is_active(s))
                     .collect()
             };
             let rows = ws.list(kind, &states)?;
@@ -591,7 +612,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             }
             output::edited(ws, &before, &events, json)
         }
-        Cmd::Move { key, state } => moved(ws, &key, state.parse()?, by, json),
+        Cmd::Move { key, state } => moved(ws, &key, usage(state.parse())?, by, json),
         Cmd::Ack { key } => moved(ws, &key, State::Acked, by, json),
         Cmd::Start { key } => moved(ws, &key, State::Doing, by, json),
         Cmd::Done { key } => moved(ws, &key, State::Done, by, json),
@@ -689,7 +710,7 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
             kind,
             node,
         } => {
-            let kind = kind.as_deref().map(str::parse).transpose()?;
+            let kind = usage(kind.as_deref().map(str::parse).transpose())?;
             events(ws, since, follow, &signals, kind, node.as_deref())
         }
         Cmd::Rebuild => {

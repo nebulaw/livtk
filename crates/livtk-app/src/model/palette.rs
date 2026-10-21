@@ -473,7 +473,7 @@ impl Model {
         if !(self.pane().view == View::Inbox && in_view) {
             self.set_view(view);
         }
-        if found.state.is_dismissed() && !self.display().show_dismissed {
+        if found.kind.is_dismissed(found.state) && !self.display().show_dismissed {
             self.toggle_dismissed();
         }
         if !self.pane().rows.iter().any(|r| r.id == found.id) {
@@ -517,7 +517,7 @@ impl Model {
                 .states()
                 .iter()
                 .copied()
-                .filter(|s| !s.is_dismissed())
+                .filter(|&s| !kind.is_dismissed(s))
                 .collect();
             all.extend(p.ws.list(kind, &states).unwrap_or_default());
         }

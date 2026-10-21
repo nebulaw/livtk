@@ -3994,6 +3994,20 @@ fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
         cx.debug_bounds("state-flow").is_none(),
         "hidden beside the list"
     );
+    // And it still moves the task.
+    click_on(cx, "detail-state");
+    redraw(cx);
+    // Acked, it leaves the inbox and the detail follows the next row: its key first.
+    let key = app.read_with(cx, |a, _| {
+        a.model().detail.as_ref().unwrap().node.key.clone()
+    });
+    click_on(cx, "set-state-acked");
+    settle(cx);
+    assert_eq!(
+        state_of(dir.path(), &key),
+        State::Acked,
+        "moved with the graph hidden"
+    );
     for mode in [
         livtk_app::model::DetailMode::Center,
         livtk_app::model::DetailMode::Full,
@@ -4012,8 +4026,13 @@ fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
     // Saved, and brought back.
     let saved = app.read_with(cx, |a, _| a.model().saved());
     assert!(saved.hide_state_flow);
+    // A file written before the setting existed: no such key.
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("app.toml");
+    std::fs::write(&path, "detail_mode = \"side\"\nreading_compact = false\n").unwrap();
+    let old = livtk_app::model::Saved::load(&path);
     app.update(cx, |a, cx| {
-        a.model_mut().restore(&livtk_app::model::Saved::default());
+        a.model_mut().restore(&old);
         cx.notify();
     });
     settle(cx);

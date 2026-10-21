@@ -1,8 +1,9 @@
 //! What the app remembers between runs: where the human was (project, view), how each view is
 //! shown (filter, priorities, grouping, ordering, empty groups, dismissed work, collapsed
-//! groups), list or board, and the window's own layout (the sidebar's width and whether it is collapsed, the
-//! panel's width). Kept in `app.toml` in livtk's config directory; GPU-free, so tested as plain
-//! Rust. The model restores its part; the view restores the window's.
+//! groups), list or board, each project's graph camera, and the window's own layout (the
+//! sidebar's width and whether it is collapsed, the panel's width). Kept in `app.toml` in
+//! livtk's config directory; GPU-free, so tested as plain Rust. The model restores its part; the
+//! view restores the window's.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use livtk_core::State;
 use serde::{Deserialize, Serialize};
 
-use super::{Display, GroupKey, Grouping, Layout, Model, Ordering, Pane, Split, View};
+use super::{Camera, Display, GroupKey, Grouping, Layout, Model, Ordering, Pane, Split, View};
 
 /// Everything remembered, as written to `app.toml`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -24,6 +25,8 @@ pub struct Saved {
     pub docs_open: BTreeMap<String, String>,
     /// The docs' folders folded in each project, by the project's folder.
     pub docs_shut: BTreeMap<String, Vec<String>>,
+    /// Each project's graph camera (pan and zoom), by the project's folder.
+    pub graph_cameras: BTreeMap<String, Camera>,
     pub view: Option<String>,
     /// "list" or "board".
     pub layout: Option<String>,
@@ -227,6 +230,11 @@ impl Model {
                     (dir.to_string_lossy().into_owned(), shut)
                 })
                 .collect(),
+            graph_cameras: self
+                .graph_cameras()
+                .into_iter()
+                .map(|(dir, camera)| (dir.to_string_lossy().into_owned(), camera))
+                .collect(),
             view: Some(view_name(self.pane().view)),
             layout: Some(
                 match self.pane().layout {
@@ -268,6 +276,13 @@ impl Model {
     /// Bring back what `saved` remembers. What no longer applies (a project gone, a view or
     /// group renamed) is passed over.
     pub fn restore(&mut self, saved: &Saved) {
+        // First: the view restored below may be the graph, entered with its project's camera.
+        self.graph_cameras = saved
+            .graph_cameras
+            .iter()
+            .filter(|(_, c)| c.zoom.is_finite() && c.zoom > 0.)
+            .map(|(dir, camera)| (PathBuf::from(dir), *camera))
+            .collect();
         for view in known_views() {
             let Some(s) = saved.views.get(&view_name(view)) else {
                 continue;

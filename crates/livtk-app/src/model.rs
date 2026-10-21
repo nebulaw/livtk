@@ -659,6 +659,8 @@ pub struct Model {
     activity_seen_before: Option<Uuid>,
     /// The graph view's nodes, links, camera and selection.
     pub graph: Graph,
+    /// Each project's graph camera, by its folder, as last left: taken back on the next visit.
+    graph_cameras: HashMap<PathBuf, Camera>,
     displays: HashMap<View, Display>,
     collapsed: HashSet<(View, GroupKey)>,
 }
@@ -879,6 +881,7 @@ impl Model {
             activity_index: 0,
             activity_seen_before: None,
             graph: Graph::default(),
+            graph_cameras: HashMap::new(),
             displays: HashMap::new(),
             collapsed: HashSet::new(),
         };

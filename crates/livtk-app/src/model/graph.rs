@@ -69,7 +69,7 @@ fn orders(rel: Rel) -> bool {
 }
 
 /// Where the world is on screen: `screen = world * zoom + pan`, in the view's own coordinates.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub pan_x: f32,
     pub pan_y: f32,
@@ -120,6 +120,10 @@ pub struct Graph {
     viewport: (f32, f32),
     /// Fit everything once the view's size is known.
     fit_pending: bool,
+    /// The project it shows, by its folder: whose camera it is.
+    project: Option<std::path::PathBuf>,
+    /// The camera was taken back from an earlier visit: kept, not fitted, when the nodes come.
+    camera_kept: bool,
 }
 
 impl Graph {
@@ -254,6 +258,16 @@ impl Graph {
 
     pub fn viewport(&self) -> (f32, f32) {
         self.viewport
+    }
+
+    /// The camera and its project's folder, once it is placed: fitted to the nodes, moved, or
+    /// taken back from an earlier visit; not while it waits to fit.
+    fn placed_camera(&self) -> Option<(&std::path::PathBuf, Camera)> {
+        let placed = !self.fit_pending && (!self.nodes.is_empty() || self.camera_kept);
+        self.project
+            .as_ref()
+            .filter(|_| placed)
+            .map(|d| (d, self.camera))
     }
 
     /// Pan so node `i` is in view, if it is not.
@@ -520,11 +534,42 @@ fn place_part(
 impl Model {
     /// Opening the graph: lay it out, and fit it once its size is known.
     pub(super) fn enter_graph(&mut self) {
-        self.graph = Graph::default();
+        self.keep_graph_camera();
+        let project = self.project().map(|p| p.dir.clone());
+        let kept = project
+            .as_ref()
+            .and_then(|d| self.graph_cameras.get(d))
+            .copied();
+        self.graph = Graph {
+            camera: kept.unwrap_or_default(),
+            camera_kept: kept.is_some(),
+            project,
+            ..Graph::default()
+        };
+    }
+
+    /// Remember the graph's camera for its project, once it has been placed (fitted or moved).
+    fn keep_graph_camera(&mut self) {
+        if let Some((dir, camera)) = self.graph.placed_camera() {
+            self.graph_cameras.insert(dir.clone(), camera);
+        }
+    }
+
+    /// Each project's graph camera, the one shown as it is now.
+    pub(super) fn graph_cameras(&self) -> HashMap<std::path::PathBuf, Camera> {
+        let mut all = self.graph_cameras.clone();
+        if let Some((dir, camera)) = self.graph.placed_camera() {
+            all.insert(dir.clone(), camera);
+        }
+        all
     }
 
     /// Rebuild the graph from the store, keeping the camera and the selection.
     pub(super) fn load_graph(&mut self) {
+        // Shown however it was reached (a restart's panes, say): with its own project's camera.
+        if self.graph.project.as_ref() != self.project().map(|p| &p.dir) {
+            self.enter_graph();
+        }
         let Some(p) = self.projects.get(self.current) else {
             return;
         };
@@ -563,11 +608,13 @@ impl Model {
         let mut graph = Graph::build(all, &links);
         let selected = old.selected.and_then(|i| old.nodes.get(i)).map(|n| n.id);
         graph.selected = selected.and_then(|id| graph.nodes.iter().position(|n| n.id == id));
-        if !old.nodes.is_empty() {
+        if !old.nodes.is_empty() || old.camera_kept {
             graph.camera = old.camera;
             graph.fit_pending = old.fit_pending;
         }
         graph.viewport = old.viewport;
+        graph.project = old.project;
+        graph.camera_kept = old.camera_kept;
         if graph.fit_pending {
             let (w, h) = graph.viewport;
             graph.set_viewport(w, h);

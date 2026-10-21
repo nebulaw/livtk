@@ -1889,3 +1889,68 @@ fn a_declared_kind_has_its_own_view_list_board_and_flow() {
     let to: Vec<State> = choices(kind, open).iter().map(|c| c.to).collect();
     assert_eq!(to.len(), 2);
 }
+
+/// The graph keeps where it was looked at: across a view change, through a save and a restart,
+/// and apart for each project. A first visit fits; fitting on request still fits.
+#[test]
+fn the_graph_keeps_its_camera_per_project() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for dir in [a.path(), b.path()] {
+        let mut ws = project(dir);
+        let one = planned(&mut ws, "one");
+        let two = planned(&mut ws, "two");
+        ws.execute(
+            Command::Link {
+                src: two,
+                rel: Rel::DependsOn,
+                dst: one,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    let dirs = [a.path().to_path_buf(), b.path().to_path_buf()];
+    let mut m = Model::open(&dirs);
+    m.set_models_dir(None);
+    m.set_view(View::Graph);
+    m.graph_viewport(1000., 700.);
+    let fitted = m.graph.camera;
+    m.graph_pan(120., -40.);
+    m.graph_zoom(1.5, Some((500., 350.)));
+    let moved = m.graph.camera;
+    assert_ne!(moved, fitted);
+    // Away and back: the same camera, not fitted again.
+    m.set_view(View::Tasks);
+    m.set_view(View::Graph);
+    m.graph_viewport(1000., 700.);
+    assert_eq!(m.graph.camera, moved, "kept across a view change");
+    // The other project's graph is its own: a first visit fits.
+    m.select_project(1);
+    m.set_view(View::Graph);
+    m.graph_viewport(1000., 700.);
+    let other = m.graph.camera;
+    assert_ne!(other, moved);
+    m.graph_pan(-30., 10.);
+    let other = m.graph.camera;
+    m.select_project(0);
+    m.set_view(View::Graph);
+    m.graph_viewport(1000., 700.);
+    assert_eq!(m.graph.camera, moved, "each project's apart");
+    // Through a save and a restart.
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("livtk/app.toml");
+    m.saved().save(&path).unwrap();
+    let mut back = Model::open(&dirs);
+    back.set_models_dir(None);
+    back.restore(&livtk_app::model::Saved::load(&path));
+    back.set_view(View::Graph);
+    back.graph_viewport(1000., 700.);
+    assert_eq!(back.graph.camera, moved, "kept through a restart");
+    back.select_project(1);
+    back.set_view(View::Graph);
+    back.graph_viewport(1000., 700.);
+    assert_eq!(back.graph.camera, other);
+    // Fit still fits.
+    back.graph_fit();
+    assert_ne!(back.graph.camera, other);
+}

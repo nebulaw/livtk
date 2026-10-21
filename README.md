@@ -304,8 +304,8 @@ a task or open a project from anywhere, typing included.
 `Ctrl+B`, or the top bar's button, collapses the sidebar to a rail of icons; a narrow window
 shows the rail on its own. Drag the sidebar's or the detail panel's edge to resize it, and
 double-click the edge to reset it; on a narrow window the panel floats over the content. The app
-remembers where you were, how each view was filtered, grouped and ordered, its view options, and
-these widths, in `app.toml` beside `projects.toml`.
+remembers where you were, how each view was filtered, grouped and ordered, its view options,
+each project's graph pan and zoom, and these widths, in `app.toml` beside `projects.toml`.
 Double-click a title or body in the detail panel to edit it: Enter (Ctrl+Enter for the body)
 or clicking away saves, Esc cancels. Editing an acknowledged plan sends it back to planned. Drag a row
 onto another group, or a card onto another board column, to move it; only legal moves light up.

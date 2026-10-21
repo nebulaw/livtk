@@ -194,6 +194,7 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
     // Relating has no direction worth showing: both ends list the other.
     let related: Vec<_> = relates.into_iter().chain(related_by).collect();
     let docs = ws.docs_of(key)?;
+    let sessions = ws.sessions_of(key)?;
     if json {
         let docs: Vec<_> = docs
             .iter()
@@ -215,6 +216,10 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
             "part_of": part_of, "sub_tasks": parts, "related": related,
             "docs": docs,
         });
+        // The Claude Code sessions that worked on it; absent while none is on record.
+        if !sessions.is_empty() {
+            out["sessions"] = json!(sessions);
+        }
         // The project's own relations, each with the nodes it points to and those pointing here;
         // absent when it declares none.
         if !ws.config().relations.is_empty() {
@@ -281,6 +286,16 @@ pub fn show(ws: &Workspace, key: &str, json: bool) -> Result<()> {
             Some(t) => println!("{:>11}  {path}  {t}", "doc"),
             None => println!("{:>11}  {path}  (missing)", "doc"),
         }
+    }
+    for u in &sessions {
+        println!(
+            "{:>11}  {}  {}, {} event(s), {}",
+            "session",
+            livtk_core::format::session(&u.session),
+            u.by,
+            u.events,
+            u.last.get(..16).unwrap_or(&u.last)
+        );
     }
     if !node.body.is_empty() {
         println!("\n{}", node.body);
@@ -693,5 +708,6 @@ fn describe(ws: &Workspace, e: &Event) -> String {
         }
         Op::DocLink { data, .. } => format!("linked doc {}", data.path),
         Op::DocUnlink { data, .. } => format!("unlinked doc {}", data.path),
+        Op::NodeSession { data, .. } => livtk_core::format::claim(data),
     }
 }

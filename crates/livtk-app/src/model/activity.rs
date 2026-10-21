@@ -262,6 +262,7 @@ pub fn describe(a: &Activity) -> String {
         }
         Op::DocLink { data, .. } => format!("linked the doc {}", data.path),
         Op::DocUnlink { data, .. } => format!("unlinked the doc {}", data.path),
+        Op::NodeSession { data, .. } => livtk_core::format::claim(data),
     }
 }
 

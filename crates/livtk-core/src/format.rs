@@ -12,6 +12,20 @@ pub fn duration(secs: i64) -> String {
     }
 }
 
+/// A Claude Code session id as people read it: its first eight characters.
+pub fn session(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+/// A claim of earlier events for a session, as one phrase.
+pub fn claim(data: &crate::event::SessionData) -> String {
+    format!(
+        "{} earlier event(s) credited to session {}",
+        data.events.len(),
+        session(&data.session)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::duration;

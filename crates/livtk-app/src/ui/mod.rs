@@ -3680,6 +3680,7 @@ pub(super) fn event_line(e: &Event, key: &str) -> Div {
         Op::EdgeRemove { data } => format!("unlinked: {}", data.rel),
         Op::DocLink { data, .. } => format!("linked the doc {}", data.path),
         Op::DocUnlink { data, .. } => format!("unlinked the doc {}", data.path),
+        Op::NodeSession { data, .. } => livtk_core::format::claim(data),
     };
     let human = e.by == "human";
     let note = matches!(e.op, Op::NodeNote { .. });

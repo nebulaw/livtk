@@ -348,6 +348,12 @@ pub enum Command {
         target: Option<String>,
         owner: Option<String>,
     },
+    /// Credit `events` on `node`, written before livtk recorded sessions, to `session`.
+    ClaimSession {
+        node: String,
+        session: String,
+        events: Vec<Uuid>,
+    },
     /// Ratify a lesson (human only). `always` makes it a standing rule shown at every session
     /// start; otherwise it is recalled when relevant. On a ratified lesson, changes only that.
     Ratify {
@@ -407,6 +413,8 @@ pub struct Workspace {
     /// writes to the shared store, so "the store had to catch up" says nothing about whether this
     /// reader has seen them; this does.
     seen: Mark,
+    /// The Claude Code session Claude's writes from here come from (`set_session`).
+    session: Option<String>,
     /// The vectors search ranks meaning with, as of a store mark: a search per keystroke must
     /// not re-read every text and vector (10,000 nodes cost 29 ms that way, 20 MB read).
     vectors: Option<Vectors>,
@@ -495,6 +503,7 @@ impl Workspace {
             model: None,
             embedded: 0,
             seen: Mark::default(),
+            session: None,
             vectors: None,
         };
         // Checked before the log is read again, so a kind or state taken out of the config is
@@ -707,6 +716,31 @@ impl Workspace {
         &self.config
     }
 
+    /// The Claude Code session the writes from here come from, if Claude makes them.
+    pub fn set_session(&mut self, session: Option<String>) {
+        self.session = session.filter(|s| !s.trim().is_empty());
+    }
+
+    /// The sessions that wrote to node `key`.
+    pub fn sessions_of(&self, key: &str) -> Result<Vec<crate::store::SessionUse>> {
+        self.store.sessions_of(self.node(key)?.id)
+    }
+
+    /// Every session the log knows, the latest first.
+    pub fn sessions(&self) -> Result<Vec<crate::store::SessionSummary>> {
+        self.store.sessions()
+    }
+
+    /// The nodes session `session` wrote to.
+    pub fn session_nodes(&self, session: &str) -> Result<Vec<Brief>> {
+        self.store.session_nodes(session)
+    }
+
+    /// Events Claude wrote that name no session yet.
+    pub fn unclaimed(&self) -> Result<Vec<crate::store::Unclaimed>> {
+        self.store.unclaimed()
+    }
+
     /// The project's own folder, which holds `.livtk`.
     pub fn root(&self) -> &Path {
         self.dir.parent().unwrap_or(&self.dir)
@@ -846,7 +880,11 @@ impl Workspace {
         let events: Vec<Event> = ops
             .drain(..)
             .map(|op| {
-                let e = Event::new(last, by, op);
+                let mut e = Event::new(last, by, op);
+                // Claude's writes name the session they come from; the human's never do.
+                if matches!(by, Actor::Claude { .. }) {
+                    e.session.clone_from(&self.session);
+                }
                 last = Some(e.id);
                 e
             })
@@ -1609,6 +1647,35 @@ impl Workspace {
                     data: NoteData {
                         text: text.to_owned(),
                         health: Some(health),
+                    },
+                }])
+            }
+            Command::ClaimSession {
+                node,
+                session,
+                events,
+            } => {
+                let n = self.node(&node)?;
+                let session = session.trim().to_owned();
+                if session.is_empty() {
+                    return Err(Error::Invalid("a claim names its session".into()));
+                }
+                // Only Claude's own events on this node that name no session yet.
+                let open: Vec<Uuid> = self
+                    .store
+                    .unclaimed()?
+                    .into_iter()
+                    .filter(|u| u.node == n.id && events.contains(&u.id))
+                    .map(|u| u.id)
+                    .collect();
+                if open.is_empty() {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![Op::NodeSession {
+                    node: n.id,
+                    data: crate::event::SessionData {
+                        session,
+                        events: open,
                     },
                 }])
             }

@@ -1260,3 +1260,85 @@ fn a_projects_flow_counts_its_own_tasks_and_its_lead_time() {
     let backlog = f.states.iter().find(|t| t.state == State::Backlog).unwrap();
     assert_eq!(backlog.tasks, 1);
 }
+
+// ---- sessions ---------------------------------------------------------------------------------
+
+#[test]
+fn claudes_writes_name_their_session_and_earlier_ones_can_be_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    // Before sessions were recorded: two writes by Claude, one by the human.
+    let a = task(&mut ws, "first");
+    ack(&mut ws, &a);
+    // From now on, Claude's writes carry the session; the human's never do.
+    ws.set_session(Some("sess-main".into()));
+    let note = ws
+        .execute(
+            Command::Note {
+                node: a.clone(),
+                text: "under way".into(),
+            },
+            &Actor::Claude {
+                agent: Some("implementer".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(note[0].session.as_deref(), Some("sess-main"));
+    let human = mv(&mut ws, &a, State::Doing, &HUMAN).unwrap_or_default();
+    assert!(
+        human.iter().all(|e| e.session.is_none()),
+        "the human's never"
+    );
+    let uses = ws.sessions_of(&a).unwrap();
+    assert_eq!(uses.len(), 1);
+    assert_eq!(
+        (uses[0].by.as_str(), uses[0].events),
+        ("claude:implementer", 1)
+    );
+    // The earlier ones claimed for a session: only Claude's, only those without one.
+    let earlier: Vec<uuid::Uuid> = ws.unclaimed().unwrap().iter().map(|u| u.id).collect();
+    assert_eq!(earlier.len(), 2, "create and the move to planned");
+    ws.execute(
+        Command::ClaimSession {
+            node: a.clone(),
+            session: "sess-old".into(),
+            events: earlier.clone(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    assert!(ws.unclaimed().unwrap().is_empty());
+    let by_session: Vec<(String, usize)> = ws
+        .sessions_of(&a)
+        .unwrap()
+        .into_iter()
+        .map(|u| (u.session, u.events))
+        .collect();
+    assert!(
+        by_session.contains(&("sess-old".into(), 2)),
+        "{by_session:?}"
+    );
+    // Claimed again: nothing left to claim, nothing written.
+    let again = ws
+        .execute(
+            Command::ClaimSession {
+                node: a.clone(),
+                session: "sess-other".into(),
+                events: earlier,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    assert!(again.is_empty());
+    // The same from a fresh rebuild of the log.
+    ws.rebuild().unwrap();
+    assert!(
+        ws.sessions_of(&a)
+            .unwrap()
+            .iter()
+            .any(|u| u.session == "sess-old")
+    );
+    let all = ws.sessions().unwrap();
+    assert!(all.iter().any(|s| s.session == "sess-main" && s.nodes == 1));
+    assert_eq!(ws.session_nodes("sess-old").unwrap()[0].key, a);
+}

@@ -201,14 +201,12 @@ fn pre_tool_use(input: &Value) -> Option<Value> {
         if let Some(reason) = guard::refuse_bash(cmd) {
             return Some(deny(&reason));
         }
-        let agent = input
-            .get("agent_type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if agent.is_empty() {
-            return None;
-        }
-        let signed = guard::sign(cmd, &guard::agent_name(agent))?;
+        // Signed with the session it comes from, and the subagent when one runs it.
+        let flags = guard::signature(
+            input.get("session_id").and_then(Value::as_str),
+            input.get("agent_type").and_then(Value::as_str),
+        );
+        let signed = guard::sign(cmd, &flags)?;
         let mut updated = tool_input.clone();
         updated["command"] = Value::String(signed);
         return Some(json!({

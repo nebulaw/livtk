@@ -24,7 +24,7 @@ pub use error::{Error, Result};
 pub use event::{Event, Op};
 pub use model::{Actor, Health, Kind, KindSpec, Rel, RelSpec, State};
 pub use search::Hit;
-pub use store::{Brief, DayEvents, Node, Snapshot, Summary};
+pub use store::{Brief, DayEvents, Node, SessionSummary, SessionUse, Snapshot, Summary, Unclaimed};
 pub use workspace::{
     ACTIVE_AT_ONCE, Activity, Command, Config, DIR_NAME, Flow, Gate, Gates, HOOK_NAMES, Hooks,
     Lead, Links, Memory, PROMPT_SECTIONS, Progress, Queue, RECALL_MAX, SESSION_SECTIONS, Scope,

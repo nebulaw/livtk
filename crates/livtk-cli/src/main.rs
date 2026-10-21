@@ -6,6 +6,7 @@ mod guard;
 mod hook;
 mod output;
 mod project;
+mod sessions;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -33,6 +34,10 @@ struct Cli {
     /// The Claude Code subagent running this command. The plugin adds it; people never need it.
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     agent: Option<String>,
+
+    /// The Claude Code session running this command (also `LIVTK_SESSION`). The plugin adds it.
+    #[arg(long, global = true, hide = true, value_name = "ID")]
+    session: Option<String>,
 
     #[command(subcommand)]
     command: Cmd,
@@ -121,6 +126,14 @@ enum Cmd {
         /// Only the tasks of this project (nested ones too), with its lead time.
         #[arg(long)]
         project: Option<String>,
+    },
+    /// The Claude Code sessions that worked here, latest first, with the nodes each touched;
+    /// with KEY, the sessions that worked on it.
+    #[command(args_conflicts_with_subcommands = true)]
+    Sessions {
+        key: Option<String>,
+        #[command(subcommand)]
+        cmd: Option<sessions::SessionsCmd>,
     },
     /// Projects: an outcome above tasks, its progress counted from the tasks part of it.
     Project {
@@ -460,6 +473,18 @@ fn run(cli: Cli) -> Result<()> {
     }
     let by = actor(cli.agent)?;
     let mut ws = Workspace::open(&cwd)?;
+    // Claude's writes name the session they come from; the human's never do.
+    let session = cli
+        .session
+        .clone()
+        .or_else(|| std::env::var("LIVTK_SESSION").ok());
+    match (&by, session) {
+        (Actor::Claude { .. }, s) => ws.set_session(s),
+        (Actor::Human, Some(_)) if cli.session.is_some() => {
+            anyhow::bail!("--session names a Claude Code session; commands you run need none")
+        }
+        _ => {}
+    }
     let before = ws.newest_event().ok().flatten();
     let hooks_run_here = matches!(cli.command, Cmd::Dispatch { .. });
     let result = dispatch(&mut ws, cli.command, &by, cli.json);
@@ -562,6 +587,8 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Accept { key } => moved(ws, &key, State::Accepted, by, json),
         Cmd::Inbox => output::inbox(&ws.inbox()?, ws.gates(), json),
         Cmd::Project { cmd } => project::run(ws, cmd, by, json),
+        Cmd::Sessions { key, cmd: None } => sessions::list(ws, key.as_deref(), json),
+        Cmd::Sessions { cmd: Some(cmd), .. } => sessions::run(ws, cmd, by, json),
         Cmd::Flow { project } => project::flow(ws, project.as_deref(), json),
         Cmd::Export { dir, check } => export::run(ws, dir.as_deref(), check),
         Cmd::List {

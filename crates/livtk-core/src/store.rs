@@ -17,7 +17,7 @@ use crate::log::Mark;
 use crate::model::{Key, Kind, Rel, State};
 use crate::{Error, Result};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE events (
@@ -27,9 +27,12 @@ CREATE TABLE events (
     op    TEXT NOT NULL,
     node  TEXT NOT NULL,
     other TEXT,
-    line  TEXT NOT NULL
+    line  TEXT NOT NULL,
+    -- The Claude Code session that wrote it: its own, or claimed later (node.session).
+    session TEXT
 );
 CREATE INDEX events_node ON events (node, id);
+CREATE INDEX events_session ON events (session) WHERE session IS NOT NULL;
 CREATE INDEX events_other ON events (other, id) WHERE other IS NOT NULL;
 
 CREATE TABLE nodes (
@@ -155,6 +158,37 @@ pub struct Summary {
     pub standing: bool,
     /// The task this one is a sub-task of.
     pub parent: Option<Uuid>,
+}
+
+/// One Claude Code session's work on a node, by one actor (the main agent, or a subagent).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionUse {
+    pub session: String,
+    /// Who wrote it: `claude`, or `claude:<agent>` for a subagent.
+    pub by: String,
+    pub first: String,
+    pub last: String,
+    pub events: usize,
+}
+
+/// A Claude Code session as the log knows it: when, by whom, and how many nodes it touched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionSummary {
+    pub session: String,
+    pub first: String,
+    pub last: String,
+    pub nodes: usize,
+    /// Its actors, `claude` and its subagents, by name.
+    pub by: Vec<String>,
+}
+
+/// An event Claude wrote that names no session yet, as a claim needs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unclaimed {
+    pub id: Uuid,
+    pub node: Uuid,
+    pub at: String,
+    pub by: String,
 }
 
 /// Events of one kind on one day: see `Store::events_by_day`.
@@ -452,6 +486,91 @@ impl Store {
             out.push((parse_uuid(&node)?, state.parse()?, row.get(2)?));
         }
         Ok(out)
+    }
+
+    /// The sessions that wrote to node `id`, each by actor, first seen first.
+    pub fn sessions_of(&self, id: Uuid) -> Result<Vec<SessionUse>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT session, by, min(at), max(at), count(*) FROM events \
+             WHERE node = ?1 AND session IS NOT NULL GROUP BY session, by ORDER BY min(at)",
+        )?;
+        let rows = stmt
+            .query_map([id.to_string()], |r| {
+                Ok(SessionUse {
+                    session: r.get(0)?,
+                    by: r.get(1)?,
+                    first: r.get(2)?,
+                    last: r.get(3)?,
+                    events: r.get::<_, i64>(4)? as usize,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Every session the log knows, the latest first.
+    pub fn sessions(&self) -> Result<Vec<SessionSummary>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT session, min(at), max(at), count(DISTINCT node), group_concat(DISTINCT by) \
+             FROM events WHERE session IS NOT NULL GROUP BY session ORDER BY max(at) DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let by: String = r.get(4)?;
+                Ok(SessionSummary {
+                    session: r.get(0)?,
+                    first: r.get(1)?,
+                    last: r.get(2)?,
+                    nodes: r.get::<_, i64>(3)? as usize,
+                    by: by.split(',').map(str::to_owned).collect(),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The nodes session `session` wrote to, in the order it first did.
+    pub fn session_nodes(&self, session: &str) -> Result<Vec<Brief>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT n.key, n.title, n.state, n.kind, min(e.id) AS first FROM events e \
+             JOIN nodes n ON n.id = e.node WHERE e.session = ?1 GROUP BY n.id ORDER BY first",
+        )?;
+        let rows: Vec<(String, String, String, String)> = stmt
+            .query_map([session], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(key, title, state, kind)| {
+                Ok(Brief {
+                    key,
+                    title,
+                    state: state.parse()?,
+                    kind: kind.parse()?,
+                })
+            })
+            .collect()
+    }
+
+    /// Events Claude wrote that name no session, in the log's order.
+    pub fn unclaimed(&self) -> Result<Vec<Unclaimed>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, node, at, by FROM events WHERE session IS NULL \
+             AND (by = 'claude' OR by LIKE 'claude:%') ORDER BY id",
+        )?;
+        let rows: Vec<(String, String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.into_iter()
+            .map(|(id, node, at, by)| {
+                Ok(Unclaimed {
+                    id: parse_uuid(&id)?,
+                    node: parse_uuid(&node)?,
+                    at,
+                    by,
+                })
+            })
+            .collect()
     }
 
     /// When a node last changed state, or was created if it never has.
@@ -944,8 +1063,8 @@ fn apply_one(tx: &Transaction<'_>, e: &Event) -> Result<Option<String>> {
     let (node, other) = e.op.subjects();
     let inserted = tx
         .prepare_cached(
-            "INSERT OR IGNORE INTO events (id, at, by, op, node, other, line) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR IGNORE INTO events (id, at, by, op, node, other, line, session) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?
         .execute(params![
             e.id.to_string(),
@@ -955,12 +1074,24 @@ fn apply_one(tx: &Transaction<'_>, e: &Event) -> Result<Option<String>> {
             node.to_string(),
             other.map(|o| o.to_string()),
             serde_json::to_string(e)?,
+            e.session,
         ])?;
     if inserted == 0 {
         return Ok(None);
     }
     match &e.op {
         Op::NodeCreate { node, data } => create(tx, e, *node, data),
+        // Credit the node's earlier events that have no session yet; a session already known
+        // is never overwritten.
+        Op::NodeSession { node, data } => {
+            let mut stmt = tx.prepare_cached(
+                "UPDATE events SET session = ?1 WHERE id = ?2 AND node = ?3 AND session IS NULL",
+            )?;
+            for id in &data.events {
+                stmt.execute(params![data.session, id.to_string(), node.to_string()])?;
+            }
+            Ok(None)
+        }
         Op::NodeSet { node, data } => set(tx, e, *node, data),
         Op::NodeNote { node, .. } => {
             // The note itself lives in `events`; the node only records the activity.

@@ -10,7 +10,7 @@ use crate::model::{Actor, Health, Kind, Priority, Rel, State};
 /// The newest format version this livtk reads. Each event carries the version its operation
 /// needs, so adding an operation never changes the bytes of older events, and an older livtk
 /// skips the new operation with a clear "update livtk" warning.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
@@ -20,6 +20,10 @@ pub struct Event {
     /// The id's own timestamp, for people reading the log.
     pub at: String,
     pub by: String,
+    /// The Claude Code session it was written from, when Claude wrote it; never the human's.
+    /// Optional, so an older livtk reads past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     #[serde(flatten)]
     pub op: Op,
 }
@@ -44,6 +48,10 @@ pub enum Op {
     DocLink { node: Uuid, data: DocData },
     #[serde(rename = "doc.unlink")]
     DocUnlink { node: Uuid, data: DocData },
+    /// Earlier events on a node, written before livtk recorded sessions, credited to the session
+    /// they came from. Changes no state.
+    #[serde(rename = "node.session")]
+    NodeSession { node: Uuid, data: SessionData },
 }
 
 impl Op {
@@ -56,6 +64,7 @@ impl Op {
             Op::EdgeRemove { .. } => "edge.remove",
             Op::DocLink { .. } => "doc.link",
             Op::DocUnlink { .. } => "doc.unlink",
+            Op::NodeSession { .. } => "node.session",
         }
     }
 
@@ -65,6 +74,8 @@ impl Op {
         let task_state = |s: State| Kind::Task.states().contains(&s);
         let project_state = |s: State| matches!(s, State::Active | State::Paused | State::Dropped);
         match self {
+            // A claim of earlier events for a session: new in 7.
+            Op::NodeSession { .. } => 7,
             // A project (the outcome above tasks), its states and its health: new in 6.
             Op::NodeCreate { data, .. } if data.kind == Kind::Project => 6,
             Op::NodeSet { data, .. } if data.state.is_some_and(project_state) => 6,
@@ -88,7 +99,8 @@ impl Op {
             | Op::NodeSet { node, .. }
             | Op::NodeNote { node, .. }
             | Op::DocLink { node, .. }
-            | Op::DocUnlink { node, .. } => (*node, None),
+            | Op::DocUnlink { node, .. }
+            | Op::NodeSession { node, .. } => (*node, None),
             Op::EdgeAdd { data } | Op::EdgeRemove { data } => (data.src, Some(data.dst)),
         }
     }
@@ -141,6 +153,13 @@ pub struct NoteData {
     pub health: Option<Health>,
 }
 
+/// A session's claim to earlier events: the session, and the events it wrote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionData {
+    pub session: String,
+    pub events: Vec<Uuid>,
+}
+
 /// A doc, by its path from the project's folder, `/` between its parts: `docs/guide/setup.md`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocData {
@@ -163,6 +182,7 @@ impl Event {
             id,
             at: timestamp_of(id),
             by: by.to_string(),
+            session: None,
             op,
         }
     }

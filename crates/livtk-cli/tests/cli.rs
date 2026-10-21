@@ -1235,3 +1235,95 @@ fn flow_gives_time_per_state_and_queue_ages_for_all_or_one_project() {
             != Some(0)
     );
 }
+
+// ---- sessions ---------------------------------------------------------------------------------
+
+#[test]
+fn claude_names_its_session_and_earlier_work_is_claimed_from_transcripts() {
+    let dir = project();
+    let d = dir.path();
+    // Earlier work, before sessions were recorded.
+    ok(d, As::Claude, &["new", "before any call"]);
+    ok(d, As::Claude, &["new", "first"]);
+    ok(d, As::Claude, &["new", "second"]);
+    // The human cannot claim to be a session.
+    assert!(
+        !livtk(d, As::Human, &["--session", "s1", "new", "x"])
+            .status
+            .success()
+    );
+    // Two sessions' transcripts: each ran livtk just before one of the earlier creates.
+    let log = json(d, &["log"]);
+    let at = |key: &str| -> jiff::Timestamp {
+        log.as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["op"] == "node.create" && e["data"]["key"] == key)
+            .unwrap()["at"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let transcripts = tempfile::tempdir().unwrap();
+    for (session, key) in [("sess-a", "LIV-2"), ("sess-b", "LIV-3")] {
+        let call = at(key) - jiff::SignedDuration::from_millis(1);
+        std::fs::write(
+            transcripts.path().join(format!("{session}.jsonl")),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "assistant", "timestamp": call.to_string(), "sessionId": session,
+                    "message": {"content": [{"type": "tool_use", "name": "Bash",
+                        "input": {"command": format!("livtk new {key}")}}]}
+                })
+            ),
+        )
+        .unwrap();
+    }
+    let out = ok(
+        d,
+        As::Claude,
+        &[
+            "sessions",
+            "claim",
+            "--default",
+            "sess-main",
+            "--transcripts",
+            transcripts.path().to_str().unwrap(),
+        ],
+    );
+    assert!(out.contains("2 livtk call(s)"), "{out}");
+    let session_of = |key: &str| -> Vec<String> {
+        json(d, &["sessions", key])
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["session"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        session_of("LIV-1"),
+        ["sess-main"],
+        "no call before it: the default"
+    );
+    assert_eq!(session_of("LIV-2"), ["sess-a"]);
+    assert_eq!(session_of("LIV-3"), ["sess-b"]);
+    // From now on, Claude's writes name the session it runs in.
+    ok(
+        d,
+        As::Claude,
+        &["--session", "sess-now", "note", "LIV-2", "on it"],
+    );
+    assert!(session_of("LIV-2").contains(&"sess-now".to_owned()));
+    let show = ok(d, As::Claude, &["show", "LIV-2"]);
+    assert!(show.contains("session  sess-now"), "{show}");
+    assert!(json(d, &["show", "LIV-2"])["sessions"].is_array());
+    let all = json(d, &["sessions"]);
+    assert!(
+        all.as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session"]["session"] == "sess-a" && s["nodes"][0] == "LIV-2")
+    );
+}

@@ -286,6 +286,57 @@ fn a_signed_command_really_signs_the_event() {
     assert!(log.contains(r#""by":"claude:refuter""#), "{log}");
 }
 
+#[test]
+fn every_claude_livtk_command_is_signed_with_its_session() {
+    let dir = project();
+    let with_session = |cmd: &str, agent: Option<&str>| {
+        let mut input = bash(cmd, agent);
+        input["session_id"] = json!("c1c6d321-b6de-4cc7-a630-2880caf82d8f");
+        input
+    };
+    // The main session's commands too, now: by their session.
+    let v = answer(
+        "pre-tool-use",
+        &with_session("livtk new \"from main\"", None),
+    )
+    .unwrap();
+    let cmd = v["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        cmd,
+        "livtk --session c1c6d321-b6de-4cc7-a630-2880caf82d8f new \"from main\""
+    );
+    // A subagent's: its session and its name.
+    let v = answer(
+        "pre-tool-use",
+        &with_session("livtk list", Some("livtk:refuter")),
+    )
+    .unwrap();
+    assert_eq!(
+        v["hookSpecificOutput"]["updatedInput"]["command"],
+        "livtk --session c1c6d321-b6de-4cc7-a630-2880caf82d8f --agent refuter list"
+    );
+    // Run as signed, the event names the session.
+    let out = Command::new("sh")
+        .args(["-c", &cmd.replacen("livtk", env!("CARGO_BIN_EXE_livtk"), 1)])
+        .current_dir(dir.path())
+        .env("CLAUDECODE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = fs::read_to_string(dir.path().join(".livtk/events.jsonl")).unwrap();
+    assert!(
+        log.contains(r#""session":"c1c6d321-b6de-4cc7-a630-2880caf82d8f""#),
+        "{log}"
+    );
+}
+
 // ---- no project commands; the stop that leaves no record ------------------------------------------
 
 #[test]

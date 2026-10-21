@@ -266,6 +266,8 @@ impl Signals {
                     ));
                 }
             }
+            // Bookkeeping about who wrote what: nothing happened to the work.
+            Op::NodeSession { .. } => {}
         }
         out
     }

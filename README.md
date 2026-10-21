@@ -176,6 +176,15 @@ More than three active at once, and `project list` says so: fewer at a time fini
 name a task's project (`[PRJ-1]`, and `"project"` in `--json` rows) once there is one. Project
 events are format 6: an older livtk skips them and asks to be updated.
 
+**Which Claude session did what.** Every change Claude makes through livtk names the Claude
+Code session it came from, besides the agent: the plugin's hook adds both to each `livtk` command
+it runs, so nothing is left to Claude to remember. Your own changes name none. `livtk show KEY`
+lists a node's sessions (which agent, how many events, when), and `livtk sessions` lists the
+sessions with the nodes each touched. Work done before livtk recorded sessions can be credited to
+the session it came from, once: `livtk sessions claim` matches each earlier event to the Claude
+Code transcript that ran its command, and gives the rest to `--default <session>` (`--dry-run`
+says what it would do). An older livtk reads past the session; a claim is format 7.
+
 **For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
 row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY
 --json` gives everything about one node: its fields with body and props, its links, its notes and

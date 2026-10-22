@@ -498,6 +498,7 @@ impl Runner {
         }
         let mut child = cmd
             .current_dir(&live.cwd)
+            .env("PATH", self.turn_path())
             .env("LIVTK_TASK", &live.key)
             .env("LIVTK_SESSION", &live.session)
             .stdin(Stdio::null())
@@ -510,6 +511,33 @@ impl Runner {
         // Reaped when it ends, while this process lives; after, the system does.
         std::thread::spawn(move || child.wait());
         Ok(())
+    }
+
+    /// The PATH a turn runs with: the livtk that started it, `claude`'s folder and the usual
+    /// install folders first, then the PATH this process has. An app started from the Finder
+    /// has a short one, without `livtk`, `cargo` or Homebrew's tools.
+    fn turn_path(&self) -> std::ffi::OsString {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        // The livtk CLI beside this process (in the app's bundle, or the CLI itself).
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            .filter(|dir| dir.join("livtk").is_file());
+        let mut dirs: Vec<PathBuf> = beside
+            .into_iter()
+            .chain(self.claude.parent().map(Path::to_path_buf))
+            .chain(
+                home.iter()
+                    .flat_map(|h| [h.join(".local/bin"), h.join(".cargo/bin")]),
+            )
+            .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+            .collect();
+        dirs.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let mut seen = std::collections::HashSet::new();
+        dirs.retain(|d| seen.insert(d.clone()));
+        std::env::join_paths(dirs).unwrap_or_default()
     }
 
     /// Stop task `key`'s run: its turn ends cleanly (the work kept), and the run ends `how`

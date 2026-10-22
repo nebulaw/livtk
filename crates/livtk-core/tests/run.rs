@@ -27,6 +27,8 @@ case "$what" in
   done) echo '{"type":"result","subtype":"success","is_error":false,"result":"Built, and in review.","permission_denials":[]}' ;;
   slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
         while :; do sleep 0.05; done ;;
+  path) printf '%s' "$PATH" > .stub-path
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","permission_denials":[]}' ;;
   deaf) trap '' INT
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
@@ -486,4 +488,39 @@ fn a_stopped_build_is_not_continued_once_its_task_waits() {
         .unwrap_err()
         .to_string();
     assert!(refused.contains(&format!("waits for {first}")), "{refused}");
+}
+
+/// A turn runs with the tools it needs on its PATH, whatever PATH started it: claude's folder
+/// and the usual install folders first.
+#[test]
+fn a_turn_finds_its_tools_on_its_path() {
+    let (_dir, mut ws, runner, key) = setup(&["path"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    let file = root(&ws).join(".stub-path");
+    let start = Instant::now();
+    while !file.exists() {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "the turn never ran"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let path = std::fs::read_to_string(file).unwrap();
+    let dirs: Vec<&str> = path.split(':').collect();
+    let stub_dir = root(&ws);
+    assert!(
+        dirs.contains(&stub_dir.to_str().unwrap()),
+        "claude's folder: {path}"
+    );
+    for usual in [
+        "/.cargo/bin",
+        "/.local/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ] {
+        assert!(dirs.iter().any(|d| d.ends_with(usual)), "{usual}: {path}");
+    }
 }

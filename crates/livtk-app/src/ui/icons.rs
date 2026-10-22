@@ -101,7 +101,12 @@ icons! {
     Notes => "message-circle-dots-2",
     Edit => "scribble",
     Standing => "bookmark-alt",
-    Blocked => "brick",
+    /// Waiting for unfinished work: a blocked row, and a build that cannot start yet.
+    Blocked => "block",
+    /// A run: started, stopped, continued where it left off.
+    Start => "play",
+    Stop => "stop",
+    Continue => "fast-forward",
     Claude => "sparkles-alt",
     You => "user",
     ZoomOut => "minus",

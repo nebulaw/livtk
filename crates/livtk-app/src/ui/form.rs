@@ -5,6 +5,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
+use super::icons::{Icon, icon};
 use super::theme::*;
 
 /// Choices side by side in one tray; each is a `choice`.
@@ -83,6 +84,15 @@ pub(super) fn chip(id: &str, label: &'static str, on: bool) -> Stateful<Div> {
 
 /// A button; `main` is the one the form is for, in the accent.
 pub(super) fn button(id: &'static str, label: &str, main: bool) -> Stateful<Div> {
+    labelled(id, label, main, None)
+}
+
+/// A button whose label `glyph` leads, as a run's Start and Stop.
+pub(super) fn icon_button(id: &'static str, glyph: Icon, label: &str, main: bool) -> Stateful<Div> {
+    labelled(id, label, main, Some(glyph))
+}
+
+fn labelled(id: &'static str, label: &str, main: bool, glyph: Option<Icon>) -> Stateful<Div> {
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -102,6 +112,10 @@ pub(super) fn button(id: &'static str, label: &str, main: bool) -> Stateful<Div>
                 .border_color(color(BORDER_STRONG))
                 .text_color(color(TEXT_2))
                 .hover(|h| h.bg(color(HOVER)))
+        })
+        .when_some(glyph, |d, g| {
+            d.gap_1p5()
+                .child(icon(g, 14., if main { TEXT } else { TEXT_3 }))
         })
         .child(label.to_owned())
 }

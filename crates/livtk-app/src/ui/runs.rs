@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use livtk_core::run::Runner;
 
-use super::form::button;
+use super::form::{button, icon_button};
 use super::*;
 use crate::model::runs::{self, RunRow};
 
@@ -44,6 +44,16 @@ impl Choice {
             Choice::Keep => "Keep them working",
             Choice::Leave => "Leave them stopped",
             Choice::Continue => "Continue them",
+        }
+    }
+
+    /// The icon its button leads with, if any: Stop them all and Continue them do as a
+    /// task's Stop and Start do.
+    const fn icon(self) -> Option<Icon> {
+        match self {
+            Choice::StopAll => Some(Icon::Stop),
+            Choice::Continue => Some(Icon::Continue),
+            _ => None,
         }
     }
 
@@ -238,7 +248,11 @@ impl LivtkApp {
         let choices = asking.choices();
         for (i, &choice) in choices.iter().enumerate() {
             let main = i + 1 == choices.len();
-            buttons = buttons.child(button(choice.selector(), choice.label(), main).on_click(
+            let b = match choice.icon() {
+                Some(g) => icon_button(choice.selector(), g, choice.label(), main),
+                None => button(choice.selector(), choice.label(), main),
+            };
+            buttons = buttons.child(b.on_click(
                 cx.listener(move |this, _, window, cx| this.answer_runs(choice, window, cx)),
             ));
         }
@@ -310,6 +324,16 @@ pub(super) enum Ask {
     Deny,
 }
 
+impl Ask {
+    /// The icon its button leads with.
+    const fn icon(self) -> Icon {
+        match self {
+            Ask::Start | Ask::Allow => Icon::Start,
+            Ask::Stop | Ask::Deny => Icon::Stop,
+        }
+    }
+}
+
 impl LivtkApp {
     /// The task's agent, picked from every agent there is; none, the Default: livtk's own for
     /// the stage.
@@ -374,6 +398,8 @@ impl LivtkApp {
         let going = d.run.as_ref().filter(|r| r.ended().is_none());
         let stage = livtk_core::run::Stage::for_state(n.kind, n.state);
         let starting = self.asked.get(&n.key) == Some(&Ask::Start);
+        // Waiting for unfinished work: the status says so with the blocked mark.
+        let mut waiting = false;
         let (status, ask): (String, Option<(Ask, String)>) = match going {
             _ if starting => ("Starting…".into(), None),
             Some(r) if self.model.writing_on(&n.key) => (
@@ -391,6 +417,7 @@ impl LivtkApp {
                     if let Some(waits) =
                         livtk_core::run::waits_for(s, n.blocked, &d.links.depends_on) =>
                 {
+                    waiting = true;
                     (upper_first(&waits), None)
                 }
                 (Some(s), last) => (
@@ -414,6 +441,9 @@ impl LivtkApp {
             .flex()
             .items_center()
             .gap_2()
+            .when(waiting, |r| {
+                r.child(icon(Icon::Blocked, 14., TEXT_3).debug_selector(|| "run-waits".into()))
+            })
             .child(
                 div()
                     .debug_selector(|| "detail-run-status".into())
@@ -429,7 +459,7 @@ impl LivtkApp {
             };
             let key = n.key.clone();
             row = row.child(
-                button(sel, &label, ask == Ask::Start)
+                icon_button(sel, ask.icon(), &label, ask == Ask::Start)
                     .flex_none()
                     .on_click(cx.listener(move |this, _, _, cx| this.ask_run(&key, ask, cx))),
             );

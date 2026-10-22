@@ -5003,4 +5003,8 @@ fn a_blocked_task_offers_no_start(cx: &mut TestAppContext) {
     until_runs(&app, cx, |m| m.runs.claude);
     assert!(cx.debug_bounds("run-start").is_none(), "no Start");
     assert!(cx.debug_bounds("detail-run-status").is_some(), "but why");
+    assert!(
+        cx.debug_bounds("run-waits").is_some(),
+        "with the blocked mark"
+    );
 }

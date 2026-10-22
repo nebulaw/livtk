@@ -877,15 +877,14 @@ impl LivtkApp {
             .bg(color(SURFACE))
             .border_1()
             .border_color(color(if focused { ACCENT } else { BORDER }))
-            .when(!focused, |d| d.hover(|h| h.border_color(color(BORDER_STRONG))))
-            .child(
-                div()
-                    .flex_none()
-                    .h(line)
-                    .flex()
-                    .items_center()
-                    .child(icon(Icon::Notes, 14., if focused { TEXT_3 } else { TEXT_4 })),
-            )
+            .when(!focused, |d| {
+                d.hover(|h| h.border_color(color(BORDER_STRONG)))
+            })
+            .child(div().flex_none().h(line).flex().items_center().child(icon(
+                Icon::Notes,
+                14.,
+                if focused { TEXT_3 } else { TEXT_4 },
+            )))
             .child(
                 div()
                     .flex_1()
@@ -895,7 +894,10 @@ impl LivtkApp {
                     .gap_1()
                     .child(indented(
                         div().child(
-                            Textarea::new(&self.note).appearance(false).xsmall().text_sm(),
+                            Textarea::new(&self.note)
+                                .appearance(false)
+                                .xsmall()
+                                .text_sm(),
                         ),
                         &self.note,
                     ))

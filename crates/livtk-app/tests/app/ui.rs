@@ -157,8 +157,14 @@ fn the_send_button_adds_the_note_as_enter_does(cx: &mut TestAppContext) {
     cx.simulate_input("   ");
     cx.run_until_parked();
     click_on(cx, "note-send");
-    assert_eq!(history().len(), before, "nothing, or only spaces, sends nothing");
-    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), "   ", "and keeps the draft"));
+    assert_eq!(
+        history().len(),
+        before,
+        "nothing, or only spaces, sends nothing"
+    );
+    app.read_with(cx, |a, cx| {
+        assert_eq!(a.note_text(cx), "   ", "and keeps the draft")
+    });
 
     cx.simulate_input("sent by click");
     cx.run_until_parked();
@@ -171,7 +177,9 @@ fn the_send_button_adds_the_note_as_enter_does(cx: &mut TestAppContext) {
         "{last:?}"
     );
     assert_eq!(last.by, "human");
-    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), "", "the field empties"));
+    app.read_with(cx, |a, cx| {
+        assert_eq!(a.note_text(cx), "", "the field empties")
+    });
 }
 
 fn open_app<'a>(

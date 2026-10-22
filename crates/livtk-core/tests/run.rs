@@ -435,3 +435,55 @@ fn a_blocked_task_is_not_built_until_what_it_waits_for_is_finished() {
         .start(&mut ws, &key, None, None, &[], &Actor::Human)
         .expect("free to build");
 }
+
+/// A stopped build whose task has since come to wait for unfinished work is not continued
+/// either: every way a build starts asks the same.
+#[test]
+fn a_stopped_build_is_not_continued_once_its_task_waits() {
+    let (_dir, mut ws, runner, key) = setup(&["silent"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    until(&mut ws, &runner, &key, "the turn's end", |r| {
+        r.ended().is_some()
+    });
+    // Ended failed (a silent turn); stopped is what continue takes: stop a fresh one instead.
+    let e = ws
+        .execute(
+            Command::Create {
+                kind: Kind::Task,
+                title: "lay the floor".into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    let first = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+    std::fs::write(ws.root().join(".stub-turns"), "slow\n").unwrap();
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    turn_args(&root(&ws), 2);
+    std::thread::sleep(Duration::from_millis(200));
+    runner
+        .stop(&mut ws, &key, Ending::Stopped, &Actor::Human)
+        .unwrap();
+    until(&mut ws, &runner, &key, "the stop", |r| r.ended().is_some());
+    ws.execute(
+        Command::Link {
+            src: key.clone(),
+            rel: livtk_core::Rel::DependsOn,
+            dst: first.clone(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let refused = runner
+        .resume_stopped(&mut ws, &key, &Actor::Human)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains(&format!("waits for {first}")), "{refused}");
+}

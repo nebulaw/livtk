@@ -134,6 +134,18 @@ impl std::str::FromStr for Stage {
     }
 }
 
+/// Refused, saying why, when task `n` may not start `stage` now: every way a run starts (a new
+/// one, or a stopped one continued) asks here.
+fn free_to_run(ws: &Workspace, n: &crate::Node, stage: Stage) -> Result<()> {
+    match waits_for(stage, n.blocked, &ws.links(&n.key)?.depends_on) {
+        Some(waits) => Err(Error::Refused(format!(
+            "{} {waits}: it can be built once that is done",
+            n.key
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// What keeps a task from running `stage`, said as "waits for KEY, KEY": a build waits for the
 /// tasks it depends on that are neither done nor canceled (`blocked`, as the store tells it).
 /// Planning and reviewing never wait.
@@ -387,12 +399,7 @@ impl Runner {
                     n.key, n.state
                 ))
             })?;
-        if let Some(waits) = waits_for(stage, n.blocked, &ws.links(&n.key)?.depends_on) {
-            return Err(Error::Refused(format!(
-                "{} {waits}: it can be built once that is done",
-                n.key
-            )));
-        }
+        free_to_run(ws, &n, stage)?;
         let agent = agent
             .or_else(|| {
                 n.props
@@ -606,6 +613,7 @@ impl Runner {
         {
             return Err(Error::Refused(format!("{} has a run going", n.key)));
         }
+        free_to_run(ws, &n, run.stage)?;
         let livtk = ws.dir().to_path_buf();
         let mut live = live(&livtk, &run.session).unwrap_or_else(|| gone(&run, ws.root()));
         live.stopping = None;

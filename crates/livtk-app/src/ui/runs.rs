@@ -68,6 +68,9 @@ impl Asking {
     }
 }
 
+/// What no agent picked is called: livtk's own for the stage runs.
+const DEFAULT_AGENT: &str = "Default";
+
 fn runner() -> Option<Runner> {
     crate::agents::claude().map(|claude| Runner { claude })
 }
@@ -300,7 +303,8 @@ pub(super) enum Ask {
 }
 
 impl LivtkApp {
-    /// The task's agent, picked from every agent there is; none, livtk's own for the stage.
+    /// The task's agent, picked from every agent there is; none, the Default: livtk's own for
+    /// the stage.
     pub(super) fn agent_button(&self, d: &Detail, cx: &mut Context<Self>) -> Div {
         let n = &d.node;
         let current = n
@@ -322,11 +326,7 @@ impl LivtkApp {
             .when(open, |b| b.bg(color(SELECTED)))
             .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
             .child(icon(Icon::Agents, 14., TEXT_3))
-            .child(
-                current
-                    .clone()
-                    .unwrap_or_else(|| "livtk's own for the stage".to_owned()),
-            )
+            .child(current.clone().unwrap_or_else(|| DEFAULT_AGENT.to_owned()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -341,9 +341,7 @@ impl LivtkApp {
             let choices = std::iter::once(None)
                 .chain(self.model.agents.files.iter().map(|f| Some(f.run_name())));
             for choice in choices {
-                let label = choice
-                    .clone()
-                    .unwrap_or_else(|| "livtk's own for the stage".to_owned());
+                let label = choice.clone().unwrap_or_else(|| DEFAULT_AGENT.to_owned());
                 let row_id = format!("set-agent-{}", choice.as_deref().unwrap_or("default"));
                 let on = choice == current;
                 panel = panel.child(

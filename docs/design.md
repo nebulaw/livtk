@@ -73,8 +73,9 @@ with Read, Open (in the terminal) and Stop.
 - **Read-only.** livtk never writes Claude Code's files.
 
 **A task's run, from its panel.** A task's properties have an **Agent** (any agent there is;
-none, livtk's own for the stage) and a **Run** row: Start (to plan, build or review, as its
-state is ready for), "Starting…" at once, then where the run stands, with Stop while it goes.
+**Default**, livtk's own for the stage). Its run sits in the panel's title bar, right after its
+key: Start (to plan, build or review, as its state is ready for), "Starting…" at once, then
+where the run stands, with Stop while it goes.
 Its notes are the conversation. The note a run waits on is marked **Needs you**, with Allow /
 Deny when it asks to run a command; a question is answered with a note in the box below, which
 the run reads next. A task Claude is writing on says **Writing…** in its row, and one that

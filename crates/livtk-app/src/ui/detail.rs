@@ -705,9 +705,6 @@ impl LivtkApp {
         ));
         if n.kind == Kind::Task {
             props = props.child(prop_row("Agent", self.agent_button(d, cx)));
-            if let Some(run) = self.run_row(d, cx) {
-                props = props.child(prop_row("Run", run));
-            }
         }
         if !d.sessions.is_empty() {
             self.load_transcripts(cx);
@@ -769,6 +766,8 @@ impl LivtkApp {
                     .border_b_1()
                     .border_color(color(BORDER))
                     .child(div().text_color(color(TEXT_3)).child(n.key.clone()))
+                    // Its run, right after its key: where it stands, and Start or Stop.
+                    .children(self.run_row(d, cx))
                     .child(div().flex_1())
                     .child(self.detail_mode_button(cx))
                     .child(
@@ -1028,16 +1027,29 @@ pub(super) fn flow_section(f: &livtk_core::Flow) -> Option<Div> {
 }
 
 pub(super) fn prop_row(label: &str, value: Div) -> Div {
+    // Aligned to the top: a value of several lines keeps its name beside its first line; one
+    // line sits level with its name.
     div()
         .flex()
-        .items_center()
-        .min_h(px(26.))
+        .items_start()
         .child(
             div()
                 .w(px(96.))
+                .h(px(PROP_LINE))
                 .flex_none()
+                .flex()
+                .items_center()
                 .text_color(color(TEXT_4))
                 .child(label.to_owned()),
         )
-        .child(value.text_color(color(TEXT_2)))
+        .child(
+            div()
+                .min_h(px(PROP_LINE))
+                .flex()
+                .items_center()
+                .child(value.text_color(color(TEXT_2))),
+        )
 }
+
+/// A property's first line: its name's height, and a one-line value's.
+const PROP_LINE: f32 = 26.;

@@ -4920,6 +4920,12 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
     settle(cx);
     // Given to an agent from the panel, once the runs are known (claude is there).
     until_runs(&app, cx, |m| m.runs.claude);
+    // The run sits in the panel's title bar, above the properties.
+    let (run, agent) = (
+        cx.debug_bounds("detail-run").expect("the run"),
+        cx.debug_bounds("detail-agent").expect("the agent"),
+    );
+    assert!(run.top() < agent.top(), "in the title bar");
     click_on(cx, "detail-agent");
     redraw(cx);
     click_on(cx, "set-agent-livtk:implementer");

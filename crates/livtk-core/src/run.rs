@@ -424,13 +424,12 @@ impl Runner {
             })
             .flatten();
         let agent = agent.or(own).or_else(|| suggest(stage, files));
-        let cwd = workplace(ws, &n.key, stage)?;
         let live = Live {
             session: Uuid::now_v7().to_string(),
             key: n.key.clone(),
             agent: agent.clone(),
             stage,
-            cwd,
+            cwd: ws.root().to_path_buf(),
             allowed: stage.allowed(),
             read: 0,
             pid: None,
@@ -450,6 +449,16 @@ impl Runner {
             .rev()
             .find(|r| r.session == live.session)
             .ok_or_else(|| Error::Refused("the run's start was not recorded".into()))?;
+        // Where it works, made now that its start is on record: one that cannot be made ends
+        // the run, saying why, so it neither waits nor holds a build's place.
+        match workplace(ws, &n.key, stage) {
+            Ok(cwd) => live.cwd = cwd,
+            Err(e) => {
+                let why = format!("Its worktree could not be made: {e}");
+                end(ws, &run, &mut live, Ending::Failed, &why, &claude())?;
+                return Err(e);
+            }
+        }
         self.turn_or_fail(ws, &run, &mut live, &prompt, false)?;
         Ok(live)
     }
@@ -1131,19 +1140,40 @@ fn merge_done(ws: &mut Workspace) -> Result<bool> {
             continue;
         }
         let path_s = e.path().to_string_lossy().into_owned();
-        let text = match git(&root, &["merge", "--ff-only", &b]) {
-            Ok(_) => {
-                let _ = git(&root, &["worktree", "remove", &path_s]);
-                let _ = git(&root, &["branch", "-d", &b]);
-                let _ = fs::remove_file(&tried);
-                format!("Merged {b} into the checkout's branch (fast-forward).")
-            }
-            Err(why) => {
-                fs::write(&tried, &head)?;
-                format!(
-                    "Could not merge {b} (fast-forward only): {why}. Its worktree is kept at \
-                     {path_s}; bring it in by hand, and livtk tries again when it moves."
-                )
+        // Said once for each head the branch reaches, however it went.
+        fs::write(&tried, &head)?;
+        let kept = format!(
+            "Its worktree is kept at {path_s}; bring it in by hand, and livtk tries again when \
+             the branch moves."
+        );
+        let left = git(&e.path(), &["status", "--porcelain"]).unwrap_or_default();
+        let text = if !left.is_empty() {
+            let files: Vec<&str> = left
+                .lines()
+                .take(5)
+                .map(|l| l.get(3..).unwrap_or(l))
+                .collect();
+            format!(
+                "Not merged: the build left work uncommitted in {b}'s worktree ({}). {kept}",
+                files.join(", ")
+            )
+        } else {
+            match git(&root, &["merge", "--ff-only", &b]) {
+                Err(why) => format!("Could not merge {b} (fast-forward only): {why}. {kept}"),
+                Ok(_) => {
+                    let gone = git(&root, &["worktree", "remove", &path_s])
+                        .and_then(|_| git(&root, &["branch", "-d", &b]));
+                    match gone {
+                        Ok(_) => {
+                            let _ = fs::remove_file(&tried);
+                            format!("Merged {b} into the checkout's branch (fast-forward).")
+                        }
+                        Err(why) => format!(
+                            "Merged {b} into the checkout's branch (fast-forward), but its \
+                             worktree or branch could not be removed: {why}."
+                        ),
+                    }
+                }
             }
         };
         ws.execute(

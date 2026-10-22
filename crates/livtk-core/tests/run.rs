@@ -33,6 +33,8 @@ case "$what" in
         echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","permission_denials":[]}' ;;
   commit) pwd > built.txt && git add built.txt && git commit -qm "build it"
           echo '{"type":"result","subtype":"success","is_error":false,"result":"Built.","permission_denials":[]}' ;;
+  dirty) pwd > left.txt
+         echo '{"type":"result","subtype":"success","is_error":false,"result":"Left it.","permission_denials":[]}' ;;
   deaf) trap '' INT
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
@@ -762,4 +764,90 @@ fn a_review_starts_on_its_own() {
         Some("livtk:refuter"),
         "as the reviewer, not the builder"
     );
+}
+
+/// A build that left work uncommitted is not called merged: said once, its worktree kept.
+#[test]
+fn a_build_with_uncommitted_work_is_not_merged() {
+    let (_dir, mut ws, runner, keys) = git_setup(&["dirty"], 0);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    let k = &keys[0];
+    runner
+        .start(&mut ws, k, None, None, &[], &Actor::Human)
+        .unwrap();
+    until(&mut ws, &runner, k, "the build", |r| {
+        r.ended().is_some() || r.needs_you()
+    });
+    for to in [State::Doing, State::Review] {
+        ws.execute(
+            Command::Move {
+                node: k.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    ws.execute(
+        Command::Move {
+            node: k.clone(),
+            to: State::Done,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    for _ in 0..3 {
+        run::settle(&mut ws, &runner).unwrap();
+    }
+    let notes: Vec<String> = ws
+        .history(Some(k))
+        .unwrap()
+        .iter()
+        .filter_map(|e| match &e.op {
+            livtk_core::event::Op::NodeNote { data, .. } => Some(data.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        notes.iter().filter(|t| t.starts_with("Not merged")).count(),
+        1,
+        "{notes:#?}"
+    );
+    assert!(!notes.iter().any(|t| t.starts_with("Merged")), "{notes:#?}");
+    assert!(
+        notes.iter().any(|t| t.contains("left.txt")),
+        "names what it left"
+    );
+    assert!(run::worktree(ws.dir(), k).is_some(), "kept");
+}
+
+/// A build whose worktree cannot be made ends its run, saying why: it neither waits its turn
+/// for ever nor holds a build's place.
+#[test]
+fn a_worktree_that_cannot_be_made_ends_the_run() {
+    let (_dir, mut ws, runner, keys) = git_setup(&["silent"], 0);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    let k = &keys[0];
+    runner
+        .start(&mut ws, k, None, None, &[], &Actor::Human)
+        .unwrap();
+    until(&mut ws, &runner, k, "the first build", |r| {
+        r.ended().is_some()
+    });
+    // Its worktree removed by hand, still registered with git: it cannot be made again.
+    let tree = run::worktree(ws.dir(), k).unwrap();
+    std::fs::remove_dir_all(&tree).unwrap();
+    let err = runner
+        .start(&mut ws, k, None, None, &[], &Actor::Human)
+        .unwrap_err()
+        .to_string();
+    let last = ws.runs().unwrap().pop().unwrap();
+    assert_eq!(last.ended(), Some(Ending::Failed), "{err}");
+    assert!(
+        last.text.starts_with("Its worktree could not be made"),
+        "{}",
+        last.text
+    );
+    auto(&mut ws, true, 1);
+    assert!(run::queue(&ws).unwrap().is_empty(), "not waiting its turn");
 }

@@ -206,6 +206,18 @@ pub enum Ending {
     Quit,
 }
 
+impl Ending {
+    /// As people say it.
+    pub const fn said(self) -> &'static str {
+        match self {
+            Ending::Done => "done",
+            Ending::Failed => "failed",
+            Ending::Stopped => "stopped",
+            Ending::Quit => "stopped by a quit",
+        }
+    }
+}
+
 /// A session's claim to earlier events: the session, and the events it wrote.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionData {

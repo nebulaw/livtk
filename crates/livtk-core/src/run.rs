@@ -144,10 +144,7 @@ pub fn suggest(stage: Stage, files: &[AgentFile]) -> Option<String> {
                 .iter()
                 .find(|f| f.place == place && f.agent.stage == Some(stage))
         })
-        .map(|f| match f.place {
-            Place::Livtk => format!("livtk:{}", f.agent.name),
-            _ => f.agent.name.clone(),
-        });
+        .map(AgentFile::run_name);
     by_file.or_else(|| stage.default_agent().map(str::to_owned))
 }
 

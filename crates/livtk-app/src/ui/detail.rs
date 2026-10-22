@@ -703,6 +703,12 @@ impl LivtkApp {
             "Created",
             div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
         ));
+        if n.kind == Kind::Task {
+            props = props.child(prop_row("Agent", self.agent_button(d, cx)));
+            if let Some(run) = self.run_row(d, cx) {
+                props = props.child(prop_row("Run", run));
+            }
+        }
         if !d.sessions.is_empty() {
             self.load_transcripts(cx);
             props = props.child(prop_row("Sessions", self.task_sessions(&d.sessions, cx)));
@@ -739,7 +745,9 @@ impl LivtkApp {
         let body = self.detail_body(n, cx);
         let mut timeline = div().flex().flex_col().gap_3();
         for e in d.history.iter().rev() {
-            timeline = timeline.child(event_line(e, &n.key));
+            timeline = timeline
+                .child(event_line(e, &n.key))
+                .children(self.needs_you(d, e, cx));
         }
         div()
             .id(SharedString::from(format!("detail-{}", n.key)))

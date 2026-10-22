@@ -76,6 +76,17 @@ pub struct AgentFile {
     pub agent: Agent,
 }
 
+impl AgentFile {
+    /// Its name as a run takes it (`--agent`): livtk's own by the plugin's name
+    /// (`livtk:implementer`), the others by their own.
+    pub fn run_name(&self) -> String {
+        match self.place {
+            Place::Livtk => format!("livtk:{}", self.agent.name),
+            _ => self.agent.name.clone(),
+        }
+    }
+}
+
 /// The folder of a place's agents, for the project at `root`, Claude Code's folder being `home`.
 pub fn folder(place: Place, root: &Path, home: &Path) -> Option<PathBuf> {
     match place {

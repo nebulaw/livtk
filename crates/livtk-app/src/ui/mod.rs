@@ -782,6 +782,8 @@ pub struct LivtkApp {
     asking: Option<runs::Asking>,
     /// It has quit, or is on its way.
     quitting: bool,
+    /// Tasks whose run was asked to start, until it has.
+    starting: std::collections::HashSet<String>,
     /// The runs the last quit stopped were offered back this launch.
     runs_offered: bool,
     /// Settings, open.
@@ -1012,6 +1014,7 @@ impl LivtkApp {
             about: false,
             asking: None,
             quitting: false,
+            starting: std::collections::HashSet::new(),
             runs_offered: false,
             settings,
             agent_form,
@@ -1173,6 +1176,7 @@ impl LivtkApp {
             Menu::Projects => "projects",
             Menu::GridWhat => "grid-what",
             Menu::DetailMode => "detail-mode",
+            Menu::DetailAgent => "detail-agent",
         })
     }
 
@@ -3206,6 +3210,8 @@ enum Menu {
     GridWhat,
     /// How a node's detail opens: side peek, center peek, full page.
     DetailMode,
+    /// The open task's agent, in the detail panel.
+    DetailAgent,
 }
 
 /// The selection's highlight gliding between two neighbouring lines, named as `spot` names them.

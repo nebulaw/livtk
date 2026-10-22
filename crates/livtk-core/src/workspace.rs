@@ -1191,14 +1191,18 @@ impl Workspace {
         out.extend(self.store.list(Kind::Lesson, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Decision, &[State::Proposed])?);
         out.extend(self.store.list(Kind::Project, &[State::Proposed])?);
-        // A run of Claude waiting for your answer.
+        // A run of Claude waiting for your answer: first, as it holds work up.
+        let mut waiting: Vec<Summary> = Vec::new();
         for run in self.runs()?.into_iter().filter(crate::run::Run::needs_you) {
-            if !out.iter().any(|o| o.id == run.node)
+            if !waiting.iter().any(|w| w.id == run.node)
                 && let Some(s) = self.store.summary(run.node)?
             {
-                out.push(s);
+                waiting.push(s);
             }
         }
+        out.retain(|o| !waiting.iter().any(|w| w.id == o.id));
+        waiting.append(&mut out);
+        let mut out = waiting;
         // What waits on a gate the config adds; a gate from any state guards a move but makes
         // nothing wait.
         for g in &self.gates {

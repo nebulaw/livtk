@@ -31,6 +31,21 @@ case "$what" in
 esac
 "#;
 
+/// Ends every run's turn in the project when dropped: a failing test leaves no stub looping.
+struct KillRuns(PathBuf);
+
+impl Drop for KillRuns {
+    fn drop(&mut self) {
+        for live in run::lives(&self.0) {
+            if let Some(pid) = live.pid {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &format!("-{pid}")])
+                    .status();
+            }
+        }
+    }
+}
+
 fn setup(turns: &[&str]) -> (tempfile::TempDir, Workspace, Runner, String) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -253,6 +268,7 @@ fn a_build_asks_is_allowed_asks_again_is_answered_and_ends_done() {
 #[test]
 fn a_stop_ends_the_turn_keeps_the_work_and_it_can_continue() {
     let (_dir, mut ws, runner, key) = setup(&["slow", "done"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
     runner
         .start(&mut ws, &key, None, None, &[], &Actor::Human)
         .unwrap();

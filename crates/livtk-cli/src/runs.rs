@@ -116,12 +116,7 @@ fn standing(r: &Run, writing: &[String]) -> String {
         (RunMark::Asks { allow }, None) if allow.is_empty() => "needs you: a question".into(),
         (RunMark::Asks { allow }, None) => format!("needs you: to run {}", allow.join(", ")),
         (RunMark::Asks { .. }, Some(_)) => "answered".into(),
-        (RunMark::Ended { how }, _) => match how {
-            Ending::Done => "done".into(),
-            Ending::Failed => "failed".into(),
-            Ending::Stopped => "stopped".into(),
-            Ending::Quit => "stopped by a quit".into(),
-        },
+        (RunMark::Ended { how }, _) => how.said().into(),
         _ => "starting".into(),
     }
 }

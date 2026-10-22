@@ -84,9 +84,9 @@ impl LivtkApp {
             .background_executor()
             .spawn(async move { runs::survey(&roots, runner().as_ref()) });
         cx.spawn(async move |this, cx| {
-            let (going, quit) = found.await;
+            let found = found.await;
             let _ = this.update(cx, |app, cx| {
-                app.model.runs_surveyed(going, quit, Instant::now());
+                app.model.runs_surveyed(found, Instant::now());
                 // Once a launch: what the last quit stopped, offered back.
                 if !app.runs_offered && !app.model.runs.quit.is_empty() && app.asking.is_none() {
                     app.runs_offered = true;
@@ -101,8 +101,7 @@ impl LivtkApp {
     /// Quit (or restart to update), asking first while runs are writing: as they are now,
     /// not as the last survey found them.
     pub(super) fn ask_quit(&mut self, then: Then, cx: &mut Context<Self>) {
-        let (going, _) = runs::survey(&self.model.project_roots(), None);
-        self.model.runs.going = going;
+        self.model.runs.going = runs::survey(&self.model.project_roots(), None).going;
         if self.model.runs.going.is_empty() {
             self.quit_for(then, cx);
             return;
@@ -268,5 +267,246 @@ fn count(n: usize, one: &str, many: &str) -> String {
         format!("One agent {one}")
     } else {
         format!("{n} agents {many}")
+    }
+}
+
+impl LivtkApp {
+    /// A task row's mark of its run: waiting for you, or Claude writing on it.
+    pub(super) fn run_tag(&self, key: &str) -> Option<Div> {
+        if self.model.run_needs_you(key) {
+            Some(
+                icon_tag(Icon::Inbox, "Needs you", ACCENT)
+                    .debug_selector(|| "row-needs-you".into()),
+            )
+        } else if self.model.writing_on(key) {
+            Some(icon_tag(Icon::Agents, "Writing…", TEXT_3).debug_selector(|| "row-writing".into()))
+        } else {
+            None
+        }
+    }
+}
+
+// ---- a task's run, in its panel -------------------------------------------------------------
+
+/// What a run is asked to do from a task's panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    Start,
+    Stop,
+    Allow,
+    Deny,
+}
+
+impl LivtkApp {
+    /// The task's agent, picked from every agent there is; none, livtk's own for the stage.
+    pub(super) fn agent_button(&self, d: &Detail, cx: &mut Context<Self>) -> Div {
+        let n = &d.node;
+        let current = n
+            .props
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let open = self.menu == Some(Menu::DetailAgent);
+        let button = div()
+            .id("detail-agent")
+            .debug_selector(|| "detail-agent".into())
+            .h(px(22.))
+            .px(px(4.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
+            .child(icon(Icon::Agents, 14., TEXT_3))
+            .child(
+                current
+                    .clone()
+                    .unwrap_or_else(|| "livtk's own for the stage".to_owned()),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.model.load_agents();
+                    this.toggle_menu(Menu::DetailAgent, window, cx);
+                }),
+            );
+        let id = n.id;
+        div().relative().flex_none().child(button).when(open, |d| {
+            let mut panel = menu_panel(240.).debug_selector(|| "set-agent-menu".into());
+            let choices = std::iter::once(None)
+                .chain(self.model.agents.files.iter().map(|f| Some(f.run_name())));
+            for choice in choices {
+                let label = choice
+                    .clone()
+                    .unwrap_or_else(|| "livtk's own for the stage".to_owned());
+                let row_id = format!("set-agent-{}", choice.as_deref().unwrap_or("default"));
+                let on = choice == current;
+                panel = panel.child(
+                    option_row(SharedString::from(row_id.clone()))
+                        .debug_selector(move || row_id.clone())
+                        .child(div().flex_1().truncate().child(label))
+                        .child(check(on))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.model.set_agent(id, choice.clone());
+                            this.close_menu(window, cx);
+                        })),
+                );
+            }
+            d.child(self.popover(Menu::DetailAgent, false, 26., panel, cx))
+        })
+    }
+
+    /// The task's run: where it stands, and what can be done to it now (Start when the task's
+    /// state is ready for a stage and nothing runs; Stop while one runs).
+    pub(super) fn run_row(&self, d: &Detail, cx: &mut Context<Self>) -> Option<Div> {
+        let n = &d.node;
+        let going = d.run.as_ref().filter(|r| r.ended().is_none());
+        let stage = livtk_core::run::Stage::for_state(n.kind, n.state);
+        let starting = self.starting.contains(&n.key);
+        let (status, ask): (String, Option<(Ask, String)>) = match going {
+            _ if starting => ("Starting…".into(), None),
+            Some(r) if self.model.writing_on(&n.key) => (
+                format!("Writing… ({})", r.stage.as_str()),
+                Some((Ask::Stop, "Stop".into())),
+            ),
+            Some(r) if r.needs_you() => (
+                "Needs you: see its last note".into(),
+                Some((Ask::Stop, "Stop".into())),
+            ),
+            Some(r) => (
+                format!("Going on ({})", r.stage.as_str()),
+                Some((Ask::Stop, "Stop".into())),
+            ),
+            None => match (stage, &d.run) {
+                (Some(s), last) => (
+                    last.as_ref()
+                        .and_then(livtk_core::run::Run::ended)
+                        .map_or_else(String::new, |how| format!("Last run {}", how.said())),
+                    Some((Ask::Start, format!("Start to {}", s.as_str()))),
+                ),
+                (None, Some(last)) => (
+                    last.ended()
+                        .map_or_else(String::new, |how| format!("Last run {}", how.said())),
+                    None,
+                ),
+                (None, None) => return None,
+            },
+        };
+        let mut row = div()
+            .debug_selector(|| "detail-run".into())
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .debug_selector(|| "detail-run-status".into())
+                    .text_color(color(TEXT_2))
+                    .child(status),
+            );
+        if let Some((ask, label)) = ask {
+            let sel: &'static str = match ask {
+                Ask::Start => "run-start",
+                _ => "run-stop",
+            };
+            let key = n.key.clone();
+            row = row.child(
+                button(sel, &label, ask == Ask::Start)
+                    .on_click(cx.listener(move |this, _, _, cx| this.ask_run(&key, ask, cx))),
+            );
+        }
+        Some(row)
+    }
+
+    /// Under the note a run is waiting on: that it needs you, and for a permission, Allow and
+    /// Deny; a question is answered with a note below.
+    pub(super) fn needs_you(
+        &self,
+        d: &Detail,
+        e: &livtk_core::Event,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let r = d
+            .run
+            .as_ref()
+            .filter(|r| r.needs_you() && r.last_id == e.id)?;
+        let mut block = div()
+            .debug_selector(|| "needs-you".into())
+            .ml(px(20.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icon_tag(Icon::Inbox, "Needs you", ACCENT));
+        if r.asks_to_run().is_empty() {
+            block = block.child(
+                div()
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .child("Answer with a note below."),
+            );
+        } else {
+            for (ask, sel, label, main) in [
+                (Ask::Deny, "run-deny", "Deny", false),
+                (Ask::Allow, "run-allow", "Allow", true),
+            ] {
+                let key = d.node.key.clone();
+                block = block.child(
+                    button(sel, label, main)
+                        .on_click(cx.listener(move |this, _, _, cx| this.ask_run(&key, ask, cx))),
+                );
+            }
+        }
+        Some(block)
+    }
+
+    /// Do `ask` to task `key`'s run, off the window's thread: the run's own process starts or
+    /// stops there, and its notes come back through the log.
+    fn ask_run(&mut self, key: &str, ask: Ask, cx: &mut Context<Self>) {
+        let (Some(root), Some(r)) = (self.model.project_root(), runner()) else {
+            self.model
+                .warn("The claude command is not installed, or not where livtk looks.");
+            cx.notify();
+            return;
+        };
+        if ask == Ask::Start {
+            self.starting.insert(key.to_owned());
+        }
+        let files = crate::agents::agents(&root);
+        let job_key = key.to_owned();
+        let done = cx.background_executor().spawn(async move {
+            let mut ws = livtk_core::Workspace::open(&root).map_err(|e| e.to_string())?;
+            let human = livtk_core::Actor::Human;
+            match ask {
+                Ask::Start => r
+                    .start(&mut ws, &job_key, None, None, &files, &human)
+                    .map(|_| ()),
+                Ask::Stop => r.stop(
+                    &mut ws,
+                    &job_key,
+                    livtk_core::event::Ending::Stopped,
+                    &human,
+                ),
+                Ask::Allow => r.answer(&mut ws, &job_key, true, &human),
+                Ask::Deny => r.answer(&mut ws, &job_key, false, &human),
+            }
+            .map_err(|e| e.to_string())
+        });
+        let key = key.to_owned();
+        cx.spawn(async move |this, cx| {
+            let done = done.await;
+            let _ = this.update(cx, |app, cx| {
+                app.starting.remove(&key);
+                if let Err(e) = done {
+                    app.model.warn(format!("{key}: {e}"));
+                }
+                app.model.survey_runs_soon();
+                app.model.tick();
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 }

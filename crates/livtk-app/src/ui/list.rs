@@ -373,6 +373,7 @@ impl LivtkApp {
                     .child(r.title.clone()),
             )
             .children(self.model.parent_key(r).map(|k| self.parent_chip(k, cx)))
+            .children(self.run_tag(&r.key))
             .children(self.sub_task_count(id))
             .children(self.project_parts(r));
         if blocked {

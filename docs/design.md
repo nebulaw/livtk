@@ -72,6 +72,14 @@ with Read, Open (in the terminal) and Stop.
   that task's first event in it, in Sessions.
 - **Read-only.** livtk never writes Claude Code's files.
 
+**A task's run, from its panel.** A task's properties have an **Agent** (any agent there is;
+none, livtk's own for the stage) and a **Run** row: Start (to plan, build or review, as its
+state is ready for), "Starting…" at once, then where the run stands, with Stop while it goes.
+Its notes are the conversation. The note a run waits on is marked **Needs you**, with Allow /
+Deny when it asks to run a command; a question is answered with a note in the box below, which
+the run reads next. A task Claude is writing on says **Writing…** in its row, and one that
+waits says **Needs you** there and comes first in the Inbox.
+
 **Quitting with agents working.** Quitting (Cmd-Q, or Quit livtk) while a run is writing asks
 first, naming each: **Keep them working** (they go on without the app, which finds them again
 when it starts), **Stop them all** (each turn ends cleanly, the work kept, a note on each task

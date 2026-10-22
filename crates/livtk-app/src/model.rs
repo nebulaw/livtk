@@ -495,6 +495,8 @@ pub struct Detail {
     pub docs: Vec<(String, Option<String>)>,
     /// The Claude Code sessions that worked on it, each by actor.
     pub sessions: Vec<livtk_core::SessionUse>,
+    /// Its latest run of Claude, if it has had one.
+    pub run: Option<livtk_core::run::Run>,
     /// A project's progress, its updates newest first, and its flow.
     pub project: Option<(
         livtk_core::Progress,
@@ -1688,6 +1690,17 @@ impl Model {
         );
     }
 
+    /// Give task `id` to agent `name` (as a run takes it), or take it back (`None`).
+    pub fn set_agent(&mut self, id: Uuid, name: Option<String>) {
+        self.run(
+            Command::SetAgent {
+                node: id.to_string(),
+                agent: name.unwrap_or_default(),
+            },
+            None,
+        );
+    }
+
     /// Link node `id` and `other` by `choice`: from `id` when outgoing, else to it. A refusal
     /// (a cycle, say) becomes the notice.
     pub fn link(&mut self, id: Uuid, choice: LinkChoice, other: Uuid) {
@@ -1732,6 +1745,8 @@ impl Model {
                 },
                 None,
             );
+            // A run waiting on the task reads it next: at once, not a beat later.
+            self.survey_runs_soon();
         }
     }
 
@@ -2717,6 +2732,12 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         node,
         project,
         sessions: ws.sessions_of(&key).unwrap_or_default(),
+        run: ws
+            .runs()
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .find(|r| r.node == id),
     })
 }
 

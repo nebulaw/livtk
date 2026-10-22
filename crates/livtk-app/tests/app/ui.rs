@@ -4138,6 +4138,7 @@ case "$what" in
   slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
+  deny) echo '{"type":"result","subtype":"success","is_error":false,"result":"I need the tests.","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}}]}' ;;
   *) echo '{"type":"result","subtype":"success","is_error":false,"result":"Which colour?","permission_denials":[]}' ;;
 esac
 "#;
@@ -4653,6 +4654,22 @@ fn a_named_node_opens_on_a_click(cx: &mut TestAppContext) {
     assert!(ws.links("LIV-1").unwrap().blocks.is_empty());
 }
 
+/// Ends every run's turn in the project at `.0` when dropped: a failing test never leaves a stub
+/// turn looping behind it.
+struct KillRuns(std::path::PathBuf);
+
+impl Drop for KillRuns {
+    fn drop(&mut self) {
+        for live in livtk_core::run::lives(&self.0.join(".livtk")) {
+            if let Some(pid) = live.pid {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &format!("-{pid}")])
+                    .status();
+            }
+        }
+    }
+}
+
 /// A run of the stub on LIV-1 (acknowledged first), its turn writing until interrupted.
 fn a_run_writing(root: &std::path::Path) -> livtk_core::run::Runner {
     let runner = livtk_core::run::Runner {
@@ -4711,6 +4728,7 @@ fn until_runs(
 fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
     let runner = a_run_writing(&root);
     let (app, cx) = open_app(cx, &root);
     // Asked at once, before any survey: the quit looks for itself.
@@ -4760,6 +4778,7 @@ fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
 fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
     let runner = a_run_writing(&root);
     let mut ws = Workspace::open(&root).unwrap();
     runner
@@ -4803,6 +4822,7 @@ fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
 fn keep_them_working_quits_and_leaves_the_agent_working(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
     let runner = a_run_writing(&root);
     let (app, cx) = open_app(cx, &root);
     cx.simulate_keystrokes("secondary-q");
@@ -4829,6 +4849,7 @@ fn keep_them_working_quits_and_leaves_the_agent_working(cx: &mut TestAppContext)
 fn quit_with_no_window_active_asks_and_does_not_quit(cx: &mut TestAppContext) {
     let dir = project();
     let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
     let runner = a_run_writing(&root);
     let quit_anyway = std::rc::Rc::new(std::cell::Cell::new(false));
     // The app-wide quit, registered first as the app does.
@@ -4859,4 +4880,82 @@ fn quit_with_no_window_active_asks_and_does_not_quit(cx: &mut TestAppContext) {
             &Actor::Human,
         )
         .unwrap();
+}
+
+/// A task's run from its panel, without a terminal: given to an agent, started (Starting… at
+/// once), asking to run a command (marked Needs you, in its row too), allowed, asking a
+/// question, answered with a note, then writing, as its row shows, and stopped.
+#[gpui_kit::test]
+fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
+    claude_stub();
+    std::fs::write(root.join(".stub-turns"), "deny\nask\nslow\n").unwrap();
+    Workspace::open(&root)
+        .unwrap()
+        .execute(
+            Command::Move {
+                node: "LIV-1".into(),
+                to: State::Acked,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, &root);
+    resize(cx, 1400., 900.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    // Given to an agent from the panel.
+    click_on(cx, "detail-agent");
+    click_on(cx, "set-agent-livtk:implementer");
+    let agent = Workspace::open(&root).unwrap().node("LIV-1").unwrap().props["agent"].clone();
+    assert_eq!(agent, "livtk:implementer");
+    // Started: something shows at once.
+    click_on(cx, "run-start");
+    let args = |n: usize| {
+        let start = Instant::now();
+        loop {
+            let a = std::fs::read_to_string(root.join(".stub-args")).unwrap_or_default();
+            if let Some(l) = a.lines().nth(n - 1) {
+                return l.to_owned();
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    assert!(args(1).contains("--agent livtk:implementer"), "{}", args(1));
+    // It asks to run a command: Needs you, on the note and in its row; Allow lets it.
+    until_runs(&app, cx, |m| m.run_needs_you("LIV-1"));
+    settle(cx);
+    assert!(cx.debug_bounds("needs-you").is_some(), "on the note");
+    assert!(cx.debug_bounds("row-needs-you").is_some(), "and in its row");
+    click_on(cx, "run-allow");
+    assert!(args(2).contains("Bash(cargo test)"), "{}", args(2));
+    // Then a question, answered with a note: the run reads it next.
+    until_runs(&app, cx, |m| m.run_needs_you("LIV-1"));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("run-allow").is_none(),
+        "a question has no Allow"
+    );
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    cx.simulate_input("Blue.");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    until_runs(&app, cx, |m| m.writing_on("LIV-1"));
+    assert!(
+        args(3).starts_with("-p Blue.") && args(3).contains("--resume"),
+        "{}",
+        args(3)
+    );
+    assert!(
+        cx.debug_bounds("row-writing").is_some(),
+        "writing, in its row"
+    );
+    // Stopped from the panel: the mark clears with the turn.
+    click_on(cx, "run-stop");
+    until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
+    assert!(cx.debug_bounds("row-writing").is_none());
 }

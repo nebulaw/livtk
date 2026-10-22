@@ -213,7 +213,9 @@ in Agents), and starts the review of each task that comes into review. Off by de
 `worktree` (on by default, in a git repository), each build works in its own worktree under
 `.livtk/runs/worktrees/`, on its own branch `livtk/<key>`, and its review reads it there; when
 you mark the task done, the branch comes into your checkout's branch, fast-forward only, and
-the worktree goes. One that cannot fast-forward is left for you, with a note saying why.
+the worktree goes. One that cannot fast-forward is left for you, with a note saying why. The app
+is where you follow all of this; for a setup with no app (an agent in a terminal only),
+`scripts/watch` prints the human's moves and notes as they happen.
 
 **For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
 row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY

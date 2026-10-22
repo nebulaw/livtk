@@ -17,13 +17,31 @@ description: Carry acknowledged livtk tasks through to done, one at a time. Use 
 5. **Keep the record.** Write what you tried, what failed and what you decided as notes:
    `livtk note KEY "..."`. Notes never change the plan. Something that should hold beyond this
    task becomes a lesson, decision or finding (the `livtk:remember` skill).
-6. **Review.** `livtk move KEY review`, then use the `livtk:review` skill.
+6. **Review.** Commit the work first (with `.livtk/`): nothing goes to review uncommitted. Then
+   `livtk move KEY review`, and use the `livtk:review` skill.
    If the task is part of an active project, livtk says so as it moves: write the project's
    update, how it stands, what moved and what is next:
    `livtk project update PRJ-1 --health on_track "parsing done; next: write the tasks"`
    (`at_risk` or `off_track` when it is, with why).
-7. **Finish.** If the review upholds every point: `livtk done KEY`, and commit the work together
-   with `.livtk/`. If it refutes one: `livtk move KEY doing`, note what failed, fix it, and review
-   again.
+7. **Finish.** If the review upholds every point: `livtk done KEY`, and commit `.livtk/` with the
+   record of it. If it refutes one: `livtk move KEY doing`, note what failed, fix it, commit, and
+   review again.
 
 One task at a time. Then `livtk next`.
+
+## When livtk started you (a run)
+
+The human may start you from the livtk app, or the project may start you on its own. You can
+tell: `LIVTK_TASK` names your task. No one watches your terminal, so:
+
+- **What you say last in a turn becomes a note on the task.** Make it what the human needs to
+  read: what you did, what is left, what you need.
+- **Need the human?** End your turn with your question. Their note is what you read next.
+- **Need a command you may not be allowed to run?** Run it. If it is refused, livtk shows the
+  human exactly what was refused, with Allow and Deny, and you go on once they answer. Never ask
+  for permission in words: a note cannot grant it.
+- **In a worktree** (your folder is under `.livtk/runs/worktrees/`): you are on your own branch.
+  Commit everything there; livtk merges the branch when the human marks the task done, and leaves
+  anything uncommitted behind.
+- **Before review:** run the project's checks and commit, then `livtk move KEY review`. A build
+  is not finished until it is committed.

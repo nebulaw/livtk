@@ -4080,7 +4080,7 @@ fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
     }
     // Saved, and brought back.
     let saved = app.read_with(cx, |a, _| a.model().saved());
-    assert!(saved.hide_state_flow);
+    assert!(saved.prefs.hide_state_flow);
     // A file written before the setting existed: no such key.
     let file = tempfile::tempdir().unwrap();
     let path = file.path().join("app.toml");
@@ -4092,7 +4092,7 @@ fn the_state_graph_is_a_setting(cx: &mut TestAppContext) {
     });
     settle(cx);
     assert!(
-        !app.read_with(cx, |a, _| a.model().hide_state_flow),
+        !app.read_with(cx, |a, _| a.model().prefs.hide_state_flow),
         "a file without it shows the graph"
     );
     assert!(cx.debug_bounds("state-flow").is_some(), "shown again");
@@ -5121,4 +5121,45 @@ fn builds_start_on_their_own_and_the_rest_wait_their_turn(cx: &mut TestAppContex
             .is_some(),
         "listed in Agents"
     );
+}
+
+/// Key hints (the keys beside buttons, rows and menus) are a setting of yours: shown unless
+/// turned off in Appearance, kept through a restart; what they label works either way.
+#[gpui_kit::test]
+fn key_hints_are_a_setting(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    assert!(
+        !app.read_with(cx, |a, _| a.model().prefs.hide_key_hints),
+        "shown by default"
+    );
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    click_on(cx, "settings-key-hints-on");
+    redraw(cx);
+    assert!(
+        app.read_with(cx, |a, _| a.model().prefs.hide_key_hints),
+        "turned off"
+    );
+    // Kept through a restart.
+    let saved = app.read_with(cx, |a, _| a.model().saved());
+    let mut back = Model::open(&[dir.path().to_path_buf()]);
+    back.restore(&saved);
+    assert!(back.prefs.hide_key_hints);
+    // Written by an older app, each choice at the top under its own name: read the same.
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("app.toml");
+    std::fs::write(&path, "hide_state_flow = true\nhide_key_hints = true\n").unwrap();
+    let old = livtk_app::model::Saved::load(&path);
+    assert!(old.prefs.hide_state_flow && old.prefs.hide_key_hints);
+    // And written back the same way.
+    let text = toml::to_string(&old).unwrap();
+    assert!(text.contains("hide_state_flow = true"), "{text}");
+    // The rows still open what they open.
+    click_on(cx, "settings-back");
+    redraw(cx);
+    click_on(cx, "shortcuts");
+    assert!(app.read_with(cx, |a, _| a.help_open()), "the shortcuts");
 }

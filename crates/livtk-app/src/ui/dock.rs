@@ -349,7 +349,7 @@ impl LivtkApp {
                                 .ml_auto()
                                 .flex()
                                 .items_center()
-                                .when(!on, |k| k.child(kbd("B")))
+                                .when(!on, |k| k.children(hint("B", cx)))
                                 .child(check(on)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {

@@ -9,7 +9,8 @@ use gpui_kit::*;
 use super::form::{button, choice, field, segmented, toggle};
 use super::icons::{Icon, icon, icon_hover};
 use super::theme::*;
-use super::{Close, LivtkApp, NAV_ROW, NAV_TEXT, kbd, nav_item, section_label};
+use super::{Close, LivtkApp, NAV_ROW, NAV_TEXT, hint, nav_item, section_label};
+use crate::model::prefs::{Place, SWITCHES};
 use crate::model::{DetailMode, ReadingSize};
 use livtk_core::{HOOK_NAMES, Kind, PROMPT_SECTIONS, SESSION_SECTIONS};
 
@@ -188,7 +189,7 @@ impl LivtkApp {
                         TEXT,
                     ))
                     .child(div().flex_1().child("Back to app"))
-                    .child(kbd("Esc"))
+                    .children(hint("Esc", cx))
                     .on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx))),
             )
             .child(div().h(px(14.)))
@@ -342,6 +343,7 @@ impl LivtkApp {
                 "Follows macOS: with Reduce Motion on, nothing slides or fades.",
                 div(),
             ))
+            .children(self.switches(Place::Appearance, cx))
     }
 
     fn detail_section(&self, cx: &mut Context<Self>) -> Div {
@@ -362,23 +364,13 @@ impl LivtkApp {
                 })),
             );
         }
-        let shown = !self.model.hide_state_flow;
         group()
             .child(row(
                 "Open a task as",
                 "Beside the list, in a card over the window, or in the list's place.",
                 modes,
             ))
-            .child(row(
-                "State graph",
-                "The states it moves through, above its body.",
-                toggle("settings-state-graph".into(), shown).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.model.hide_state_flow = shown;
-                        cx.notify();
-                    },
-                )),
-            ))
+            .children(self.switches(Place::Detail, cx))
     }
 
     fn updates(&self, cx: &mut Context<Self>) -> Div {
@@ -443,6 +435,27 @@ impl LivtkApp {
                         )),
                     ),
             ))
+    }
+
+    /// The switches `SWITCHES` puts in `place`, each turning one of your choices.
+    fn switches(&self, place: Place, cx: &mut Context<Self>) -> Vec<Div> {
+        SWITCHES
+            .iter()
+            .filter(|w| w.place == place)
+            .map(|w| {
+                let flip = w.flip;
+                row(
+                    w.label,
+                    w.what,
+                    toggle(format!("settings-{}", w.id), (w.shown)(&self.model.prefs)).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            flip(&mut this.model.prefs);
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
+            .collect()
     }
 
     /// How the project's runs of Claude go: on their own or not, how many builds at once,

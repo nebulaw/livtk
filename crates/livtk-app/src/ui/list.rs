@@ -392,7 +392,7 @@ impl LivtkApp {
             };
             row = row.child(tag(label, ACCENT));
             if selected {
-                row = row.child(kbd("A"));
+                row = row.children(hint("A", cx));
             }
         }
         row = row.child(

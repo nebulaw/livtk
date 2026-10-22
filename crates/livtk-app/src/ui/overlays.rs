@@ -260,27 +260,30 @@ impl LivtkApp {
             )
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(results)
-            .child(
-                div()
-                    .h(px(36.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(color(BORDER))
-                    .text_xs()
-                    .text_color(color(TEXT_4))
-                    .child(kbd("↑"))
-                    .child(kbd("↓"))
-                    .child("to move")
-                    .child(div().w(px(8.)))
-                    .child(kbd_icon(Icon::Enter))
-                    .child("to run")
-                    .child(div().w(px(8.)))
-                    .child(kbd("Esc"))
-                    .child("to close"),
-            )
+            // How to move, run and close: a key hint, gone with the others.
+            .when(hints_on(cx), |p| {
+                p.child(
+                    div()
+                        .h(px(36.))
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(color(BORDER))
+                        .text_xs()
+                        .text_color(color(TEXT_4))
+                        .child(kbd("↑"))
+                        .child(kbd("↓"))
+                        .child("to move")
+                        .child(div().w(px(8.)))
+                        .child(kbd_icon(Icon::Enter))
+                        .child("to run")
+                        .child(div().w(px(8.)))
+                        .child(kbd("Esc"))
+                        .child("to close"),
+                )
+            })
     }
 
     /// An action's icon in the palette, so every row has one: a move shows the state it goes
@@ -355,7 +358,7 @@ impl LivtkApp {
             PaletteItem::Action(a) => {
                 let mut keys = div().flex().items_center().gap_1();
                 for k in a.shortcut.unwrap_or_default().split_whitespace() {
-                    keys = keys.child(kbd(k));
+                    keys = keys.children(hint(k, cx));
                 }
                 row.child(self.action_icon(&a.run))
                     .child(div().truncate().child(a.label.clone()))

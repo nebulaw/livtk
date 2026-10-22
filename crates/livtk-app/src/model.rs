@@ -18,6 +18,7 @@ mod graph;
 pub mod grid;
 pub mod keys;
 mod palette;
+pub mod prefs;
 pub mod runs;
 mod saved;
 pub mod toasts;
@@ -639,8 +640,8 @@ pub struct Model {
     /// the pane it was opened from (where a full page shows it).
     pub detail_mode: DetailMode,
     pub detail_pane: Option<u64>,
-    /// Whether the detail leaves out its state graph: a personal setting, shown by default.
-    pub hide_state_flow: bool,
+    /// Your own on/off choices about what the window shows.
+    pub prefs: prefs::Prefs,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
     /// What came into an inbox from someone else since the view last took it.
@@ -875,7 +876,7 @@ impl Model {
             reading: Reading::default(),
             detail_mode: DetailMode::default(),
             detail_pane: None,
-            hide_state_flow: false,
+            prefs: prefs::Prefs::default(),
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,

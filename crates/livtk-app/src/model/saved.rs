@@ -43,8 +43,9 @@ pub struct Saved {
     pub reading_compact: bool,
     /// How a node's detail opens: "side", "center" or "full".
     pub detail_mode: Option<String>,
-    /// Whether a node's detail leaves out its state graph; absent, it shows.
-    pub hide_state_flow: bool,
+    /// Your on/off choices, each under its own name at the top, as before they were grouped.
+    #[serde(flatten)]
+    pub prefs: super::prefs::Prefs,
     /// The panes: how they are laid out, what each shows, and the one focused.
     pub panes: Option<SavedPanes>,
     pub window: SavedWindow,
@@ -268,7 +269,7 @@ impl Model {
             reading_size: Some(self.reading.size.name().to_lowercase()),
             reading_compact: self.reading.compact,
             detail_mode: Some(self.detail_mode.key().to_owned()),
-            hide_state_flow: self.hide_state_flow,
+            prefs: self.prefs,
             window: SavedWindow::default(),
         }
     }
@@ -338,7 +339,7 @@ impl Model {
             .into_iter()
             .find(|m| Some(m.key()) == saved.detail_mode.as_deref())
             .unwrap_or_default();
-        self.hide_state_flow = saved.hide_state_flow;
+        self.prefs = saved.prefs;
         self.pane_mut().layout = match saved.layout.as_deref() {
             Some("board") => Layout::Board,
             _ => Layout::List,

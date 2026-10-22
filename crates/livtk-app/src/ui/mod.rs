@@ -2686,6 +2686,7 @@ impl LivtkApp {
 
 impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        cx.set_global(KeyHints(!self.model.prefs.hide_key_hints));
         if Self::window_width(window) >= RAIL_BELOW {
             self.sidebar_peek = false;
         }
@@ -3544,7 +3545,9 @@ fn view_option(
         .debug_selector(move || id.into())
         .child(checkbox(on))
         .child(label)
-        .when_some(key, |row, k| row.child(div().ml_auto().child(kbd(k))))
+        .when_some(key.and_then(|k| hint(k, cx)), |row, k| {
+            row.child(div().ml_auto().child(k))
+        })
         .on_click(cx.listener(move |this, _, _, cx| {
             act(&mut this.model);
             cx.notify();
@@ -3613,6 +3616,22 @@ fn icon_tag(glyph: Icon, label: &str, c: u32) -> Div {
         .text_color(color(TEXT_2))
         .child(icon(glyph, 12., c))
         .child(label.to_owned())
+}
+
+/// Whether key hints show, as the human set it: read by `hint` wherever a key is offered.
+struct KeyHints(bool);
+
+impl Global for KeyHints {}
+
+/// The key `k` offered beside a button, row or menu item, unless the human turned key hints
+/// off. The shortcuts list shows its keys with `kbd` either way.
+fn hint(k: &str, cx: &App) -> Option<Div> {
+    hints_on(cx).then(|| kbd(k))
+}
+
+/// Whether key hints show.
+fn hints_on(cx: &App) -> bool {
+    cx.try_global::<KeyHints>().is_none_or(|h| h.0)
 }
 
 fn kbd(k: &str) -> Div {

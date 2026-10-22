@@ -812,7 +812,7 @@ impl LivtkApp {
                     .flex_col()
                     .gap_5()
                     .child(title)
-                    .when(has_flow(n.kind) && !self.model.hide_state_flow, |d| {
+                    .when(has_flow(n.kind) && !self.model.prefs.hide_state_flow, |d| {
                         d.child(flow)
                     })
                     .child(props)

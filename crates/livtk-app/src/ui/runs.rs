@@ -80,12 +80,14 @@ impl LivtkApp {
         }
         self.model.runs.surveying = true;
         let roots = self.model.project_roots();
-        let found = cx
-            .background_executor()
-            .spawn(async move { runs::survey(&roots, runner().as_ref()) });
+        let found = cx.background_executor().spawn(async move {
+            let runner = runner();
+            (runs::survey(&roots, runner.as_ref()), runner.is_some())
+        });
         cx.spawn(async move |this, cx| {
-            let found = found.await;
+            let (found, claude) = found.await;
             let _ = this.update(cx, |app, cx| {
+                app.model.runs.claude = claude;
                 app.model.runs_surveyed(found, Instant::now());
                 // Once a launch: what the last quit stopped, offered back.
                 if !app.runs_offered && !app.model.runs.quit.is_empty() && app.asking.is_none() {
@@ -290,7 +292,7 @@ impl LivtkApp {
 
 /// What a run is asked to do from a task's panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Ask {
+pub(super) enum Ask {
     Start,
     Stop,
     Allow,
@@ -365,7 +367,7 @@ impl LivtkApp {
         let n = &d.node;
         let going = d.run.as_ref().filter(|r| r.ended().is_none());
         let stage = livtk_core::run::Stage::for_state(n.kind, n.state);
-        let starting = self.starting.contains(&n.key);
+        let starting = self.asked.get(&n.key) == Some(&Ask::Start);
         let (status, ask): (String, Option<(Ask, String)>) = match going {
             _ if starting => ("Starting…".into(), None),
             Some(r) if self.model.writing_on(&n.key) => (
@@ -381,6 +383,10 @@ impl LivtkApp {
                 Some((Ask::Stop, "Stop".into())),
             ),
             None => match (stage, &d.run) {
+                (Some(_), _) if !self.model.runs.claude => (
+                    "Claude Code is not installed, or not where livtk looks".into(),
+                    None,
+                ),
                 (Some(s), last) => (
                     last.as_ref()
                         .and_then(livtk_core::run::Run::ended)
@@ -464,15 +470,17 @@ impl LivtkApp {
     /// Do `ask` to task `key`'s run, off the window's thread: the run's own process starts or
     /// stops there, and its notes come back through the log.
     fn ask_run(&mut self, key: &str, ask: Ask, cx: &mut Context<Self>) {
+        // One thing asked of a task's run at a time: a second click waits for the first.
+        if self.asked.contains_key(key) {
+            return;
+        }
         let (Some(root), Some(r)) = (self.model.project_root(), runner()) else {
             self.model
                 .warn("The claude command is not installed, or not where livtk looks.");
             cx.notify();
             return;
         };
-        if ask == Ask::Start {
-            self.starting.insert(key.to_owned());
-        }
+        self.asked.insert(key.to_owned(), ask);
         let files = crate::agents::agents(&root);
         let job_key = key.to_owned();
         let done = cx.background_executor().spawn(async move {
@@ -497,7 +505,7 @@ impl LivtkApp {
         cx.spawn(async move |this, cx| {
             let done = done.await;
             let _ = this.update(cx, |app, cx| {
-                app.starting.remove(&key);
+                app.asked.remove(&key);
                 if let Err(e) = done {
                     app.model.warn(format!("{key}: {e}"));
                 }

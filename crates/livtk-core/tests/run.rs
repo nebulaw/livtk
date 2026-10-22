@@ -27,6 +27,9 @@ case "$what" in
   done) echo '{"type":"result","subtype":"success","is_error":false,"result":"Built, and in review.","permission_denials":[]}' ;;
   slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
         while :; do sleep 0.05; done ;;
+  deaf) trap '' INT
+        echo '{"type":"system","subtype":"init"}'
+        while :; do sleep 0.05; done ;;
   *) exit 1 ;;
 esac
 "#;
@@ -107,7 +110,7 @@ fn until(
             return r;
         }
         assert!(
-            start.elapsed() < Duration::from_secs(10),
+            start.elapsed() < Duration::from_secs(20),
             "waited for {what}: {r:?}"
         );
         std::thread::sleep(Duration::from_millis(30));
@@ -359,4 +362,24 @@ fn stages_follow_the_task_and_agents_suggest_themselves() {
         run::simple_commands("cargo test && echo 'a && b' | wc -l; ls"),
         ["cargo test", "echo 'a && b'", "wc -l", "ls"]
     );
+}
+
+/// A turn deaf to the interrupt (as one started from a shell script's background inherits it)
+/// is told, then made, to stop: the run ends stopped all the same.
+#[test]
+fn a_stop_not_heard_is_made() {
+    let (_dir, mut ws, runner, key) = setup(&["deaf"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    turn_args(&root(&ws), 1);
+    std::thread::sleep(Duration::from_millis(200));
+    runner
+        .stop(&mut ws, &key, Ending::Stopped, &Actor::Human)
+        .unwrap();
+    let r = until(&mut ws, &runner, &key, "the forced stop", |r| {
+        r.ended().is_some()
+    });
+    assert_eq!(r.ended(), Some(Ending::Stopped));
 }

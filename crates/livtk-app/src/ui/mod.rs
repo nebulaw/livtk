@@ -782,8 +782,8 @@ pub struct LivtkApp {
     asking: Option<runs::Asking>,
     /// It has quit, or is on its way.
     quitting: bool,
-    /// Tasks whose run was asked to start, until it has.
-    starting: std::collections::HashSet<String>,
+    /// What each task's run was asked from its panel, until it is done: one thing at a time.
+    asked: HashMap<String, runs::Ask>,
     /// The runs the last quit stopped were offered back this launch.
     runs_offered: bool,
     /// Settings, open.
@@ -1014,7 +1014,7 @@ impl LivtkApp {
             about: false,
             asking: None,
             quitting: false,
-            starting: std::collections::HashSet::new(),
+            asked: HashMap::new(),
             runs_offered: false,
             settings,
             agent_form,

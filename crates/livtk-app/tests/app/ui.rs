@@ -4711,7 +4711,7 @@ fn until_runs(
     let start = Instant::now();
     while !app.read_with(cx, |a, _| done(a.model())) {
         assert!(
-            start.elapsed() < Duration::from_secs(10),
+            start.elapsed() < Duration::from_secs(30),
             "the runs never got there"
         );
         cx.executor().advance_clock(Duration::from_secs(3));
@@ -4767,7 +4767,19 @@ fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
             assert_eq!(how, livtk_core::event::Ending::Quit);
             break;
         }
-        assert!(start.elapsed() < Duration::from_secs(10), "never stopped");
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "never stopped: {:?} {:?}",
+            livtk_core::run::lives(ws.dir()),
+            std::fs::read_dir(ws.dir().join("runs"))
+                .unwrap()
+                .flatten()
+                .map(|e| (
+                    e.file_name(),
+                    std::fs::read_to_string(e.path()).unwrap_or_default()
+                ))
+                .collect::<Vec<_>>()
+        );
         std::thread::sleep(Duration::from_millis(30));
     }
 }
@@ -4792,7 +4804,7 @@ fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
     let start = Instant::now();
     while ws.runs().unwrap()[0].ended().is_none() {
         livtk_core::run::settle(&mut ws, &runner).unwrap();
-        assert!(start.elapsed() < Duration::from_secs(10), "never stopped");
+        assert!(start.elapsed() < Duration::from_secs(20), "never stopped");
         std::thread::sleep(Duration::from_millis(30));
     }
     let (app, cx) = open_app(cx, &root);
@@ -4906,8 +4918,10 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
     resize(cx, 1400., 900.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
     settle(cx);
-    // Given to an agent from the panel.
+    // Given to an agent from the panel, once the runs are known (claude is there).
+    until_runs(&app, cx, |m| m.runs.claude);
     click_on(cx, "detail-agent");
+    redraw(cx);
     click_on(cx, "set-agent-livtk:implementer");
     let agent = Workspace::open(&root).unwrap().node("LIV-1").unwrap().props["agent"].clone();
     assert_eq!(agent, "livtk:implementer");

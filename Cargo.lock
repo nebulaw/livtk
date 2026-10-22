@@ -4054,6 +4054,7 @@ dependencies = [
  "model2vec-rs",
  "proptest",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

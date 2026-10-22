@@ -35,6 +35,8 @@ pub struct Runs {
     pub writing: Vec<RunRow>,
     /// The tasks whose run waits for you.
     pub needs_you: Vec<RunRow>,
+    /// The `claude` command was found at the last survey: runs can start.
+    pub claude: bool,
     /// Stopped when the app last quit, not continued or left since.
     pub quit: Vec<RunRow>,
     /// A survey is going.

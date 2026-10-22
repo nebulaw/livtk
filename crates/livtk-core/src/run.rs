@@ -217,6 +217,10 @@ pub struct Live {
     pub pid: Option<u32>,
     /// It was stopped, and how to say so when its turn ends.
     pub stopping: Option<Ending>,
+    /// When it was asked to stop, in seconds since the epoch: a turn still going a while
+    /// after is made to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_asked: Option<u64>,
 }
 
 /// The folder runs keep their state in, inside the project's `.livtk/`: never committed.
@@ -272,14 +276,42 @@ pub fn live(livtk: &Path, session: &str) -> Option<Live> {
 }
 
 /// Whether process `pid` is still the turn of session `session`: alive, and running it (a pid
-/// can be reused, and a finished child left unreaped no longer names its session).
+/// can be reused, and a finished child left unreaped no longer names its session). When that
+/// cannot be told (`ps` would not run, on a machine out of processes, say), it is taken to run:
+/// a turn is never given up on, nor its stop skipped, for want of an answer.
 pub fn running(pid: u32, session: &str) -> bool {
-    Process::new("ps")
+    // No such process, for certain: gone.
+    if !alive(pid) {
+        return false;
+    }
+    match Process::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(session))
+    {
+        Ok(o) if o.status.success() || !o.stdout.is_empty() => {
+            String::from_utf8_lossy(&o.stdout).contains(session)
+        }
+        // `ps` exits 1 for a pid it does not find.
+        Ok(o) if o.status.code() == Some(1) => false,
+        _ => true,
+    }
+}
+
+/// Whether a process `pid` exists: the system asked directly, no process started for it.
+fn alive(pid: u32) -> bool {
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return false;
+    };
+    match rustix::process::test_kill_process(pid) {
+        Ok(()) => true,
+        // There, but not ours to signal: alive all the same.
+        Err(e) => e == rustix::io::Errno::PERM,
+    }
 }
 
 /// Whether the run's turn is going: it is writing.
@@ -314,6 +346,7 @@ impl Runner {
         by: &Actor,
     ) -> Result<Live> {
         settle(ws, self)?;
+        let _hold = Hold::wait(ws.dir())?;
         let n = ws.node(key)?;
         if let Some(r) = ws
             .runs()?
@@ -353,6 +386,7 @@ impl Runner {
             read: 0,
             pid: None,
             stopping: None,
+            stop_asked: None,
         };
         let text = match &agent {
             Some(a) => format!("Started to {} it, as {a}.", stage.as_str()),
@@ -462,9 +496,9 @@ impl Runner {
         let mut live = live(&livtk, &run.session).unwrap_or_else(|| gone(&run, ws.root()));
         if let Some(pid) = live.pid.filter(|&p| running(p, &live.session)) {
             live.stopping = Some(how);
+            live.stop_asked = Some(now_secs());
             save(&livtk, &live)?;
-            interrupt(pid);
-            return Ok(());
+            return signal(pid, rustix::process::Signal::INT);
         }
         end(ws, &run, &mut live, how, stopped_text(how), by)
     }
@@ -550,6 +584,7 @@ impl Runner {
         let livtk = ws.dir().to_path_buf();
         let mut live = live(&livtk, &run.session).unwrap_or_else(|| gone(&run, ws.root()));
         live.stopping = None;
+        live.stop_asked = None;
         note(
             ws,
             &n.key,
@@ -599,6 +634,7 @@ fn gone(run: &Run, root: &Path) -> Live {
         read: 0,
         pid: None,
         stopping: None,
+        stop_asked: None,
     }
 }
 
@@ -609,13 +645,26 @@ const fn stopped_text(how: Ending) -> &'static str {
     }
 }
 
-/// SIGINT to the turn's process group: Claude ends the turn cleanly.
-fn interrupt(pid: u32) {
-    let _ = Process::new("kill")
-        .args(["-INT", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+/// How long a turn asked to stop has to end on its own (SIGINT: Claude ends the turn cleanly)
+/// before it is told to (SIGTERM), and then made to (SIGKILL). SIGINT can be ignored: a turn
+/// started by a program run in the background of a shell script inherits it ignored.
+const STOP_TERM: u64 = 3;
+const STOP_KILL: u64 = 8;
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `sig` to the turn's process group (its own, led by `pid`), by the system call itself, so a
+/// busy machine cannot keep it from going.
+fn signal(pid: u32, sig: rustix::process::Signal) -> Result<()> {
+    let group = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| Error::Refused(format!("no process group {pid}")))?;
+    rustix::process::kill_process_group(group, sig).map_err(|e| Error::Io(e.into()))
 }
 
 /// Write a run's note on task `key`, in the run's own session.
@@ -669,6 +718,7 @@ fn end(
     note(ws, &run.key, live, RunMark::Ended { how }, text, by)?;
     live.pid = None;
     live.stopping = None;
+    live.stop_asked = None;
     save(ws.dir(), live)
 }
 
@@ -804,7 +854,19 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
         else {
             continue;
         };
-        if run.ended().is_some() || writing(&live) {
+        if run.ended().is_some() {
+            continue;
+        }
+        if writing(&live) {
+            // Asked to stop, and still going: made to, harder as it goes on.
+            if let (Some(pid), Some(asked)) = (live.pid, live.stop_asked) {
+                let waited = now_secs().saturating_sub(asked);
+                if waited >= STOP_KILL {
+                    let _ = signal(pid, rustix::process::Signal::KILL);
+                } else if waited >= STOP_TERM {
+                    let _ = signal(pid, rustix::process::Signal::TERM);
+                }
+            }
             continue;
         }
         let (turns, read) = read_turns(&stream_path(&livtk, &live.session), live.read)?;

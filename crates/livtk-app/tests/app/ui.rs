@@ -4822,3 +4822,41 @@ fn keep_them_working_quits_and_leaves_the_agent_working(cx: &mut TestAppContext)
         )
         .unwrap();
 }
+
+/// Quit heard with no window active (the window minimized, or another app in front) asks in
+/// the window too, and the app-wide quit behind it does not run.
+#[gpui_kit::test]
+fn quit_with_no_window_active_asks_and_does_not_quit(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let runner = a_run_writing(&root);
+    let quit_anyway = std::rc::Rc::new(std::cell::Cell::new(false));
+    // The app-wide quit, registered first as the app does.
+    let flag = quit_anyway.clone();
+    cx.update(|cx| {
+        cx.on_action(move |_: &livtk_app::ui::Quit, _| flag.set(true));
+    });
+    let (app, cx) = open_app(cx, &root);
+    let window = gpui_kit::VisualContext::window_handle(cx);
+    cx.update(|_, cx| livtk_app::ui::dock_actions(window, app.downgrade(), cx));
+    cx.deactivate_window();
+    // Heard by the app, outside any window, as the menu bar sends it.
+    cx.cx.update(|cx| cx.dispatch_action(&livtk_app::ui::Quit));
+    redraw(cx);
+    let quitting = app.read_with(cx, |a, _| a.quitting());
+    assert!(
+        cx.debug_bounds("quit-runs").is_some(),
+        "asked in the window (app-wide quit ran: {}, quitting: {quitting})",
+        quit_anyway.get()
+    );
+    assert!(!quit_anyway.get(), "and nothing quit behind it");
+    let mut ws = Workspace::open(&root).unwrap();
+    runner
+        .stop(
+            &mut ws,
+            "LIV-1",
+            livtk_core::event::Ending::Stopped,
+            &Actor::Human,
+        )
+        .unwrap();
+}

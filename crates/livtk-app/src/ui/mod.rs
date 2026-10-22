@@ -489,8 +489,16 @@ pub fn dock_actions(window: AnyWindowHandle, app: WeakEntity<LivtkApp>, cx: &mut
         });
     }
     on::<NewTask>(window, &app, cx, |_, app, w, cx| app.open_form(w, cx));
-    on::<Quit>(window, &app, cx, |_, app, _, cx| {
-        app.ask_quit(runs::Then::Quit, cx)
+    // Quit is answered here alone: the app-wide quit behind it must not run after the
+    // window has asked (global listeners all hear an action unless one stops it).
+    let quit_app = app.clone();
+    cx.on_action(move |_: &Quit, cx| {
+        cx.stop_propagation();
+        cx.activate(true);
+        let _ = window.update(cx, |_, window, cx| {
+            window.activate_window();
+            quit_app.update(cx, |app, cx| app.ask_quit(runs::Then::Quit, cx))
+        });
     });
     on::<GoView>(window, &app, cx, |a, app, w, cx| app.go(a.view, w, cx));
     on::<menus::SwitchProject>(window, &app, cx, |a, app, w, cx| {

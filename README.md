@@ -189,7 +189,9 @@ says what it would do). An older livtk reads past the session; a claim is format
 task, for the stage its state is ready for: planning from the backlog, building once you have
 acknowledged it, reviewing in review (`--stage` picks another, `--agent` another agent). A build
 runs as `livtk:implementer` and a review as `livtk:refuter`, unless the task was given to another
-agent with `livtk agent set KEY NAME` or an agent's file says `stage: build`. The run is
+agent with `livtk agent set KEY NAME` or an agent's file says `stage: build`. A task that waits for
+unfinished work is not built until that work is done or canceled; planning or reviewing it
+never waits. The run is
 written on the task as notes: that it started, what Claude says when a turn ends, and how it
 ended (done, failed, stopped). When it needs you, a note says so and the task waits in your
 inbox:

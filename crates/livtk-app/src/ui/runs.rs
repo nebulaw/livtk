@@ -266,6 +266,14 @@ impl LivtkApp {
     }
 }
 
+/// `text` with its first letter a capital: "Waits for LIV-2".
+fn upper_first(text: &str) -> String {
+    let mut c = text.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
 /// "One agent is", "3 agents are": `one` and `many` the verb for each.
 fn count(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
@@ -379,6 +387,12 @@ impl LivtkApp {
             ),
             None => match (stage, &d.run) {
                 (Some(_), _) if !self.model.runs.claude => ("Claude Code not found".into(), None),
+                (Some(s), _)
+                    if let Some(waits) =
+                        livtk_core::run::waits_for(s, n.blocked, &d.links.depends_on) =>
+                {
+                    (upper_first(&waits), None)
+                }
                 (Some(s), last) => (
                     last.as_ref()
                         .and_then(livtk_core::run::Run::ended)

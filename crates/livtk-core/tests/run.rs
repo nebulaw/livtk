@@ -383,3 +383,55 @@ fn a_stop_not_heard_is_made() {
     });
     assert_eq!(r.ended(), Some(Ending::Stopped));
 }
+
+/// A task that waits for unfinished work cannot be started to build, and says what it waits
+/// for; once that is finished, it can.
+#[test]
+fn a_blocked_task_is_not_built_until_what_it_waits_for_is_finished() {
+    let (_dir, mut ws, runner, key) = setup(&["done"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    let e = ws
+        .execute(
+            Command::Create {
+                kind: Kind::Task,
+                title: "lay the floor".into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    let first = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+    ws.execute(
+        Command::Link {
+            src: key.clone(),
+            rel: livtk_core::Rel::DependsOn,
+            dst: first.clone(),
+        },
+        &CLAUDE,
+    )
+    .unwrap();
+    let refused = runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains(&format!("waits for {first}")), "{refused}");
+    // Planning it would not wait.
+    assert_eq!(
+        run::waits_for(Stage::Plan, true, &[]),
+        None,
+        "only a build waits"
+    );
+    ws.execute(
+        Command::Move {
+            node: first,
+            to: State::Canceled,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .expect("free to build");
+}

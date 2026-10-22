@@ -4979,3 +4979,28 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
     until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
     assert!(cx.debug_bounds("row-writing").is_none());
 }
+
+/// A task waiting for unfinished work offers no Start in its panel, and says what it waits for.
+#[gpui_kit::test]
+fn a_blocked_task_offers_no_start(cx: &mut TestAppContext) {
+    let dir = linked_project();
+    let root = dir.path().canonicalize().unwrap();
+    claude_stub();
+    Workspace::open(&root)
+        .unwrap()
+        .execute(
+            Command::Move {
+                node: "LIV-2".into(),
+                to: State::Acked,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, &root);
+    resize(cx, 1400., 900.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
+    settle(cx);
+    until_runs(&app, cx, |m| m.runs.claude);
+    assert!(cx.debug_bounds("run-start").is_none(), "no Start");
+    assert!(cx.debug_bounds("detail-run-status").is_some(), "but why");
+}

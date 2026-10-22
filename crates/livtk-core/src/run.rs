@@ -134,6 +134,25 @@ impl std::str::FromStr for Stage {
     }
 }
 
+/// What keeps a task from running `stage`, said as "waits for KEY, KEY": a build waits for the
+/// tasks it depends on that are neither done nor canceled (`blocked`, as the store tells it).
+/// Planning and reviewing never wait.
+pub fn waits_for(stage: Stage, blocked: bool, depends_on: &[crate::Brief]) -> Option<String> {
+    if stage != Stage::Build || !blocked {
+        return None;
+    }
+    let open: Vec<&str> = depends_on
+        .iter()
+        .filter(|b| !matches!(b.state, State::Done | State::Canceled))
+        .map(|b| b.key.as_str())
+        .collect();
+    Some(if open.is_empty() {
+        "waits for unfinished work".to_owned()
+    } else {
+        format!("waits for {}", open.join(", "))
+    })
+}
+
 /// The agent suggested for `stage`: the first agent file that says it suits the stage (the
 /// project's, then yours, then livtk's), else livtk's own for the stage.
 pub fn suggest(stage: Stage, files: &[AgentFile]) -> Option<String> {
@@ -368,6 +387,12 @@ impl Runner {
                     n.key, n.state
                 ))
             })?;
+        if let Some(waits) = waits_for(stage, n.blocked, &ws.links(&n.key)?.depends_on) {
+            return Err(Error::Refused(format!(
+                "{} {waits}: it can be built once that is done",
+                n.key
+            )));
+        }
         let agent = agent
             .or_else(|| {
                 n.props

@@ -59,6 +59,8 @@ impl LivtkApp {
                 view == self.model.view() && !self.model.placeholder(),
                 count,
             )
+            // How to go there from anywhere: its keys, as the shortcuts list has them.
+            .children(view.go_keys().and_then(|k| hint(k, cx)))
             .on_click(cx.listener(move |this, _, window, cx| this.go(view, window, cx)));
             side = side.child(self.side_move(view.title(), row.into_any_element(), cx));
         }
@@ -104,8 +106,7 @@ impl LivtkApp {
                     .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
                     .child(icon_hover(Icon::Shortcuts, NAV_ICON, TEXT_4, "nav", TEXT_3))
                     .child(div().flex_1().child("Shortcuts"))
-                    .children(hint(keys::MOD, cx))
-                    .children(hint("?", cx))
+                    .children(hint(&format!("{} ?", keys::MOD), cx))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx)),
                     ),
@@ -126,8 +127,7 @@ impl LivtkApp {
                     .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
                     .child(icon_hover(Icon::Settings, NAV_ICON, TEXT_4, "nav", TEXT_3))
                     .child(div().flex_1().child("Settings"))
-                    .children(hint(keys::MOD, cx))
-                    .children(hint(",", cx))
+                    .children(hint(&format!("{} ,", keys::MOD), cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(settings::Section::Appearance, window, cx)
                     })),

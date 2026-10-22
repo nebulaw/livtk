@@ -356,17 +356,14 @@ impl LivtkApp {
             );
         match item {
             PaletteItem::Action(a) => {
-                let mut keys = div().flex().items_center().gap_1();
-                for k in a.shortcut.unwrap_or_default().split_whitespace() {
-                    keys = keys.children(hint(k, cx));
-                }
+                let keys = hint(a.shortcut.unwrap_or_default(), cx);
                 row.child(self.action_icon(&a.run))
                     .child(div().truncate().child(a.label.clone()))
                     .when_some(a.context.clone(), |r, c| {
                         r.child(div().flex_none().text_color(color(TEXT_4)).child(c))
                     })
                     .child(div().flex_1())
-                    .child(keys)
+                    .children(keys)
             }
             PaletteItem::Node(n) => row
                 .child(state_mark(n.kind, n.state))

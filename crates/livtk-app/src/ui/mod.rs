@@ -3623,10 +3623,19 @@ struct KeyHints(bool);
 
 impl Global for KeyHints {}
 
-/// The key `k` offered beside a button, row or menu item, unless the human turned key hints
-/// off. The shortcuts list shows its keys with `kbd` either way.
-fn hint(k: &str, cx: &App) -> Option<Div> {
-    hints_on(cx).then(|| kbd(k))
+/// The keys `keys` offered beside a button, row or menu item, unless the human turned key hints
+/// off: one key (`?`) or a sequence (`G T`, `⌘ ,`), each a cap. The shortcuts list shows its keys
+/// with `kbd` either way.
+fn hint(keys: &str, cx: &App) -> Option<Div> {
+    let caps: Vec<&str> = keys.split_whitespace().collect();
+    (hints_on(cx) && !caps.is_empty()).then(|| {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .children(caps.into_iter().map(kbd))
+    })
 }
 
 /// Whether key hints show.

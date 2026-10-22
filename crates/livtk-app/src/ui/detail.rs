@@ -829,18 +829,88 @@ impl LivtkApp {
                     .p_3()
                     .border_t_1()
                     .border_color(color(BORDER))
-                    .child(
-                        div()
-                            .flex()
-                            .items_start()
-                            .gap_2()
-                            .child(div().pt(px(7.)).child(icon(Icon::Notes, 14., TEXT_4)))
-                            .child(indented(
-                                div().flex_1().child(Textarea::new(&self.note).xsmall()),
-                                &self.note,
-                            )),
-                    ),
+                    .child(self.note_composer(cx)),
             )
+    }
+
+    /// The note bar's one field, as Linear's comment box: its icon, the text and a send button
+    /// in one rounded card. The send button lights once there is something to send and sends as
+    /// Enter does; while the field has the keys, a hint under the text says how.
+    fn note_composer(&self, cx: &mut Context<Self>) -> Div {
+        let focused = self.note_focused;
+        let field = self.note.read(cx);
+        let ready = !field.value().trim().is_empty();
+        // The icon sits level with the first line, however tall the field grows.
+        let line = field.line_height().unwrap_or(px(20.));
+        let note = self.note.clone();
+        let send = div()
+            .id("note-send")
+            .debug_selector(|| "note-send".into())
+            .flex_none()
+            .self_end()
+            .size(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .when(ready, |d| {
+                d.bg(color(ACCENT))
+                    .hover(|h| h.bg(color(ACCENT_HOVER)))
+                    .child(icon(Icon::Send, 14., TEXT))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.send_note(&note, window, cx);
+                    }))
+            })
+            .when(!ready, |d| d.child(icon(Icon::Send, 14., TEXT_4)))
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("Send · Enter").build(window, cx)
+            });
+        div()
+            .debug_selector(|| "note-composer".into())
+            .flex()
+            .items_start()
+            .gap_2()
+            .pl_3()
+            .pr(px(6.))
+            .py(px(6.))
+            .rounded_xl()
+            .bg(color(SURFACE))
+            .border_1()
+            .border_color(color(if focused { ACCENT } else { BORDER }))
+            .when(!focused, |d| d.hover(|h| h.border_color(color(BORDER_STRONG))))
+            .child(
+                div()
+                    .flex_none()
+                    .h(line)
+                    .flex()
+                    .items_center()
+                    .child(icon(Icon::Notes, 14., if focused { TEXT_3 } else { TEXT_4 })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(indented(
+                        div().child(
+                            Textarea::new(&self.note).appearance(false).xsmall().text_sm(),
+                        ),
+                        &self.note,
+                    ))
+                    .when(focused, |d| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "note-hint".into())
+                                .px(TEXTAREA_PX)
+                                .text_xs()
+                                .text_color(color(TEXT_4))
+                                .child("Enter to send · Shift+Enter for a new line"),
+                        )
+                    }),
+            )
+            .child(send)
     }
 
     // ---- rendering: overlays ------------------------------------------------------------------

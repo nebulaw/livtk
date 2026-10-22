@@ -693,6 +693,9 @@ pub struct LivtkApp {
     /// projects that share node ids (two clones of one repository) never share a draft.
     note_for: Option<(PathBuf, Uuid)>,
     note_drafts: HashMap<(PathBuf, Uuid), String>,
+    /// Whether the note field has the keys, as it last said: the panel is drawn without the
+    /// window to ask.
+    note_focused: bool,
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
@@ -1009,6 +1012,7 @@ impl LivtkApp {
             note,
             note_for: None,
             note_drafts: HashMap::new(),
+            note_focused: false,
             form: None,
             help: false,
             about: false,
@@ -1187,13 +1191,31 @@ impl LivtkApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The field reports Shift+Enter too, after breaking the line: only Enter adds the note.
-        if let InputEvent::PressEnter { shift: false, .. } = event {
-            let text = state.read(cx).value().to_string();
-            self.model.add_note(&text);
-            state.update(cx, |s, cx| s.set_value("", window, cx));
-            cx.notify();
+        match event {
+            // The field reports Shift+Enter too, after breaking the line: only Enter adds the note.
+            InputEvent::PressEnter { shift: false, .. } => self.send_note(state, window, cx),
+            // The composer's hint, icon and outline follow the focus; its send button, the text.
+            InputEvent::Focus | InputEvent::Blur => {
+                self.note_focused = matches!(event, InputEvent::Focus);
+                cx.notify();
+            }
+            InputEvent::Change => cx.notify(),
+            InputEvent::PressEnter { .. } => {}
         }
+    }
+
+    /// The note field's text added to the task, and the field emptied: Enter and the send button
+    /// both come here.
+    fn send_note(
+        &mut self,
+        state: &Entity<TextareaState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = state.read(cx).value().to_string();
+        self.model.add_note(&text);
+        state.update(cx, |s, cx| s.set_value("", window, cx));
+        cx.notify();
     }
 
     fn on_filter(
@@ -1409,6 +1431,11 @@ impl LivtkApp {
                 .focus_handle(cx)
                 .is_focused(window),
         )
+    }
+
+    /// What the note field holds, not yet sent.
+    pub fn note_text(&self, cx: &App) -> String {
+        self.note.read(cx).value().to_string()
     }
 
     /// Whether the terminal has the keys.

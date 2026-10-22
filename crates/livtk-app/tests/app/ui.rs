@@ -137,6 +137,43 @@ fn typing_in_the_note_field_never_triggers_a_command(cx: &mut TestAppContext) {
     assert_eq!(last.by, "human");
 }
 
+/// The note bar's send button sends as Enter does: the text becomes the task's note and the
+/// field empties. With nothing written, or only spaces, it does nothing.
+#[gpui_kit::test]
+fn the_send_button_adds_the_note_as_enter_does(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    let history = || {
+        Workspace::open(dir.path())
+            .unwrap()
+            .history(Some("LIV-1"))
+            .unwrap()
+    };
+    cx.simulate_keystrokes("c");
+    cx.run_until_parked();
+    let before = history().len();
+
+    click_on(cx, "note-send");
+    cx.simulate_input("   ");
+    cx.run_until_parked();
+    click_on(cx, "note-send");
+    assert_eq!(history().len(), before, "nothing, or only spaces, sends nothing");
+    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), "   ", "and keeps the draft"));
+
+    cx.simulate_input("sent by click");
+    cx.run_until_parked();
+    click_on(cx, "note-send");
+    let all = history();
+    assert_eq!(all.len(), before + 1, "one note");
+    let last = all.last().unwrap();
+    assert!(
+        matches!(&last.op, livtk_core::event::Op::NodeNote { data, .. } if data.text.trim() == "sent by click"),
+        "{last:?}"
+    );
+    assert_eq!(last.by, "human");
+    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), "", "the field empties"));
+}
+
 fn open_app<'a>(
     cx: &'a mut TestAppContext,
     dir: &std::path::Path,

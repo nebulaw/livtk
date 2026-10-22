@@ -118,6 +118,11 @@ menu still moves it).
 - **Radii**: `rounded_lg` for rows, fields and buttons; `rounded_xl` for menus, popovers, bars
   that float, cards.
 - **Empty states**: an icon, a line, what to do, and a button that does it.
+- **Composer** (the note bar at the foot of a panel): one `rounded_xl` card on `SURFACE` holding
+  the icon, the text and a send button; a `BORDER` hairline, `BORDER_STRONG` on hover, `ACCENT`
+  while it has the keys. The icon sits level with the first line; the send button, 24px at the
+  bottom right, is quiet until there is text, then fills `ACCENT`, and sends as Enter does. While
+  focused, a `text_xs` `TEXT_4` hint under the text: "Enter to send · Shift+Enter for a new line".
 
 ## Keys and focus
 

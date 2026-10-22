@@ -99,6 +99,8 @@ icons! {
     Link => "link",
     Unlink => "unlink",
     Notes => "message-circle-dots-2",
+    /// Sending the note written in a task's panel.
+    Send => "send",
     Edit => "scribble",
     Standing => "bookmark-alt",
     /// Waiting for unfinished work: a blocked row, and a build that cannot start yet.

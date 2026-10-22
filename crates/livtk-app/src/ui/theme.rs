@@ -45,6 +45,20 @@ pub fn color(hex: u32) -> Hsla {
     rgb(hex).into()
 }
 
+/// The colour `t` of the way from `from` to `to` (0 is `from`, 1 is `to`), mixed channel by
+/// channel: for a colour easing from one to the other.
+pub fn blend(from: u32, to: u32, t: f32) -> Hsla {
+    let t = t.clamp(0., 1.);
+    let channel = |shift: u32| {
+        let (a, b) = (
+            ((from >> shift) & 0xff) as f32,
+            ((to >> shift) & 0xff) as f32,
+        );
+        ((a + (b - a) * t).round() as u32) << shift
+    };
+    color(channel(16) | channel(8) | channel(0))
+}
+
 pub fn with_alpha(hex: u32, alpha: f32) -> Hsla {
     let mut c = color(hex);
     c.a = alpha;

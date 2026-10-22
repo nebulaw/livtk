@@ -840,22 +840,25 @@ impl LivtkApp {
         let focused = self.note_focused;
         let field = self.note.read(cx);
         let ready = !field.value().trim().is_empty();
-        // The icon sits level with the first line, however tall the field grows.
-        let line = field.line_height().unwrap_or(px(20.));
         let note = self.note.clone();
-        let send = div()
+        // Its fill eases in as there comes to be something to send, and out as there is not; a
+        // press shrinks it a little in its slot, and it springs back.
+        let (from, to) = if ready {
+            (SURFACE, ACCENT)
+        } else {
+            (ACCENT, SURFACE)
+        };
+        let button = div()
             .id("note-send")
             .debug_selector(|| "note-send".into())
-            .flex_none()
-            .self_end()
-            .size(px(24.))
+            .size(px(SEND))
             .flex()
             .items_center()
             .justify_center()
             .rounded_lg()
             .when(ready, |d| {
-                d.bg(color(ACCENT))
-                    .hover(|h| h.bg(color(ACCENT_HOVER)))
+                d.hover(|h| h.bg(color(ACCENT_HOVER)))
+                    .active(|a| a.size(px(SEND_PRESSED)))
                     .child(icon(Icon::Send, 14., TEXT))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.send_note(&note, window, cx);
@@ -864,13 +867,26 @@ impl LivtkApp {
             .when(!ready, |d| d.child(icon(Icon::Send, 14., TEXT_4)))
             .tooltip(|window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new("Send · Enter").build(window, cx)
-            });
+            })
+            .with_animation(
+                SharedString::from(format!("note-send-{ready}")),
+                Animation::new(Duration::from_millis(SEND_EASE)).with_easing(ease_out_quint()),
+                move |el, t| el.bg(blend(from, to, t)),
+            );
+        let send = div()
+            .flex_none()
+            .self_end()
+            .size(px(SEND))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(button);
         div()
             .debug_selector(|| "note-composer".into())
             .flex()
             .items_start()
             .gap_2()
-            .pl_3()
+            .pl(px(6.))
             .pr(px(6.))
             .py(px(6.))
             .rounded_xl()
@@ -880,37 +896,16 @@ impl LivtkApp {
             .when(!focused, |d| {
                 d.hover(|h| h.border_color(color(BORDER_STRONG)))
             })
-            .child(div().flex_none().h(line).flex().items_center().child(icon(
-                Icon::Notes,
-                14.,
-                if focused { TEXT_3 } else { TEXT_4 },
-            )))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(indented(
-                        div().child(
-                            Textarea::new(&self.note)
-                                .appearance(false)
-                                .xsmall()
-                                .text_sm(),
-                        ),
-                        &self.note,
-                    ))
-                    .when(focused, |d| {
-                        d.child(
-                            div()
-                                .debug_selector(|| "note-hint".into())
-                                .px(TEXTAREA_PX)
-                                .text_xs()
-                                .text_color(color(TEXT_4))
-                                .child("Enter to send · Shift+Enter for a new line"),
-                        )
-                    }),
+                div().flex_1().min_w_0().child(indented(
+                    div().child(
+                        Textarea::new(&self.note)
+                            .appearance(false)
+                            .xsmall()
+                            .text_sm(),
+                    ),
+                    &self.note,
+                )),
             )
             .child(send)
     }
@@ -1125,3 +1120,8 @@ pub(super) fn prop_row(label: &str, value: Div) -> Div {
 
 /// A property's first line: its name's height, and a one-line value's.
 const PROP_LINE: f32 = 26.;
+
+/// The note's send button, at rest and pressed; how long its fill takes to ease in or out.
+const SEND: f32 = 24.;
+const SEND_PRESSED: f32 = 21.;
+const SEND_EASE: u64 = 160;

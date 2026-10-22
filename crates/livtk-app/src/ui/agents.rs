@@ -216,6 +216,23 @@ impl LivtkApp {
             .overflow_y_scroll()
             .flex()
             .flex_col();
+        // The builds waiting their turn to start on their own, first first.
+        let queued = self.model.queued_here();
+        if !queued.is_empty() {
+            list = list.child(band("Waiting their turn", queued.len(), None));
+            for r in &queued {
+                list = list.child(div().px_4().py_1().child(self.node_ref(
+                    format!("queued-{}", r.key),
+                    &r.key,
+                    livtk_core::Kind::Task,
+                    livtk_core::State::Acked,
+                    &r.title,
+                    OpenIn::View,
+                    None,
+                    cx,
+                )));
+            }
+        }
         // Agents, by place.
         let new = div()
             .id("agent-new")

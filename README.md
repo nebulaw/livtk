@@ -206,6 +206,15 @@ own process, writing to `.livtk/runs/` (local, never committed), so runs outlive
 app that started them; whichever livtk looks next writes what they did. Run in a git worktree,
 `livtk` writes to the main checkout's log. Run notes are format 8.
 
+**Runs on their own.** A project's `[runs]` (Settings › Runs) can have them start without
+anyone pressing Start: `auto = true` starts building each acknowledged task given to an agent,
+`builds_at_once` of them together (2 unless set; the rest wait their turn, by priority, listed
+in Agents), and starts the review of each task that comes into review. Off by default. With
+`worktree` (on by default, in a git repository), each build works in its own worktree under
+`.livtk/runs/worktrees/`, on its own branch `livtk/<key>`, and its review reads it there; when
+you mark the task done, the branch comes into your checkout's branch, fast-forward only, and
+the worktree goes. One that cannot fast-forward is left for you, with a note saying why.
+
 **For scripts.** `livtk list --json` gives small rows; `--fields key,state,props` picks what each
 row carries, a node's own `body`, `props`, `created` and `created_by` included. `livtk show KEY
 --json` gives everything about one node: its fields with body and props, its links, its notes and

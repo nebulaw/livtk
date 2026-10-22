@@ -378,6 +378,20 @@ impl Runner {
     ) -> Result<Live> {
         settle(ws, self)?;
         let _hold = Hold::wait(ws.dir())?;
+        self.start_held(ws, key, stage, agent, files, by)
+    }
+
+    /// Start a run, the runs' lock already held (by `start`, or by a settle starting runs on
+    /// its own).
+    fn start_held(
+        &self,
+        ws: &mut Workspace,
+        key: &str,
+        stage: Option<Stage>,
+        agent: Option<String>,
+        files: &[AgentFile],
+        by: &Actor,
+    ) -> Result<Live> {
         let n = ws.node(key)?;
         if let Some(r) = ws
             .runs()?
@@ -400,20 +414,23 @@ impl Runner {
                 ))
             })?;
         free_to_run(ws, &n, stage)?;
-        let agent = agent
-            .or_else(|| {
+        // The task's own agent is the one that builds it; the other stages run as theirs.
+        let own = (stage == Stage::Build)
+            .then(|| {
                 n.props
                     .get("agent")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
             })
-            .or_else(|| suggest(stage, files));
+            .flatten();
+        let agent = agent.or(own).or_else(|| suggest(stage, files));
+        let cwd = workplace(ws, &n.key, stage)?;
         let live = Live {
             session: Uuid::now_v7().to_string(),
             key: n.key.clone(),
             agent: agent.clone(),
             stage,
-            cwd: ws.root().to_path_buf(),
+            cwd,
             allowed: stage.allowed(),
             read: 0,
             pid: None,
@@ -898,9 +915,11 @@ const SETTLE_HOLD: Duration = Duration::from_secs(60);
 /// anything changed. Another settle going at the same time makes this one a no-op.
 pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
     let livtk = ws.dir().to_path_buf();
-    if !runs_dir(&livtk).exists() {
+    // Nothing has run here, and nothing starts on its own: nothing to do.
+    if !runs_dir(&livtk).exists() && !ws.config().runs.auto {
         return Ok(false);
     }
+    ensure_dir(&livtk)?;
     let Some(_hold) = Hold::take(&hold_path(&livtk)) else {
         return Ok(false);
     };
@@ -998,6 +1017,8 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
             save(&livtk, &live)?;
         }
     }
+    changed |= merge_done(ws)?;
+    changed |= start_on_their_own(ws, runner)?;
     // Answered: the next turn, once (a turn already started on the answer is left to run).
     for run in ws.runs()? {
         let started = live(&livtk, &run.session).is_some_and(|l| l.pid.is_some());
@@ -1021,6 +1042,194 @@ fn said(text: &str) -> String {
     } else {
         text.trim().to_owned()
     }
+}
+
+// ---- builds in their own worktrees, merged when done ----------------------------------------
+
+/// Where builds' worktrees are, beside the runs: never committed.
+fn worktrees_dir(livtk: &Path) -> PathBuf {
+    runs_dir(livtk).join("worktrees")
+}
+
+/// The branch task `key`'s builds work on.
+pub fn branch(key: &str) -> String {
+    format!("livtk/{}", key.to_lowercase())
+}
+
+/// Task `key`'s worktree, if its builds have one.
+pub fn worktree(livtk: &Path, key: &str) -> Option<PathBuf> {
+    let path = worktrees_dir(livtk).join(key);
+    path.join(".git").exists().then_some(path)
+}
+
+/// `git args` in `dir`: its output, or what git said went wrong.
+fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let out = Process::new("git")
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| Error::Refused(format!("git would not run: {e}")))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    } else {
+        Err(Error::Refused(
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        ))
+    }
+}
+
+/// Where a run of `stage` on task `key` works: a build in its own worktree (made on its first
+/// build, on its own branch from the checkout's HEAD) when the project says so and is a git
+/// repository; a review where the build was; else the project's folder.
+fn workplace(ws: &Workspace, key: &str, stage: Stage) -> Result<PathBuf> {
+    let root = ws.root().to_path_buf();
+    if let Some(tree) = worktree(ws.dir(), key)
+        && matches!(stage, Stage::Build | Stage::Review)
+    {
+        return Ok(tree);
+    }
+    let in_git = git(&root, &["rev-parse", "--is-inside-work-tree"]).is_ok();
+    if stage != Stage::Build || !ws.config().runs.worktree || !in_git {
+        return Ok(root);
+    }
+    ensure_dir(ws.dir())?;
+    let path = worktrees_dir(ws.dir()).join(key);
+    let b = branch(key);
+    let exists = git(&root, &["rev-parse", "--verify", "--quiet", &b]).is_ok();
+    let path_s = path.to_string_lossy().into_owned();
+    if exists {
+        git(&root, &["worktree", "add", &path_s, &b])?;
+    } else {
+        git(&root, &["worktree", "add", "-b", &b, &path_s, "HEAD"])?;
+    }
+    Ok(path)
+}
+
+/// A done task's build branch, brought into the checkout's branch: fast-forward only, its
+/// worktree and branch then removed, and said on the task; or why not, once for each head the
+/// branch reaches. Returns whether anything was said.
+fn merge_done(ws: &mut Workspace) -> Result<bool> {
+    let Ok(entries) = fs::read_dir(worktrees_dir(ws.dir())) else {
+        return Ok(false);
+    };
+    let root = ws.root().to_path_buf();
+    let mut said = false;
+    for e in entries.flatten() {
+        let key = e.file_name().to_string_lossy().into_owned();
+        if !e.path().join(".git").exists() {
+            continue;
+        }
+        let Ok(n) = ws.node(&key) else { continue };
+        if n.state != State::Done {
+            continue;
+        }
+        let b = branch(&n.key);
+        let head = git(&root, &["rev-parse", &b]).unwrap_or_default();
+        let tried = e.path().with_extension("merge");
+        if fs::read_to_string(&tried).is_ok_and(|t| t == head) {
+            continue;
+        }
+        let path_s = e.path().to_string_lossy().into_owned();
+        let text = match git(&root, &["merge", "--ff-only", &b]) {
+            Ok(_) => {
+                let _ = git(&root, &["worktree", "remove", &path_s]);
+                let _ = git(&root, &["branch", "-d", &b]);
+                let _ = fs::remove_file(&tried);
+                format!("Merged {b} into the checkout's branch (fast-forward).")
+            }
+            Err(why) => {
+                fs::write(&tried, &head)?;
+                format!(
+                    "Could not merge {b} (fast-forward only): {why}. Its worktree is kept at \
+                     {path_s}; bring it in by hand, and livtk tries again when it moves."
+                )
+            }
+        };
+        ws.execute(
+            Command::Note {
+                node: n.key.clone(),
+                text,
+            },
+            &Actor::Claude {
+                agent: Some("runner".into()),
+            },
+        )?;
+        said = true;
+    }
+    Ok(said)
+}
+
+// ---- runs starting on their own ---------------------------------------------------------------
+
+/// The tasks whose build waits its turn, first first: acknowledged, given to an agent, free of
+/// unfinished work, and never built since. Empty unless the project starts runs on its own.
+pub fn queue(ws: &Workspace) -> Result<Vec<crate::Summary>> {
+    if !ws.config().runs.auto {
+        return Ok(Vec::new());
+    }
+    let runs = ws.runs()?;
+    let mut out: Vec<crate::Summary> = ws
+        .tasks(&[State::Acked])?
+        .into_iter()
+        .filter(|t| !t.blocked)
+        .filter(|t| {
+            !runs
+                .iter()
+                .any(|r| r.node == t.id && r.stage == Stage::Build)
+        })
+        .filter(|t| {
+            ws.node(&t.key)
+                .is_ok_and(|n| n.props.get("agent").and_then(Value::as_str).is_some())
+        })
+        .collect();
+    out.sort_by_key(|t| (t.priority, t.id));
+    Ok(out)
+}
+
+/// When the project says so: start the builds that wait their turn, as many as it builds at
+/// once, and the review of each task that came into review since its last review began.
+fn start_on_their_own(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
+    if !ws.config().runs.auto {
+        return Ok(false);
+    }
+    let files = crate::claude::home()
+        .map(|home| crate::agents::agents(ws.root(), &home))
+        .unwrap_or_default();
+    let human = Actor::Claude {
+        agent: Some("runner".into()),
+    };
+    let mut started = false;
+    let runs = ws.runs()?;
+    let going = runs
+        .iter()
+        .filter(|r| r.stage == Stage::Build && r.ended().is_none())
+        .count();
+    let room = usize::from(ws.config().runs.builds_at_once).saturating_sub(going);
+    for t in queue(ws)?.into_iter().take(room) {
+        if runner
+            .start_held(ws, &t.key, Some(Stage::Build), None, &files, &human)
+            .is_ok()
+        {
+            started = true;
+        }
+    }
+    for t in ws.tasks(&[State::Review])? {
+        let since = ws.entered(&t.key)?.unwrap_or_default();
+        let reviewed = runs
+            .iter()
+            .any(|r| r.node == t.id && r.stage == Stage::Review && r.started >= since);
+        let going = runs.iter().any(|r| r.node == t.id && r.ended().is_none());
+        if !reviewed
+            && !going
+            && runner
+                .start_held(ws, &t.key, Some(Stage::Review), None, &files, &human)
+                .is_ok()
+        {
+            started = true;
+        }
+    }
+    Ok(started)
 }
 
 fn hold_path(livtk: &Path) -> PathBuf {

@@ -13,13 +13,15 @@ use livtk_core::{Actor, Command, Kind, State, Workspace};
 
 const CLAUDE: Actor = Actor::Claude { agent: None };
 
-/// A stub `claude`: each turn takes the next word from `.stub-turns` in the folder it runs in,
-/// writes its arguments to `.stub-args`, and answers as the word says.
+/// A stub `claude`: each turn takes the next word from `.stub-turns` beside it (the project's
+/// folder, wherever the turn works), writes its arguments to `.stub-args` there, and answers as
+/// the word says.
 const STUB: &str = r#"#!/bin/sh
-f=.stub-turns
+here=$(dirname "$0")
+f="$here/.stub-turns"
 what=$(head -n 1 "$f")
 tail -n +2 "$f" > "$f.tmp"; mv "$f.tmp" "$f"
-printf '%s\n' "$*" >> .stub-args
+printf '%s\n' "$*" >> "$here/.stub-args"
 echo '{"type":"system","subtype":"init","session_id":"stub"}'
 case "$what" in
   ask) echo '{"type":"result","subtype":"success","is_error":false,"result":"Which colour should it be?","permission_denials":[]}' ;;
@@ -27,8 +29,10 @@ case "$what" in
   done) echo '{"type":"result","subtype":"success","is_error":false,"result":"Built, and in review.","permission_denials":[]}' ;;
   slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
         while :; do sleep 0.05; done ;;
-  path) printf '%s' "$PATH" > .stub-path
+  path) printf '%s' "$PATH" > "$here/.stub-path"
         echo '{"type":"result","subtype":"success","is_error":false,"result":"Done.","permission_denials":[]}' ;;
+  commit) pwd > built.txt && git add built.txt && git commit -qm "build it"
+          echo '{"type":"result","subtype":"success","is_error":false,"result":"Built.","permission_denials":[]}' ;;
   deaf) trap '' INT
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
@@ -523,4 +527,239 @@ fn a_turn_finds_its_tools_on_its_path() {
     ] {
         assert!(dirs.iter().any(|d| d.ends_with(usual)), "{usual}: {path}");
     }
+}
+
+/// `git args` in `dir`, which must work.
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `setup`, as a git repository with everything committed, and more acknowledged tasks given
+/// to an agent: `extra` of them, their keys returned after the first's.
+fn git_setup(turns: &[&str], extra: usize) -> (tempfile::TempDir, Workspace, Runner, Vec<String>) {
+    let (dir, mut ws, runner, key) = setup(turns);
+    let mut keys = vec![key];
+    for i in 0..extra {
+        let e = ws
+            .execute(
+                Command::Create {
+                    kind: Kind::Task,
+                    title: format!("more work {i}"),
+                    body: String::new(),
+                    priority: None,
+                    links: vec![],
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        keys.push(ws.node(&e[0].op.subjects().0.to_string()).unwrap().key);
+    }
+    for k in &keys {
+        if ws.node(k).unwrap().state != State::Acked {
+            ws.execute(
+                Command::Move {
+                    node: k.clone(),
+                    to: State::Planned,
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+            ws.execute(
+                Command::Move {
+                    node: k.clone(),
+                    to: State::Acked,
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+        }
+        ws.execute(
+            Command::SetAgent {
+                node: k.clone(),
+                agent: "livtk:implementer".into(),
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    }
+    let root = root(&ws);
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@t"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join(".gitignore"), ".stub-*\nclaude-stub\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "init"]);
+    (dir, ws, runner, keys)
+}
+
+fn auto(ws: &mut Workspace, on: bool, at_once: u8) {
+    ws.set_runs(&livtk_core::Runs {
+        auto: on,
+        builds_at_once: at_once,
+        worktree: true,
+    })
+    .unwrap();
+}
+
+/// Off (the default), nothing starts on its own. On, acknowledged tasks with an agent start
+/// building, as many as the project builds at once, the rest waiting their turn in order; each
+/// build works in its own worktree, on its own branch.
+#[test]
+fn builds_start_on_their_own_up_to_the_limit_each_in_its_worktree() {
+    let (_dir, mut ws, runner, keys) = git_setup(&["slow", "slow", "slow"], 2);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    run::settle(&mut ws, &runner).unwrap();
+    assert!(ws.runs().unwrap().is_empty(), "off: nothing starts");
+    assert!(run::queue(&ws).unwrap().is_empty(), "and nothing queues");
+    auto(&mut ws, true, 2);
+    run::settle(&mut ws, &runner).unwrap();
+    let runs = ws.runs().unwrap();
+    assert_eq!(runs.len(), 2, "two at once: {runs:?}");
+    let queued: Vec<String> = run::queue(&ws)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.key)
+        .collect();
+    assert_eq!(queued.len(), 1, "the third waits its turn");
+    assert!(!runs.iter().any(|r| r.key == queued[0]));
+    for r in &runs {
+        let live = run::live(ws.dir(), &r.session).unwrap();
+        assert_eq!(
+            live.cwd,
+            run::worktree(ws.dir(), &r.key).unwrap(),
+            "in its worktree"
+        );
+        assert!(live.cwd.join(".livtk/config.toml").exists());
+    }
+    // Settled again, nothing more starts while two go.
+    run::settle(&mut ws, &runner).unwrap();
+    assert_eq!(ws.runs().unwrap().len(), 2);
+    assert_eq!(keys.len(), 3);
+}
+
+/// A build's branch comes into the checkout when its task is done, fast-forward, its worktree
+/// gone; one that cannot says why, once.
+#[test]
+fn a_done_build_is_merged_or_says_why_not() {
+    let (_dir, mut ws, runner, keys) = git_setup(&["commit", "commit"], 1);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    let root = root(&ws);
+    for k in &keys {
+        runner
+            .start(&mut ws, k, None, None, &[], &Actor::Human)
+            .unwrap();
+        until(&mut ws, &runner, k, "the build", |r| {
+            r.ended().is_some() || r.needs_you()
+        });
+    }
+    // The first: done, and merged.
+    let first = &keys[0];
+    for to in [State::Doing, State::Review] {
+        ws.execute(
+            Command::Move {
+                node: first.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    ws.execute(
+        Command::Move {
+            node: first.clone(),
+            to: State::Done,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    run::settle(&mut ws, &runner).unwrap();
+    assert!(root.join("built.txt").exists(), "merged into the checkout");
+    assert!(
+        run::worktree(ws.dir(), first).is_none(),
+        "its worktree gone"
+    );
+    let said = |ws: &Workspace, k: &str, what: &str| {
+        ws.history(Some(k))
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(&e.op, livtk_core::event::Op::NodeNote { data, .. } if data.text.starts_with(what)))
+            .count()
+    };
+    assert_eq!(said(&ws, first, "Merged livtk/"), 1);
+    // The second also made built.txt, from the old HEAD: no fast-forward now.
+    let second = &keys[1];
+    for to in [State::Doing, State::Review] {
+        ws.execute(
+            Command::Move {
+                node: second.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    ws.execute(
+        Command::Move {
+            node: second.clone(),
+            to: State::Done,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    run::settle(&mut ws, &runner).unwrap();
+    run::settle(&mut ws, &runner).unwrap();
+    assert_eq!(
+        said(&ws, second, "Could not merge livtk/"),
+        1,
+        "said once: {:#?}",
+        ws.history(Some(second))
+            .unwrap()
+            .iter()
+            .filter_map(|e| match &e.op {
+                livtk_core::event::Op::NodeNote { data, .. } => Some(data.text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        run::worktree(ws.dir(), second).is_some(),
+        "kept to bring in by hand"
+    );
+}
+
+/// With the project starting runs on its own, a task coming into review starts its review.
+#[test]
+fn a_review_starts_on_its_own() {
+    let (_dir, mut ws, runner, keys) = git_setup(&["ask"], 0);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    let k = &keys[0];
+    // Built by hand first (so it is not queued), then in review.
+    for to in [State::Doing, State::Review] {
+        ws.execute(
+            Command::Move {
+                node: k.clone(),
+                to,
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
+    auto(&mut ws, true, 2);
+    run::settle(&mut ws, &runner).unwrap();
+    let r = ws.runs().unwrap().pop().expect("a review");
+    assert_eq!(r.stage, Stage::Review);
+    assert_eq!(
+        r.agent.as_deref(),
+        Some("livtk:refuter"),
+        "as the reviewer, not the builder"
+    );
 }

@@ -70,7 +70,45 @@ pub struct Config {
     /// Relations the project declares beside the built-in five (`[[relations]]`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<crate::RelSpec>,
+    /// How runs of Claude start and where builds work (`[runs]`).
+    #[serde(default, skip_serializing_if = "Runs::is_default")]
+    pub runs: Runs,
 }
+
+/// How a project's runs of Claude go: whether they start on their own, how many builds at
+/// once, and whether each build works in its own git worktree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Runs {
+    /// An acknowledged task with an agent starts building, and a task in review starts its
+    /// review, without anyone pressing Start. Off unless the human turns it on.
+    pub auto: bool,
+    /// How many builds go at once when they start on their own; the rest wait their turn.
+    pub builds_at_once: u8,
+    /// Each build in its own git worktree, on its own branch, merged when the task is done;
+    /// else in the project's checkout.
+    pub worktree: bool,
+}
+
+impl Default for Runs {
+    fn default() -> Self {
+        Runs {
+            auto: false,
+            builds_at_once: BUILDS_AT_ONCE,
+            worktree: true,
+        }
+    }
+}
+
+impl Runs {
+    fn is_default(&self) -> bool {
+        *self == Runs::default()
+    }
+}
+
+/// How many builds go at once by default, and at most.
+pub const BUILDS_AT_ONCE: u8 = 2;
+pub const BUILDS_MAX: u8 = 8;
 
 /// The hooks a project may switch off with `[hooks] disable`. The guard (pre-tool-use) is not
 /// among them: it keeps the human's gates, and the file is one Claude could edit.
@@ -505,6 +543,7 @@ impl Workspace {
             user_prompt_submit: Sections::default(),
             kinds: Vec::new(),
             relations: Vec::new(),
+            runs: Runs::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -661,6 +700,41 @@ impl Workspace {
         })
     }
 
+    /// The project's `[runs]`, replaced by `runs`; the defaults leave the table out.
+    pub fn set_runs(&mut self, runs: &Runs) -> Result<()> {
+        if runs.builds_at_once == 0 || runs.builds_at_once > BUILDS_MAX {
+            return Err(Error::Invalid(format!(
+                "builds at once is 1 to {BUILDS_MAX}"
+            )));
+        }
+        let d = Runs::default();
+        self.edit_config(|doc| {
+            let t = table(doc, "runs")?;
+            let mut set = |k: &str, v: toml_edit::Item, default: bool| {
+                if default {
+                    t.remove(k);
+                } else {
+                    t[k] = v;
+                }
+            };
+            set("auto", toml_edit::value(runs.auto), runs.auto == d.auto);
+            set(
+                "builds_at_once",
+                toml_edit::value(i64::from(runs.builds_at_once)),
+                runs.builds_at_once == d.builds_at_once,
+            );
+            set(
+                "worktree",
+                toml_edit::value(runs.worktree),
+                runs.worktree == d.worktree,
+            );
+            if t.is_empty() {
+                doc.remove("runs");
+            }
+            Ok(())
+        })
+    }
+
     /// The project's docs folder, from its folder; `None` for the default (`docs`).
     pub fn set_docs_dir(&mut self, dir: Option<&str>) -> Result<()> {
         let dir = dir.map(str::trim).filter(|d| !d.is_empty() && *d != "docs");
@@ -762,6 +836,11 @@ impl Workspace {
     /// The Claude Code session the writes from here come from, if Claude makes them.
     pub fn set_session(&mut self, session: Option<String>) {
         self.session = session.filter(|s| !s.trim().is_empty());
+    }
+
+    /// When node `key` last changed state, or was created if it never has.
+    pub fn entered(&self, key: &str) -> Result<Option<String>> {
+        self.store.entered(self.node(key)?.id)
     }
 
     pub fn session(&self) -> Option<&str> {

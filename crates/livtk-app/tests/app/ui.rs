@@ -5053,3 +5053,72 @@ fn a_blocked_task_offers_no_start(cx: &mut TestAppContext) {
         "with the blocked mark"
     );
 }
+
+/// Runs that start on their own, set in the project's settings: one build at once, so of two
+/// acknowledged tasks given to an agent one builds and the other waits its turn, its panel and
+/// Agents saying so.
+#[gpui_kit::test]
+fn builds_start_on_their_own_and_the_rest_wait_their_turn(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
+    claude_stub();
+    std::fs::write(root.join(".stub-turns"), "slow\nslow\n").unwrap();
+    {
+        let mut ws = Workspace::open(&root).unwrap();
+        for k in ["LIV-1", "LIV-2"] {
+            ws.execute(
+                Command::Move {
+                    node: k.into(),
+                    to: State::Acked,
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+            ws.execute(
+                Command::SetAgent {
+                    node: k.into(),
+                    agent: "livtk:implementer".into(),
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+        }
+    }
+    let (app, cx) = open_app(cx, &root);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    // Settings, this project's Runs: on, one build at once.
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    click_on(cx, "settings-runs");
+    redraw(cx);
+    click_on(cx, "settings-runs-auto-off");
+    redraw(cx);
+    click_on(cx, "settings-builds-1");
+    redraw(cx);
+    let config = std::fs::read_to_string(root.join(".livtk/config.toml")).unwrap();
+    assert!(
+        config.contains("auto = true") && config.contains("builds_at_once = 1"),
+        "{config}"
+    );
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    // One builds; the other waits its turn.
+    until_runs(&app, cx, |m| {
+        m.runs.going.len() == 1 && m.runs.queued.len() == 1
+    });
+    let waiting = app.read_with(cx, |a, _| a.model().runs.queued[0].key.clone());
+    app.update(cx, |a, _| a.model_mut().go_to(&waiting));
+    settle(cx);
+    assert!(cx.debug_bounds("detail-run-status").is_some());
+    let at = app.read_with(cx, |a, _| a.model().queued_at(&waiting));
+    assert_eq!(at, Some(1), "first in line");
+    cx.simulate_keystrokes("g e");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds(named(format!("queued-{waiting}")))
+            .is_some(),
+        "listed in Agents"
+    );
+}

@@ -411,6 +411,13 @@ impl LivtkApp {
                 format!("Going on ({})", r.stage.as_str()),
                 Some((Ask::Stop, "Stop".into())),
             ),
+            None if self.model.queued_at(&n.key).is_some() => (
+                format!(
+                    "Waiting its turn (#{})",
+                    self.model.queued_at(&n.key).unwrap_or(1)
+                ),
+                Some((Ask::Start, "Start now".into())),
+            ),
             None => match (stage, &d.run) {
                 (Some(_), _) if !self.model.runs.claude => ("Claude Code not found".into(), None),
                 (Some(s), _)

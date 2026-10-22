@@ -35,6 +35,8 @@ pub struct Runs {
     pub writing: Vec<RunRow>,
     /// The tasks whose run waits for you.
     pub needs_you: Vec<RunRow>,
+    /// The builds waiting their turn to start on their own, first first.
+    pub queued: Vec<RunRow>,
     /// The `claude` command was found at the last survey: runs can start.
     pub claude: bool,
     /// Stopped when the app last quit, not continued or left since.
@@ -52,6 +54,7 @@ pub struct Found {
     pub quit: Vec<RunRow>,
     pub writing: Vec<RunRow>,
     pub needs_you: Vec<RunRow>,
+    pub queued: Vec<RunRow>,
 }
 
 /// The runs of the projects at `roots`, each settled first when `runner` is given: those writing
@@ -64,6 +67,15 @@ pub fn survey(roots: &[PathBuf], runner: Option<&Runner>) -> Found {
         };
         if let Some(r) = runner {
             let _ = run::settle(&mut ws, r);
+        }
+        for t in run::queue(&ws).unwrap_or_default() {
+            found.queued.push(RunRow {
+                root: root.clone(),
+                key: t.key,
+                title: t.title,
+                agent: None,
+                stage: Stage::Build,
+            });
         }
         let writing = run::writing_sessions(ws.dir());
         let Ok(runs) = ws.runs() else { continue };
@@ -179,6 +191,7 @@ impl Model {
         self.runs.quit = found.quit;
         self.runs.writing = found.writing;
         self.runs.needs_you = found.needs_you;
+        self.runs.queued = found.queued;
         self.runs.surveying = false;
         self.runs.surveyed = Some(now);
     }
@@ -196,6 +209,30 @@ impl Model {
     /// Whether task `key` of the open project has a run waiting for you.
     pub fn run_needs_you(&self, key: &str) -> bool {
         self.in_project(&self.runs.needs_you, key)
+    }
+
+    /// Where task `key` of the open project is in the queue of builds waiting their turn, from 1.
+    pub fn queued_at(&self, key: &str) -> Option<usize> {
+        let root = self.project().map(|p| p.ws.root())?;
+        self.runs
+            .queued
+            .iter()
+            .filter(|r| r.root == root)
+            .position(|r| r.key == key)
+            .map(|i| i + 1)
+    }
+
+    /// The open project's builds waiting their turn, first first.
+    pub fn queued_here(&self) -> Vec<RunRow> {
+        let Some(root) = self.project().map(|p| p.ws.root()) else {
+            return Vec::new();
+        };
+        self.runs
+            .queued
+            .iter()
+            .filter(|r| r.root == root)
+            .cloned()
+            .collect()
     }
 
     fn in_project(&self, rows: &[RunRow], key: &str) -> bool {

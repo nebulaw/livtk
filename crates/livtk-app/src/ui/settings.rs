@@ -27,6 +27,7 @@ pub(super) enum Section {
     Claude,
     Kinds,
     Gates,
+    Runs,
     Export,
 }
 
@@ -38,11 +39,12 @@ impl Section {
         Section::Updates,
         Section::Shortcuts,
     ];
-    const PROJECT: [Section; 5] = [
+    const PROJECT: [Section; 6] = [
         Section::General,
         Section::Claude,
         Section::Kinds,
         Section::Gates,
+        Section::Runs,
         Section::Export,
     ];
 
@@ -56,6 +58,7 @@ impl Section {
             Section::Claude => "What Claude is told",
             Section::Kinds => "Kinds and relations",
             Section::Gates => "Your gates",
+            Section::Runs => "Runs",
             Section::Export => "Export",
         }
     }
@@ -70,6 +73,7 @@ impl Section {
             Section::Claude => Icon::Claude,
             Section::Kinds => Icon::Grouping,
             Section::Gates => Icon::You,
+            Section::Runs => Icon::Agents,
             Section::Export => Icon::Article,
         }
     }
@@ -225,6 +229,7 @@ impl LivtkApp {
             Section::Claude => self.claude(cx),
             Section::Kinds => self.kinds(cx),
             Section::Gates => self.gates(cx),
+            Section::Runs => self.runs(cx),
             Section::Export => self.export_section(cx),
         };
         let note = if shared {
@@ -440,6 +445,62 @@ impl LivtkApp {
             ))
     }
 
+    /// How the project's runs of Claude go: on their own or not, how many builds at once,
+    /// each in its own worktree or in the checkout.
+    fn runs(&self, cx: &mut Context<Self>) -> Div {
+        let Some(runs) = self.model.config().map(|c| c.runs.clone()) else {
+            return group();
+        };
+        let set = |change: fn(&mut livtk_core::Runs)| {
+            let mut next = runs.clone();
+            change(&mut next);
+            next
+        };
+        let auto = set(|r| r.auto = !r.auto);
+        let worktree = set(|r| r.worktree = !r.worktree);
+        let mut at_once = segmented();
+        for n in 1..=livtk_core::BUILDS_MAX {
+            let mut next = runs.clone();
+            next.builds_at_once = n;
+            at_once = at_once.child(
+                choice(
+                    format!("settings-builds-{n}"),
+                    COUNTS[usize::from(n - 1)],
+                    runs.builds_at_once == n,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.project_edit(|ws| ws.set_runs(&next), cx);
+                })),
+            );
+        }
+        group()
+            .child(row(
+                "Start on their own",
+                "An acknowledged task given to an agent starts building, and a task in review \
+                 starts its review, without pressing Start.",
+                toggle("settings-runs-auto".into(), runs.auto).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.project_edit(|ws| ws.set_runs(&auto), cx);
+                    },
+                )),
+            ))
+            .child(row(
+                "Builds at once",
+                "How many build together when they start on their own; the rest wait their turn.",
+                at_once,
+            ))
+            .child(row(
+                "Each build in its own worktree",
+                "On its own branch, beside the checkout, merged when you mark the task done. \
+                 Off, builds work in the checkout itself.",
+                toggle("settings-runs-worktree".into(), runs.worktree).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.project_edit(|ws| ws.set_runs(&worktree), cx);
+                    },
+                )),
+            ))
+    }
+
     fn claude(&self, cx: &mut Context<Self>) -> Div {
         let Some(config) = self.model.config().cloned() else {
             return group();
@@ -459,6 +520,10 @@ impl LivtkApp {
                 "subagent-start" => (
                     "When a subagent starts",
                     "A shorter brief of the work in progress and the rules.",
+                ),
+                "stop" => (
+                    "When a run as the implementer stops",
+                    "The same, for a session started as the implementer: a build run.",
                 ),
                 _ => (
                     "When the implementer stops",
@@ -774,3 +839,8 @@ fn capital(s: &str) -> String {
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
 }
+
+/// The counts a choice of how many offers, as its chips say them: one for each a project may
+/// build at once.
+const COUNTS: [&str; 8] = ["1", "2", "3", "4", "5", "6", "7", "8"];
+const _: () = assert!(COUNTS.len() == livtk_core::BUILDS_MAX as usize);

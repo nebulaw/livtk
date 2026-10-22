@@ -372,19 +372,13 @@ impl LivtkApp {
                 format!("Writing… ({})", r.stage.as_str()),
                 Some((Ask::Stop, "Stop".into())),
             ),
-            Some(r) if r.needs_you() => (
-                "Needs you: see its last note".into(),
-                Some((Ask::Stop, "Stop".into())),
-            ),
+            Some(r) if r.needs_you() => ("Needs you".into(), Some((Ask::Stop, "Stop".into()))),
             Some(r) => (
                 format!("Going on ({})", r.stage.as_str()),
                 Some((Ask::Stop, "Stop".into())),
             ),
             None => match (stage, &d.run) {
-                (Some(_), _) if !self.model.runs.claude => (
-                    "Claude Code is not installed, or not where livtk looks".into(),
-                    None,
-                ),
+                (Some(_), _) if !self.model.runs.claude => ("Claude Code not found".into(), None),
                 (Some(s), last) => (
                     last.as_ref()
                         .and_then(livtk_core::run::Run::ended)
@@ -399,14 +393,18 @@ impl LivtkApp {
                 (None, None) => return None,
             },
         };
+        // In the title bar beside the key: the status gives way first, never the buttons.
         let mut row = div()
             .debug_selector(|| "detail-run".into())
+            .min_w_0()
             .flex()
             .items_center()
             .gap_2()
             .child(
                 div()
                     .debug_selector(|| "detail-run-status".into())
+                    .min_w_0()
+                    .truncate()
                     .text_color(color(TEXT_2))
                     .child(status),
             );
@@ -418,6 +416,7 @@ impl LivtkApp {
             let key = n.key.clone();
             row = row.child(
                 button(sel, &label, ask == Ask::Start)
+                    .flex_none()
                     .on_click(cx.listener(move |this, _, _, cx| this.ask_run(&key, ask, cx))),
             );
         }

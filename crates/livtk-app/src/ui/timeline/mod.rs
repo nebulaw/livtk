@@ -360,29 +360,34 @@ impl LivtkApp {
                         this.event_content(d, e, *mark, Shown::Stuck, cx),
                     )
                 };
+                // A lane's head leads back to its place; the composer is written in, not left.
+                let head = Some(order) != composer;
+                // The lanes stuck above it stay stuck there: its row lands under them.
+                let under = top.iter().take_while(|&&o| o != order).count() as f32 * STUCK_H;
                 let to_place = this.rail.clone();
                 Some(
                     div()
                         .id(("timeline-stuck", order))
                         .debug_selector(move || format!("timeline-stuck-{order}"))
                         .occlude()
-                        .cursor_pointer()
-                        // Back to its place: its row at the panel's top, under nothing stuck.
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let row = to_place
-                                .borrow()
-                                .rows
-                                .iter()
-                                .find(|(o, _)| *o == order)
-                                .map(|(_, b)| *b);
-                            if let Some(row) = row {
-                                let scroll = &this.detail_scroll;
-                                let mut at = scroll.offset();
-                                at.y += scroll.bounds().top() - row.top();
-                                scroll.set_offset(at);
-                                cx.notify();
-                            }
-                        }))
+                        .when(head, |d| {
+                            d.cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let row = to_place
+                                        .borrow()
+                                        .rows
+                                        .iter()
+                                        .find(|(o, _)| *o == order)
+                                        .map(|(_, b)| *b);
+                                    if let Some(row) = row {
+                                        let scroll = &this.detail_scroll;
+                                        let mut at = scroll.offset();
+                                        at.y += scroll.bounds().top() + px(under) - row.top();
+                                        scroll.set_offset(at);
+                                        cx.notify();
+                                    }
+                                }))
+                        })
                         .flex()
                         .items_start()
                         .gap(px(TEXT_GAP))

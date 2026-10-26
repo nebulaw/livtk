@@ -6510,3 +6510,79 @@ fn a_stuck_long_note_keeps_to_one_line_and_leads_back_to_its_place(cx: &mut Test
         "back in line"
     );
 }
+
+/// Two lanes at once stick stacked; clicking the lower one lands its row under the one still
+/// stuck above it, in view. Typing in the composer stuck at the foot never scrolls the panel.
+#[gpui_kit::test]
+fn a_stuck_row_leads_back_under_the_rows_stuck_above_it(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for i in 0..40 {
+            let session = if i % 2 == 0 { "sess-a" } else { "sess-b" };
+            ws.set_session(Some(session.into()));
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text: format!("step {i} of {session}"),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    redraw(cx);
+    redraw(cx);
+    // The composer stuck at the foot: clicking into it leaves the panel where it is.
+    let title = cx.debug_bounds("detail-title").unwrap();
+    click_on(cx, "note-composer");
+    redraw(cx);
+    assert_eq!(
+        cx.debug_bounds("detail-title").unwrap(),
+        title,
+        "the composer is written in, not left"
+    );
+    // Down until both lanes' heads (the third and fourth rows) stick, one under the other.
+    let at = title.center();
+    let mut both = false;
+    for _ in 0..20 {
+        cx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at,
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(-150.),
+            )),
+            modifiers: gpui_kit::Modifiers::default(),
+            ..Default::default()
+        });
+        redraw(cx);
+        redraw(cx);
+        both = cx.debug_bounds("timeline-stuck-2").is_some()
+            && cx.debug_bounds("timeline-stuck-3").is_some();
+        if both {
+            break;
+        }
+    }
+    assert!(both, "both lanes' heads stuck");
+    let above = cx.debug_bounds("timeline-stuck-2").unwrap();
+    click_on(cx, "timeline-stuck-3");
+    redraw(cx);
+    redraw(cx);
+    let row = cx.debug_bounds("timeline-row-3").expect("its row");
+    assert!(
+        row.top() >= above.bottom() - gpui_kit::px(1.),
+        "its row lands under the lane stuck above it: {row:?} under {above:?}"
+    );
+    assert!(
+        cx.debug_bounds("timeline-stuck-2").is_some(),
+        "the outer lane still stuck"
+    );
+    assert!(
+        cx.debug_bounds("timeline-stuck-3").is_none(),
+        "back in line"
+    );
+}

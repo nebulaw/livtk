@@ -32,7 +32,10 @@ fn livtk_with_stdin(dir: &Path, who: As, args: &[&str], stdin: Option<&str>) -> 
         )
         // Never the developer's own Claude Code: a stub, where a test puts one, and no agents.
         .env("LIVTK_CLAUDE", dir.join("claude-stub"))
-        .env("LIVTK_CLAUDE_HOME", dir.join(".claude-home"));
+        .env("LIVTK_CLAUDE_HOME", dir.join(".claude-home"))
+        // Never the session or task of a run the tests are run inside.
+        .env_remove("LIVTK_SESSION")
+        .env_remove("LIVTK_TASK");
     match who {
         As::Human => cmd.env_remove("CLAUDECODE"),
         As::Claude => cmd.env("CLAUDECODE", "1"),

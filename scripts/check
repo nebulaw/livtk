@@ -11,6 +11,9 @@
 # target/, so it compiles only what changed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Run inside a livtk run, the run's session and task are in the environment: the tests are no
+# run, so they never see them (a CLI test reads its session from LIVTK_SESSION).
+unset LIVTK_SESSION LIVTK_TASK
 
 step() {
   local label=$1 start=$SECONDS

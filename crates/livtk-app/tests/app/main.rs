@@ -20,4 +20,5 @@ mod projects;
 mod saved;
 mod style;
 mod terminal;
+mod timeline;
 mod ui;

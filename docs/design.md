@@ -122,7 +122,13 @@ menu still moves it).
   (title, plan, priority), P a project (outcome, why and how, done when, target, owner, part of,
   and Commit to it now, on). The dock's main button and an empty list make what the view lists.
   A new kind joins the form as a row of `Making` and its fields, never as another form.
-- **Composer** (the note bar at the foot of a panel): one `rounded_xl` card on `SURFACE` holding
+- **Timeline** (a node's Activity): one rail, oldest first, each event a 20px mark on it, each
+  kind its own glyph in the same circle (`ui/timeline/kinds.rs` is the one table). What happened
+  is solid; a Claude session's work steps onto a lane of its own and back, as a git graph's; four
+  or more small changes in a row fold into "N more changes"; notes are cards beside their
+  avatar. The composer is the rail's next point, after the latest event; the states still ahead
+  follow it, dashed and hollow. A dot travels the rail to where the node is now.
+- **Composer** (the note bar, the rail's next point in a node's panel): one `rounded_xl` card on `SURFACE` holding
   the text and a send button, nothing else; a `BORDER` hairline, `BORDER_STRONG` on hover,
   `ACCENT` while it has the keys. The send button, 24px at the bottom right, is quiet until there
   is text; its `ACCENT` fill then eases in (and out again as the text goes), a press shrinks it a

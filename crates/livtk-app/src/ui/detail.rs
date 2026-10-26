@@ -615,12 +615,7 @@ impl LivtkApp {
 
         let title = self.detail_title(n, cx);
         let body = self.detail_body(n, cx);
-        let mut timeline = div().flex().flex_col().gap_3();
-        for e in d.history.iter().rev() {
-            timeline = timeline
-                .child(event_line(e, &n.key))
-                .children(self.needs_you(d, e, cx));
-        }
+        let timeline = self.timeline_view(d, cx);
         div()
             .id(SharedString::from(format!("detail-{}", n.key)))
             .debug_selector(|| "detail-body-panel".into())
@@ -705,20 +700,12 @@ impl LivtkApp {
                     .child(section_label("Activity"))
                     .child(timeline),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .p_3()
-                    .border_t_1()
-                    .border_color(color(BORDER))
-                    .child(self.note_composer(cx)),
-            )
     }
 
     /// The note bar's one field, as Linear's comment box: its icon, the text and a send button
     /// in one rounded card. The send button lights once there is something to send and sends as
     /// Enter does; while the field has the keys, a hint under the text says how.
-    fn note_composer(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn note_composer(&self, cx: &mut Context<Self>) -> Div {
         let focused = self.note_focused;
         let field = self.note.read(cx);
         let ready = !field.value().trim().is_empty();

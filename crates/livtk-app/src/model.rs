@@ -22,6 +22,7 @@ mod palette;
 pub mod prefs;
 pub mod runs;
 mod saved;
+pub mod timeline;
 pub mod toasts;
 pub use activity::{FeedRow, INDENT, created_as, day_label, describe, note_markdown, reindent};
 pub use flow::{

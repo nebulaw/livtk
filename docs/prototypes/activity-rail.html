@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activity Rail</title>
+<!--
+  Prototype for TAS-92: a task's activity as one rail. Plain HTML, no dependencies.
+  - Each event is a mark on the rail; the rail runs through every mark.
+  - The human works on lane 0; a Claude run branches onto lane 1 and merges back.
+  - What happened is solid; what is still ahead (the states left to reach) is dashed, hollow.
+  - A marker travels the rail to where the task is now, and on to each new event.
+  Try: "Add event", "Replay", "Reduce motion", and click "N more changes".
+-->
+<style>
+  :root {
+    --bg: #0f1011;
+    --surface: #17181a;
+    --border: #26272b;
+    --text: #e6e8eb;
+    --text-2: #d0d6e0;
+    --text-3: #8a8f98;
+    --text-4: #62666d;
+    --accent: #5e6ad2;
+    --claude: #d97757;
+    --done: #4cb782;
+    --review: #2f9e9e;
+    --progress: #f2c94c;
+    --lane: 18px;     /* how far a lane sits from the one before */
+    --rail-x: 14px;   /* where lane 0 runs */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text-2);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  .panel {
+    width: 100%;
+    max-width: 420px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .label { font-size: 12px; font-weight: 500; color: var(--text-4); flex: 1; }
+  button {
+    height: 24px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: #3a3b40; color: var(--text); }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+
+  .timeline { position: relative; }
+  svg.rail { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  .row { position: relative; display: flex; gap: 10px; padding: 6px 0; min-height: 32px; }
+  .gutter { flex: none; position: relative; }
+  .mark {
+    position: absolute; top: 3px; width: 20px; height: 20px; margin-left: -10px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 10px; font-weight: 600;
+    background: var(--bg); border: 1.5px solid var(--text-4); color: var(--text-3);
+    transition: transform .3s cubic-bezier(.2,.9,.3,1.3), opacity .3s;
+  }
+  .mark.past { background: var(--surface); }
+  .mark.ahead { border-style: dashed; opacity: .55; }
+  .mark.now { border-color: var(--text); color: var(--text); }
+  .mark.new { transform: scale(0); }
+  .content { flex: 1; min-width: 0; padding-top: 3px; }
+  .line { color: var(--text-3); }
+  .line b { color: var(--text-2); font-weight: 500; }
+  .line .when { color: var(--text-4); font-size: 12px; }
+  .ahead .line, .row.ahead .line { color: var(--text-4); }
+  .card {
+    margin-top: 6px; padding: 10px 12px; border-radius: 8px;
+    background: #121314; border: 1px solid var(--border); color: var(--text);
+  }
+  .branch-name { font-size: 11px; color: var(--claude); margin-bottom: 2px; }
+  .fold { color: var(--text-4); cursor: pointer; font-size: 12px; padding-top: 4px; }
+  .fold:hover { color: var(--text-2); }
+  .needs {
+    display: inline-flex; gap: 6px; align-items: center; margin-top: 6px;
+    font-size: 12px; color: var(--accent);
+  }
+  .needs button { height: 22px; }
+  .needs .allow { background: var(--accent); border-color: var(--accent); color: white; }
+
+  /* Where the task is now: a dot that travels the rail and rests on the latest mark. */
+  .traveller {
+    position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+    background: var(--text); box-shadow: 0 0 0 3px rgba(94,106,210,.35), 0 0 12px rgba(94,106,210,.6);
+    pointer-events: none;
+  }
+  .reduce .mark { transition: none; }
+
+  /* The composer: the rail's next point. Your avatar waits hollow on the rail; the card beside
+     it is the note being written (the design's composer: one rounded card, hairline, a quiet
+     send button that fills with the accent once there is text). */
+  .mark.compose { border-style: dashed; border-color: var(--text-4); color: var(--text-4); background: var(--bg); }
+  .compose-row.writing .mark.compose { border-style: solid; border-color: var(--accent); color: var(--text); }
+  .composer {
+    position: relative; border-radius: 12px; background: var(--surface);
+    border: 1px solid var(--border); padding: 8px 40px 8px 12px; transition: border-color .15s;
+  }
+  .composer:hover { border-color: #34353a; }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer textarea {
+    width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--text);
+    font: inherit; line-height: 1.5; min-height: 20px; max-height: 160px; overflow-y: auto; display: block;
+  }
+  .composer textarea::placeholder { color: var(--text-4); }
+  .send {
+    position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px; padding: 0; border-radius: 8px;
+    display: grid; place-items: center; border: 1px solid var(--border); color: var(--text-4);
+    background: transparent; transition: background .2s, border-color .2s, color .2s, transform .12s;
+  }
+  .composer.has-text .send { background: var(--accent); border-color: var(--accent); color: white; }
+  .send:active { transform: scale(.88); }
+  .hint { font-size: 11px; color: var(--text-4); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="panel">
+  <div class="bar">
+    <div class="label">Activity</div>
+    <button id="add">Add event</button>
+    <button id="replay">Replay</button>
+    <button id="reduce" aria-pressed="false">Reduce motion</button>
+  </div>
+  <div class="timeline" id="timeline">
+    <svg class="rail" id="rail"></svg>
+    <div id="rows"></div>
+    <div class="traveller" id="traveller"></div>
+  </div>
+</div>
+
+<script>
+// ---- The task's events, oldest first. `lane`: 0 the human's rail, 1 a Claude run's.
+// `ahead`: a state still to reach, drawn hollow on the dashed part.
+// Kinds, one table: each its glyph, colour, and whether a run of them folds.
+const KINDS = {
+  created: { glyph: "＋", color: "var(--text-3)", folds: false },
+  state:   { glyph: "◐", color: "var(--progress)", folds: true },
+  link:    { glyph: "⛓", color: "var(--text-3)", folds: true },
+  note:    { glyph: "K", color: "var(--text-2)", folds: false },
+  run:     { glyph: "✳", color: "var(--claude)", folds: false },
+  ask:     { glyph: "?", color: "var(--accent)", folds: false },
+  done:    { glyph: "✓", color: "var(--done)", folds: false },
+};
+let events = [
+  { kind: "created", lane: 0, by: "you", text: "created it", when: "2h" },
+  { kind: "state", lane: 0, by: "you", text: "moved it to Backlog", when: "2h" },
+  { kind: "state", lane: 0, by: "you", text: "set priority to High", when: "2h" },
+  { kind: "link", lane: 0, by: "you", text: "linked TAS-90", when: "2h" },
+  { kind: "state", lane: 0, by: "you", text: "moved it to Planned", when: "1h" },
+  { kind: "state", lane: 0, by: "you", text: "acked it", when: "1h" },
+  { kind: "run", lane: 1, by: "Claude", text: "started building", when: "58m", branch: "Claude · build" },
+  { kind: "note", lane: 1, by: "Claude", text: "Built the core blocks module; the app's editor next.", when: "40m", card: true },
+  { kind: "ask", lane: 1, by: "Claude", text: "asks to run <code>cargo test</code>", when: "12m", needs: true },
+  { kind: "note", lane: 0, by: "you", text: "Wow so cool", when: "5m", card: true },
+  { kind: "state", lane: 0, by: "you", text: "Review", ahead: true },
+  { kind: "done", lane: 0, by: "", text: "Done", ahead: true },
+];
+const MORE = [
+  { kind: "note", lane: 1, by: "Claude", text: "Allowed — tests pass. Moving it to review.", when: "just now", card: true },
+  { kind: "run", lane: 1, by: "Claude", text: "ended the run", when: "just now", merge: true },
+  { kind: "state", lane: 0, by: "Claude", text: "moved it to Review", when: "just now", replaces: "Review" },
+];
+const FOLD_AT = 4;          // a run of this many foldable events folds
+let unfolded = new Set();   // fold groups opened
+let reduce = false;
+
+const rowsEl = document.getElementById("rows");
+const rail = document.getElementById("rail");
+const traveller = document.getElementById("traveller");
+const laneX = l => 14 + l * 18;
+
+// ---- Model: events into rows (folding), as model::timeline would.
+function layout(evts) {
+  const rows = [];
+  for (let i = 0; i < evts.length; ) {
+    let j = i;
+    while (j < evts.length && KINDS[evts[j].kind].folds && !evts[j].ahead && evts[j].lane === evts[i].lane) j++;
+    if (j - i >= FOLD_AT && !unfolded.has(i)) {
+      rows.push({ ...evts[i] });
+      rows.push({ fold: true, group: i, count: j - i - 1, lane: evts[i].lane });
+      i = j;
+    } else {
+      rows.push({ ...evts[i] });
+      i += 1;
+    }
+  }
+  return rows;
+}
+
+// ---- The composer: one row, made once (so what is typed survives a redraw), placed at the
+// rail's next point: after the last thing that happened, before what is still ahead.
+const composeRow = document.createElement("div");
+composeRow.className = "row compose-row";
+composeRow.dataset.lane = 0;
+composeRow.dataset.compose = "1";
+composeRow.innerHTML = `
+  <div class="gutter"><div class="mark compose" style="left:${14}px">K</div></div>
+  <div class="content">
+    <div class="composer">
+      <textarea rows="1" placeholder="Leave a note…"></textarea>
+      <button class="send" title="Send · Enter">↑</button>
+    </div>
+    <div class="hint">Enter sends · Shift+Enter a new line</div>
+  </div>`;
+const field = composeRow.querySelector("textarea");
+const composer = composeRow.querySelector(".composer");
+const grow = () => {
+  field.style.height = "auto";
+  field.style.height = field.scrollHeight + "px";
+  const has = field.value.trim().length > 0;
+  composer.classList.toggle("has-text", has);
+  composeRow.classList.toggle("writing", has);
+  drawRail(false, true);
+};
+const send = () => {
+  const text = field.value.trim();
+  if (!text) return;
+  const firstAhead = events.findIndex(e => e.ahead);
+  events.splice(firstAhead < 0 ? events.length : firstAhead, 0,
+    { kind: "note", lane: 0, by: "you", text: text.replace(/</g, "&lt;").replace(/\n/g, "<br>"), when: "just now", card: true });
+  field.value = "";
+  grow();
+  render(true);
+  field.focus();
+};
+field.addEventListener("input", grow);
+field.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+composeRow.querySelector(".send").onclick = send;
+
+// ---- Draw rows, then the rail through their marks.
+function render(animateNew) {
+  const rows = layout(events);
+  const lanes = Math.max(...events.map(e => e.lane)) + 1;
+  rowsEl.innerHTML = "";
+  rows.forEach((r, k) => {
+    const row = document.createElement("div");
+    row.className = "row" + (r.ahead ? " ahead" : "");
+    const gutter = document.createElement("div");
+    gutter.className = "gutter";
+    gutter.style.width = (laneX(lanes - 1) + 16) + "px";
+    if (!r.fold) {
+      const mark = document.createElement("div");
+      const kind = KINDS[r.kind];
+      const isNow = !r.ahead && rows.slice(k + 1).every(x => x.ahead || x.fold);
+      mark.className = "mark " + (r.ahead ? "ahead" : "past") + (isNow ? " now" : "") + (animateNew && k === rows.findLastIndex(x => !x.ahead) ? " new" : "");
+      mark.style.left = laneX(r.lane) + "px";
+      mark.style.color = kind.color;
+      if (!r.ahead) mark.style.borderColor = kind.color;
+      mark.textContent = r.kind === "note" ? (r.by === "you" ? "K" : "C") : kind.glyph;
+      gutter.appendChild(mark);
+      row.dataset.lane = r.lane;
+    }
+    const content = document.createElement("div");
+    content.className = "content";
+    if (r.fold) {
+      content.innerHTML = `<div class="fold">${r.count} more changes</div>`;
+      content.firstChild.onclick = () => { unfolded.add(r.group); render(false); };
+    } else {
+      const pad = r.lane * 18;
+      content.style.paddingLeft = pad + "px";
+      let html = r.branch ? `<div class="branch-name">${r.branch}</div>` : "";
+      if (r.ahead) html += `<div class="line">${r.text}</div>`;
+      else if (r.card) html += `<div class="line"><b>${r.by}</b> <span class="when">· ${r.when}</span></div><div class="card">${r.text}</div>`;
+      else html += `<div class="line"><b>${r.by}</b> ${r.text} <span class="when">· ${r.when}</span></div>`;
+      if (r.needs) html += `<div class="needs">Needs you <button>Deny</button><button class="allow">Allow</button></div>`;
+      content.innerHTML = html;
+    }
+    row.appendChild(gutter);
+    row.appendChild(content);
+    rowsEl.appendChild(row);
+    if (r.fold) row.dataset.lane = r.lane;
+  });
+  // The composer at the rail's next point.
+  composeRow.querySelector(".gutter").style.width = (laneX(lanes - 1) + 16) + "px";
+  rowsEl.insertBefore(composeRow, rowsEl.querySelector(".row.ahead"));
+  requestAnimationFrame(() => drawRail(animateNew));
+}
+
+// The rail: through each row's mark; a lane change slants, as in a git graph.
+function drawRail(animateNew, still) {
+  const box = document.getElementById("timeline").getBoundingClientRect();
+  const pts = [...rowsEl.children].map(row => {
+    const m = row.querySelector(".mark");
+    const r = (m || row).getBoundingClientRect();
+    return {
+      x: laneX(+row.dataset.lane),
+      y: m ? r.top - box.top + r.height / 2 : r.top - box.top + 14,
+      ahead: row.classList.contains("ahead"),
+      compose: row.dataset.compose === "1",
+    };
+  });
+  const seg = (a, b) => {
+    if (a.x === b.x) return ` L ${b.x} ${b.y}`;
+    const turn = Math.min(14, (b.y - a.y) / 2);
+    return ` L ${a.x} ${b.y - turn * 2} L ${b.x} ${b.y - turn} L ${b.x} ${b.y}`;
+  };
+  const path = (from, to) => {
+    let d = `M ${pts[from].x} ${pts[from].y}`;
+    for (let i = from + 1; i <= to; i++) d += seg(pts[i - 1], pts[i]);
+    return d;
+  };
+  // What happened, solid; on to the composer, the next point, in the accent (brighter while a
+  // note is being written); what is still ahead, dashed.
+  const lastPast = pts.findLastIndex(p => !p.ahead && !p.compose);
+  const compose = pts.findIndex(p => p.compose);
+  const writing = composeRow.classList.contains("writing");
+  rail.innerHTML = `
+    <path id="past" d="${path(0, lastPast)}" fill="none" stroke="#8a8f98" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="${path(lastPast, compose)}" fill="none" stroke="#5e6ad2" stroke-opacity="${writing ? 1 : 0.45}" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="${path(compose, pts.length - 1)}" fill="none" stroke="#62666d" stroke-width="1.5" stroke-dasharray="4 5" stroke-linejoin="round"/>`;
+  const past = document.getElementById("past");
+  if (still) {
+    const end = past.getPointAtLength(past.getTotalLength());
+    traveller.style.left = end.x + "px";
+    traveller.style.top = end.y + "px";
+  } else {
+    travel(past, animateNew);
+  }
+}
+
+// The marker travels the solid rail to where the task is now.
+let travelling = 0;
+function travel(path, fromPrevious) {
+  const total = path.getTotalLength();
+  const start = fromPrevious ? Math.max(0, (travel.last || 0)) : 0;
+  const put = len => {
+    const p = path.getPointAtLength(len);
+    traveller.style.left = p.x + "px";
+    traveller.style.top = p.y + "px";
+  };
+  cancelAnimationFrame(travelling);
+  document.querySelectorAll(".mark.new").forEach(m => setTimeout(() => m.classList.remove("new"), reduce ? 0 : 500));
+  if (reduce) { put(total); travel.last = total; return; }
+  const dur = Math.min(2400, 400 + (total - start) * 2.2);
+  const t0 = performance.now();
+  const ease = t => 1 - Math.pow(1 - t, 3);
+  const step = now => {
+    const t = Math.min(1, (now - t0) / dur);
+    put(start + (total - start) * ease(t));
+    if (t < 1) travelling = requestAnimationFrame(step);
+    else travel.last = total;
+  };
+  travelling = requestAnimationFrame(step);
+}
+
+document.getElementById("add").onclick = () => {
+  const next = MORE.shift();
+  if (!next) return;
+  if (next.replaces) events = events.filter(e => !(e.ahead && e.text === next.replaces));
+  const firstAhead = events.findIndex(e => e.ahead);
+  events.splice(firstAhead < 0 ? events.length : firstAhead, 0, next);
+  render(true);
+};
+document.getElementById("replay").onclick = () => { travel.last = 0; render(false); };
+document.getElementById("reduce").onclick = e => {
+  reduce = !reduce;
+  e.target.setAttribute("aria-pressed", reduce);
+  document.body.classList.toggle("reduce", reduce);
+};
+window.addEventListener("resize", () => drawRail(false, true));
+render(false);
+</script>
+</body>
+</html>

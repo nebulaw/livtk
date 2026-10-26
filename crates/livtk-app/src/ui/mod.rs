@@ -33,6 +33,7 @@ pub mod terminal;
 mod terminals;
 mod text;
 mod theme;
+mod timeline;
 
 use detail::*;
 use dock::*;
@@ -843,6 +844,10 @@ pub struct LivtkApp {
     editing: Option<Editing>,
     /// How tall each in-place text last read, so its editor opens no shorter.
     read_heights: text::ReadHeights,
+    /// The timeline's rail between frames: its points, and the dot's travel.
+    rail: timeline::RailState,
+    /// The timeline's folds opened, by their key.
+    unfolded: std::collections::HashSet<Uuid>,
     /// Each block of a body as last drawn, to read where a click fell in its source.
     block_views: text::BlockViews,
     /// The detail panel's last frame while open, kept to animate it out after it closes.
@@ -1075,6 +1080,8 @@ impl LivtkApp {
             editing: None,
             read_heights: text::ReadHeights::default(),
             block_views: text::BlockViews::default(),
+            rail: timeline::RailState::default(),
+            unfolded: std::collections::HashSet::new(),
             last_detail: None,
             detail_leaving: None,
             detail_epoch: 0,
@@ -3991,40 +3998,7 @@ fn who(by: &str) -> &str {
 /// One event of the timeline of the node keyed `key` now.
 pub(super) fn event_line(e: &Event, key: &str) -> Div {
     let when = ago(&e.at);
-    let what = match &e.op {
-        Op::NodeCreate { .. } => match created_as(e, key) {
-            Some(first) => format!("created it as {first}"),
-            None => "created it".to_owned(),
-        },
-        Op::NodeSet { data, .. } => {
-            let mut parts = Vec::new();
-            if let Some(s) = data.state {
-                parts.push(format!("moved it to {}", title_case(s.as_str())));
-            }
-            if data.title.is_some() {
-                parts.push("renamed it".into());
-            }
-            if data.body.is_some() {
-                parts.push("edited the plan".into());
-            }
-            if let Some(p) = data.priority {
-                parts.push(format!(
-                    "set priority to {}",
-                    PRIORITY_NAMES[usize::from(p.get().clamp(1, 4) - 1)]
-                ));
-            }
-            if data.props.is_some() {
-                parts.push("changed its scope".into());
-            }
-            parts.join(", ")
-        }
-        Op::NodeNote { data, .. } => data.text.clone(),
-        Op::EdgeAdd { data } => format!("linked: {}", data.rel),
-        Op::EdgeRemove { data } => format!("unlinked: {}", data.rel),
-        Op::DocLink { data, .. } => format!("linked the doc {}", data.path),
-        Op::DocUnlink { data, .. } => format!("unlinked the doc {}", data.path),
-        Op::NodeSession { data, .. } => livtk_core::format::claim(data),
-    };
+    let what = timeline::line(e, key);
     let human = e.by == "human";
     let note = matches!(e.op, Op::NodeNote { .. });
     let head = div()

@@ -5965,3 +5965,113 @@ fn down_from_an_emptied_block_opens_the_next(cx: &mut TestAppContext) {
         "the emptied one gone"
     );
 }
+
+/// The bounds of a timeline row's mark, by its place on the rail.
+fn rail_mark(
+    cx: &mut gpui_kit::VisualTestContext,
+    order: usize,
+) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+    cx.debug_bounds(Box::leak(format!("timeline-mark-{order}").into_boxed_str()))
+}
+
+/// A task's activity is one rail, oldest first: each event a mark on it in order; the work of
+/// a Claude session on a lane of its own; small changes in a row folded until opened; the note
+/// composer at the rail's next point, after the latest event and before the states ahead; a note
+/// sent from it joins the rail there.
+#[gpui_kit::test]
+fn a_tasks_activity_is_one_rail(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for title in ["a", "b", "c", "d", "e"] {
+            ws.execute(
+                Command::Edit {
+                    node: "LIV-1".into(),
+                    title: Some(title.into()),
+                    body: None,
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+        }
+        ws.set_session(Some("sess-r".into()));
+        for text in ["on it", "done here"] {
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text: text.into(),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let history = Workspace::open(dir.path())
+        .unwrap()
+        .history(Some("LIV-1"))
+        .unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    // Oldest first, down the rail.
+    let first = rail_mark(cx, 0).expect("the first event's mark");
+    let second = rail_mark(cx, 1).expect("the next");
+    assert!(first.origin.y < second.origin.y, "oldest first");
+    // The five renames fold past the first.
+    let fold = (0..history.len() + 4)
+        .find_map(|i| {
+            let sel: &'static str = Box::leak(
+                format!("timeline-fold-{}", history[i.min(history.len() - 1)].id).into_boxed_str(),
+            );
+            cx.debug_bounds(sel).map(|_| sel)
+        })
+        .expect("the renames folded");
+    let rows_before = (0..40).filter(|&i| rail_mark(cx, i).is_some()).count();
+    click_on(cx, fold);
+    redraw(cx);
+    let rows_after = (0..40).filter(|&i| rail_mark(cx, i).is_some()).count();
+    assert!(
+        rows_after >= rows_before + 3,
+        "opened: the folded changes show ({rows_before} -> {rows_after})"
+    );
+    assert!(cx.debug_bounds(fold).is_none(), "the fold goes");
+    // Claude's session on its own lane, right of the rail.
+    let marks: Vec<_> = (0..rows_after).filter_map(|i| rail_mark(cx, i)).collect();
+    let rail_x = marks[0].origin.x;
+    assert!(
+        marks.iter().any(|m| m.origin.x > rail_x),
+        "a lane of its own for the session"
+    );
+    // The composer after the latest event, before what is ahead.
+    let composer = cx
+        .debug_bounds("note-composer")
+        .expect("the composer on the rail");
+    let latest = marks
+        .iter()
+        .filter(|m| m.origin.y < composer.origin.y)
+        .count();
+    assert!(latest >= history.len(), "every event above the composer");
+    assert!(
+        marks.iter().any(|m| m.origin.y > composer.origin.y),
+        "the states ahead below it"
+    );
+    // A note sent from it joins the rail just above it.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("from the rail");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    redraw(cx);
+    let all = Workspace::open(dir.path())
+        .unwrap()
+        .history(Some("LIV-1"))
+        .unwrap();
+    assert_eq!(all.len(), history.len() + 1);
+    let composer_after = cx.debug_bounds("note-composer").unwrap();
+    assert!(
+        composer_after.origin.y > composer.origin.y,
+        "the composer moved down past it"
+    );
+    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), ""));
+}

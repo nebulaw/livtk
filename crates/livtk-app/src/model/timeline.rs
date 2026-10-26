@@ -1,7 +1,13 @@
-//! A node's activity as a timeline on a rail: its events in order, each a mark on the rail, the
-//! work of each Claude session on a lane of its own (branching off at its first event, merging
-//! back after its last), runs of small changes folded, and the states still ahead after the
-//! last. Plain logic, tested on its own: the rail draws exactly this.
+//! A node's activity as a timeline on a rail: its events in order, each a mark on it, runs of
+//! small changes folded, and the states still ahead after the last. Plain logic, tested on its
+//! own: the rail draws exactly this.
+//!
+//! Two levels. The rail (lane 0) is the node's life: its making, every state move outside an
+//! agent's own work, the human's words and edits, and bookkeeping. A lane is one *stint*, one
+//! agent working on it: a run from its start to its end, or an interactive agent (its actor and
+//! its conversation) from its first event after a move to its own move, which is its last
+//! mark, or to the event before someone else's move. A move closes every stint but a run still
+//! going. Stints at once take lanes side by side, as a git graph's.
 
 use std::collections::HashMap;
 
@@ -78,12 +84,22 @@ impl Mark {
                 | Mark::Session
         )
     }
+
+    /// Whether it is on the rail whoever wrote it: the node's making and bookkeeping.
+    pub const fn on_rail(self) -> bool {
+        matches!(self, Mark::Created | Mark::Session)
+    }
+
+    /// Whether it ends the stints open before it, all but a run still going: a state move.
+    pub const fn resets(self) -> bool {
+        matches!(self, Mark::Moved(_))
+    }
 }
 
 /// What a line of the timeline is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
-    /// The event `at` in the node's history, on `lane`; `opens` when its session's lane
+    /// The event `at` in the node's history, on `lane`; `opens` when its stint's lane
     /// branches off here, `closes` when it merges back after it.
     Event {
         at: usize,
@@ -118,20 +134,60 @@ impl Timeline {
     }
 }
 
-/// The session an event belongs to, for its lane: the run a run's note marks, whoever wrote it
-/// (a run started, answered or stopped from the app is written as the human); else the one
-/// Claude wrote it from. The human's own are on the rail itself.
-fn session_of(e: &Event) -> Option<&str> {
-    if let Op::NodeNote { data, .. } = &e.op
-        && let Some(run) = &data.run
-    {
-        return Some(run.session.as_str());
+/// Who works a stint: a run, by its session, whoever wrote its notes (a run started, answered
+/// or stopped from the app is written as the human); or an interactive agent, its actor and
+/// conversation (none for Claude's events from before sessions were recorded).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Worker<'a> {
+    Run(&'a str),
+    Agent(&'a str, Option<&'a str>),
+}
+
+/// Which stint each event is in, numbered in the order they open; `None` on the rail.
+fn stints_of(events: &[Event]) -> Vec<Option<usize>> {
+    let mut open: HashMap<Worker<'_>, usize> = HashMap::new();
+    let mut opened = 0;
+    let mut stints = Vec::with_capacity(events.len());
+    for e in events {
+        let mark = Mark::of(e);
+        let run = match &e.op {
+            Op::NodeNote { data, .. } => data.run.as_ref(),
+            _ => None,
+        };
+        // Whose work it is: none on the rail.
+        let worker = if let Some(run) = run {
+            Some(Worker::Run(run.session.as_str()))
+        } else if mark.on_rail() || e.by == "human" {
+            None
+        } else {
+            match e.session.as_deref() {
+                // A run's own work, on its lane.
+                Some(s) if open.contains_key(&Worker::Run(s)) => Some(Worker::Run(s)),
+                session => Some(Worker::Agent(e.by.as_str(), session)),
+            }
+        };
+        let stint = worker.and_then(|w| match open.get(&w) {
+            Some(&s) => Some(s),
+            // A move with no stint of its own open is on the rail.
+            None if mark.resets() && matches!(w, Worker::Agent(..)) => None,
+            None => {
+                open.insert(w, opened);
+                opened += 1;
+                Some(opened - 1)
+            }
+        });
+        if mark == Mark::Run(RunStep::Ended)
+            && let Some(w) = worker
+        {
+            open.remove(&w);
+        }
+        // A move ends every stint open before it but a run still going; its own, after it.
+        if mark.resets() {
+            open.retain(|w, _| matches!(w, Worker::Run(_)));
+        }
+        stints.push(stint);
     }
-    if e.by == "human" {
-        None
-    } else {
-        e.session.as_deref()
-    }
+    stints
 }
 
 /// The timeline of `events` (a node's history, oldest first), a node of `kind` now in `state`;
@@ -142,25 +198,26 @@ pub fn timeline(
     state: State,
     open: impl Fn(Uuid) -> bool,
 ) -> Timeline {
-    // Each session's first and last event: where its lane branches off and merges back.
-    let mut span: HashMap<&str, (usize, usize)> = HashMap::new();
-    for (i, e) in events.iter().enumerate() {
-        if let Some(s) = session_of(e) {
+    let stints = stints_of(events);
+    // Each stint's first and last event: where its lane branches off and merges back.
+    let mut span: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (i, s) in stints.iter().enumerate() {
+        if let Some(s) = *s {
             span.entry(s)
                 .and_modify(|(_, last)| *last = i)
                 .or_insert((i, i));
         }
     }
-    // Lanes, as a git graph's: a session takes the lowest free one past the rail's while it
+    // Lanes, as a git graph's: a stint takes the lowest free one past the rail's while it
     // works, and gives it back after its last event.
-    let mut held: Vec<Option<&str>> = Vec::new();
+    let mut held: Vec<Option<usize>> = Vec::new();
     let mut lanes = 1;
     let mut placed = Vec::with_capacity(events.len());
     for (i, e) in events.iter().enumerate() {
-        let (lane, opens, closes) = match session_of(e) {
+        let (lane, opens, closes) = match stints[i] {
             None => (0, false, false),
             Some(s) => {
-                let (first, last) = span[s];
+                let (first, last) = span[&s];
                 let lane = if i == first {
                     let free = held.iter().position(Option::is_none);
                     let ix = free.unwrap_or_else(|| {

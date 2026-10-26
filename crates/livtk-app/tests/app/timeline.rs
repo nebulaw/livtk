@@ -1,9 +1,9 @@
-//! A node's activity laid out on a rail: lanes for Claude's sessions, folds for runs of small
+//! A node's activity laid out on a rail: lanes for agents' stints, folds for runs of small
 //! changes, the states still ahead. Plain logic, tested without a window.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // a test that cannot set up should panic
 
 use livtk_app::model::timeline::{FOLD_AT, Item, Mark, RunStep, ahead_of, timeline};
-use livtk_core::event::{EdgeData, NodePatch, NoteData, Op, RunData, RunMark, Stage};
+use livtk_core::event::{EdgeData, NodeData, NodePatch, NoteData, Op, RunData, RunMark, Stage};
 use livtk_core::{Actor, Event, Kind, Rel, State};
 use uuid::Uuid;
 
@@ -15,11 +15,14 @@ impl Log {
         Log(Vec::new(), Uuid::now_v7())
     }
 
+    /// `by` as the log writes it: `human`, `claude` or `claude:AGENT`.
     fn push(&mut self, by: &str, session: Option<&str>, op: Op) -> &mut Log {
-        let actor = if by == "human" {
-            Actor::Human
-        } else {
-            Actor::Claude { agent: None }
+        let actor = match by.split_once(':') {
+            _ if by == "human" => Actor::Human,
+            Some((_, agent)) => Actor::Claude {
+                agent: Some(agent.into()),
+            },
+            None => Actor::Claude { agent: None },
         };
         let mut e = Event::new(self.0.last().map(|e| e.id), &actor, op);
         e.session = session.map(str::to_owned);
@@ -27,11 +30,35 @@ impl Log {
         self
     }
 
-    fn moved(&mut self, by: &str, to: State) -> &mut Log {
+    fn created(&mut self, by: &str, session: Option<&str>) -> &mut Log {
         let node = self.1;
         self.push(
             by,
-            None,
+            session,
+            Op::NodeCreate {
+                node,
+                data: NodeData {
+                    kind: Kind::Task,
+                    key: "TAS-1".into(),
+                    title: "t".into(),
+                    body: String::new(),
+                    state: State::Backlog,
+                    priority: livtk_core::model::Priority::DEFAULT,
+                    props: serde_json::Map::new(),
+                },
+            },
+        )
+    }
+
+    fn moved(&mut self, by: &str, to: State) -> &mut Log {
+        self.moved_in(by, None, to)
+    }
+
+    fn moved_in(&mut self, by: &str, session: Option<&str>, to: State) -> &mut Log {
+        let node = self.1;
+        self.push(
+            by,
+            session,
             Op::NodeSet {
                 node,
                 data: NodePatch {
@@ -293,4 +320,118 @@ fn a_runs_notes_stay_on_its_lane_whoever_wrote_them() {
         matches!(t.items[6], Item::Event { closes: true, .. }),
         "merges at its end"
     );
+}
+
+fn flags_of(items: &[Item]) -> Vec<(bool, bool)> {
+    items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Event { opens, closes, .. } => Some((*opens, *closes)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_making_and_moves_outside_a_stint_are_on_the_rail_whoever_made_them() {
+    let mut log = Log::new();
+    log.created("claude", Some("c"))
+        .moved_in("claude", Some("c"), State::Planned)
+        .moved("human", State::Acked)
+        .moved_in("claude", Some("c"), State::Doing);
+    let t = timeline(&log.0, Kind::Task, State::Doing, |_| false);
+    assert_eq!(lanes_of(&t.items), [0, 0, 0, 0]);
+    assert_eq!(t.lanes, 1);
+}
+
+#[test]
+fn an_agents_work_after_a_move_is_a_lane_its_own_move_closes() {
+    let mut log = Log::new();
+    log.created("human", None)
+        .moved("human", State::Acked)
+        .note("claude", Some("c"))
+        .linked("claude", Some("c"))
+        .moved_in("claude", Some("c"), State::Review);
+    let t = timeline(&log.0, Kind::Task, State::Review, |_| false);
+    assert_eq!(lanes_of(&t.items), [0, 0, 1, 1, 1]);
+    let flags = flags_of(&t.items);
+    assert_eq!(flags[2], (true, false), "branches off at its first event");
+    assert_eq!(flags[4], (false, true), "its hand-off is its last mark");
+}
+
+#[test]
+fn your_move_closes_the_stints_before_it_and_the_next_event_opens_one() {
+    let mut log = Log::new();
+    log.note("claude", Some("c"))
+        .note("claude", Some("c"))
+        .moved("human", State::Doing)
+        .note("claude", Some("c"));
+    let t = timeline(&log.0, Kind::Task, State::Doing, |_| false);
+    assert_eq!(lanes_of(&t.items), [1, 1, 0, 1]);
+    let flags = flags_of(&t.items);
+    assert_eq!(flags[1], (false, true), "merges back before your move");
+    assert_eq!(flags[3], (true, true), "the same conversation, a new stint");
+}
+
+#[test]
+fn a_run_keeps_one_lane_from_start_to_end_across_moves_and_answers() {
+    let mut log = Log::new();
+    log.run_by("human", "r", RunMark::Started)
+        .note("claude", Some("r"))
+        .moved_in("claude", Some("r"), State::Doing)
+        .run_by("human", "r", RunMark::Allowed)
+        .moved("human", State::Review)
+        .note("claude", Some("r"))
+        .run(
+            "r",
+            RunMark::Ended {
+                how: livtk_core::event::Ending::Done,
+            },
+        );
+    let t = timeline(&log.0, Kind::Task, State::Review, |_| false);
+    assert_eq!(lanes_of(&t.items), [1, 1, 1, 1, 0, 1, 1]);
+    let flags = flags_of(&t.items);
+    assert_eq!(flags[0], (true, false));
+    assert!(
+        flags[1..6].iter().all(|f| *f == (false, false)),
+        "{flags:?}"
+    );
+    assert_eq!(flags[6], (false, true));
+    assert_eq!(t.lanes, 2);
+}
+
+#[test]
+fn a_sub_agent_in_one_conversation_is_a_lane_of_its_own() {
+    let mut log = Log::new();
+    log.note("claude", Some("c"))
+        .note("claude:refuter", Some("c"))
+        .note("claude", Some("c"))
+        .note("claude:refuter", Some("c"));
+    let t = timeline(&log.0, Kind::Task, State::Review, |_| false);
+    assert_eq!(lanes_of(&t.items), [1, 2, 1, 2]);
+}
+
+#[test]
+fn claudes_events_without_a_session_are_a_stint_not_the_rail() {
+    let mut log = Log::new();
+    log.note("claude", None)
+        .linked("claude", None)
+        .note("human", None);
+    let t = timeline(&log.0, Kind::Task, State::Doing, |_| false);
+    assert_eq!(lanes_of(&t.items), [1, 1, 0]);
+}
+
+#[test]
+fn stints_between_the_same_moves_take_lanes_side_by_side_and_free_them() {
+    let mut log = Log::new();
+    log.note("claude", Some("a"))
+        .note("claude", Some("b"))
+        .note("claude", Some("a"))
+        .note("claude", Some("b"))
+        .moved("human", State::Review)
+        // Both ended at the move; `c` takes the first lane again.
+        .note("claude", Some("c"));
+    let t = timeline(&log.0, Kind::Task, State::Review, |_| false);
+    assert_eq!(lanes_of(&t.items), [1, 2, 1, 2, 0, 1]);
+    assert_eq!(t.lanes, 3);
 }

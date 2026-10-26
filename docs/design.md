@@ -124,7 +124,13 @@ menu still moves it).
   A new kind joins the form as a row of `Making` and its fields, never as another form.
 - **Timeline** (a node's Activity): one rail, oldest first, each event a 20px mark on it, each
   kind its own glyph in the same circle (`ui/timeline/kinds.rs` is the one table). What happened
-  is solid; a Claude session's work steps onto a lane of its own and back, as a git graph's; four
+  is solid. Two levels (`model/timeline.rs` holds the rules): the rail is the node's life (its
+  making, every move outside an agent's own work, the human's words, bookkeeping); a lane is one
+  stint, one agent's work, stepping off and back as a git graph's. A run's stint lasts from
+  Started to Ended. An interactive agent's (its actor and conversation, so a refuter is its own)
+  starts at its first event after a move and ends at its own move, its last mark. Every move
+  resets to the rail, all but a run still going; lanes go side by side only for stints at once,
+  never nested. Four
   or more small changes in a row fold into "N more changes"; notes are cards beside their
   avatar. The composer is the rail's next point, after the latest event; the states still ahead
   follow it, dashed and hollow. A dot travels the rail to where the node is now.

@@ -6361,3 +6361,58 @@ fn a_build_does_its_job_and_a_push_is_refused_without_asking(cx: &mut TestAppCon
     click_on(cx, "run-stop");
     until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
 }
+
+/// A run's last word, several lines of markdown, reads as a card on the rail: every row of the
+/// timeline below the one above, nothing drawn over another.
+#[gpui_kit::test]
+fn a_runs_long_last_note_never_spills_over_the_rows_below(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        let run = |mark| livtk_core::event::RunData {
+            session: "sess-long".into(),
+            agent: None,
+            stage: livtk_core::run::Stage::Plan,
+            mark,
+        };
+        for (mark, text) in [
+            (livtk_core::event::RunMark::Started, "Started to plan it."),
+            (
+                livtk_core::event::RunMark::Ended {
+                    how: livtk_core::event::Ending::Done,
+                },
+                "LIV-1 now has a plan and is in **planned**.\n\n**The plan**\n- one\n- two\n- three",
+            ),
+        ] {
+            ws.execute(
+                Command::RunNote {
+                    node: "LIV-1".into(),
+                    text: text.into(),
+                    run: run(mark),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1400.);
+    open_detail(cx);
+    redraw(cx);
+    let rows: Vec<_> = (0..40)
+        .filter_map(|i| cx.debug_bounds(Box::leak(format!("timeline-row-{i}").into_boxed_str())))
+        .collect();
+    assert!(rows.len() >= 4, "{rows:?}");
+    for pair in rows.windows(2) {
+        assert!(
+            pair[1].top() >= pair[0].bottom(),
+            "a row starts below the one above: {pair:?}"
+        );
+    }
+    // The last word is a card, tall enough for its lines.
+    assert!(
+        rows.iter().any(|r| r.size.height > gpui_kit::px(80.)),
+        "the note's card holds its lines"
+    );
+}

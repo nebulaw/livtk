@@ -552,7 +552,9 @@ impl LivtkApp {
                         .min_w_0()
                         .truncate()
                         .text_color(color(TEXT_3))
-                        .child(what.clone()),
+                        // A line keeps to one: never a text's line breaks, which would leave
+                        // its row.
+                        .child(what.lines().next().unwrap_or_default().to_owned()),
                 )
             })
             .child(

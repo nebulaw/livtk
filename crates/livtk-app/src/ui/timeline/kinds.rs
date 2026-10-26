@@ -108,9 +108,13 @@ pub(in crate::ui) fn line(e: &Event, key: &str) -> String {
     }
 }
 
-/// Whether `e` reads as what was said (a card), not as a line.
+/// Whether `e` reads as what was said (a card, its markdown rendered), not as a line: a note, a
+/// run's question, and a run's end (Claude's last word on it, often several lines).
 pub(in crate::ui) fn is_said(mark: Mark) -> bool {
-    matches!(mark, Mark::Note { .. } | Mark::Run(RunStep::Asks))
+    matches!(
+        mark,
+        Mark::Note { .. } | Mark::Run(RunStep::Asks | RunStep::Ended)
+    )
 }
 
 /// Where a line of the timeline sticks while the panel is scrolled past it: to the panel's top,

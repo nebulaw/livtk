@@ -42,24 +42,16 @@ struct RailPoint {
     spot: Spot,
 }
 
-/// Where a row's mark sits on the rail: its lane, which part of the rail, and whether its
-/// session's lane branches off or merges back there.
+/// Where a row's mark sits on the rail: its lane, and which part of the rail.
 #[derive(Clone, Copy, Debug)]
 struct Spot {
     lane: usize,
     part: Part,
-    opens: bool,
-    closes: bool,
 }
 
 impl Spot {
     const fn on(lane: usize, part: Part) -> Spot {
-        Spot {
-            lane,
-            part,
-            opens: false,
-            closes: false,
-        }
+        Spot { lane, part }
     }
 }
 
@@ -174,12 +166,7 @@ impl LivtkApp {
                     let content = self.event_content(d, e, *mark, cx);
                     self.rail_row(
                         order,
-                        Spot {
-                            lane: *lane,
-                            part: Part::Past,
-                            opens: *opens,
-                            closes: *closes,
-                        },
+                        Spot::on(*lane, Part::Past),
                         mark_view(*mark, n.kind, false),
                         new,
                         content,
@@ -377,6 +364,21 @@ impl LivtkApp {
             .iter()
             .filter_map(|&o| stuck_row(o, self, cx))
             .collect();
+        // The rail runs on through what is stuck, into the rows under it: no edge between.
+        let rail = |accent: bool| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(20. + RAIL_X - 0.75))
+                .w(px(1.5))
+                .bg(if accent {
+                    with_alpha(ACCENT, 0.4)
+                } else {
+                    with_alpha(TEXT_4, 0.9)
+                })
+        };
+        let (has_top, has_bottom) = (!tops.is_empty(), !bottoms.is_empty());
         div()
             .absolute()
             .inset_0()
@@ -385,20 +387,20 @@ impl LivtkApp {
             .justify_between()
             .child(
                 div()
+                    .relative()
                     .px_5()
                     .bg(color(WINDOW))
-                    .when(!tops.is_empty(), |d| {
-                        d.border_b_1().border_color(color(BORDER))
-                    })
+                    .when(has_top, |d| d.child(rail(false)))
                     .children(tops),
             )
             .child(
                 div()
+                    .relative()
                     .px_5()
+                    .pb_2()
                     .bg(color(WINDOW))
-                    .when(!bottoms.is_empty(), |d| {
-                        d.pb_2().border_t_1().border_color(color(BORDER))
-                    })
+                    // Down from the rail above, in the accent, to the note being written.
+                    .when(has_bottom, |d| d.child(rail(true).bottom(px(24.))))
                     .children(bottoms),
             )
     }
@@ -602,56 +604,14 @@ impl LivtkApp {
                 let Some(last_past) = points.iter().rposition(|p| p.spot.part == Part::Past) else {
                     return;
                 };
-                // The rail itself, lane 0: straight down from the first mark to the last that
-                // happened, whatever lane that is on.
-                let rail_x = points[0].x - px(LANE * points[0].spot.lane as f32);
-                let lane_x = |p: &RailPoint| p.x;
-                stroke(
-                    window,
-                    &[
-                        point(rail_x, points[0].y),
-                        point(rail_x, points[last_past].y),
-                    ],
-                    with_alpha(TEXT_4, 0.9),
-                );
-                // Each session's lane beside it, as a git graph's: branching off the rail just
-                // above its first mark, down through its marks, merging back just below its last.
-                let mut lanes: Vec<Option<Vec<Point<Pixels>>>> = Vec::new();
-                let turn = px(10.);
-                for p in &points[..=last_past] {
-                    let l = p.spot.lane;
-                    if l == 0 {
-                        continue;
-                    }
-                    if lanes.len() < l {
-                        lanes.resize(l, None);
-                    }
-                    let open = &mut lanes[l - 1];
-                    if p.spot.opens || open.is_none() {
-                        *open = Some(vec![
-                            point(rail_x, p.y - turn * 2.),
-                            point(lane_x(p), p.y - turn),
-                        ]);
-                    }
-                    if let Some(path) = open.as_mut() {
-                        path.push(point(lane_x(p), p.y));
-                    }
-                    if p.spot.closes
-                        && let Some(mut path) = open.take()
-                    {
-                        path.push(point(lane_x(p), p.y + turn));
-                        path.push(point(rail_x, p.y + turn * 2.));
-                        stroke(window, &path, with_alpha(TEXT_4, 0.9));
-                    }
-                }
-                // A session still working: its lane runs on to its last mark.
-                for path in lanes.into_iter().flatten() {
-                    stroke(window, &path, with_alpha(TEXT_4, 0.9));
-                }
+                // The rail: one line through every mark in order, stepping out to a session's
+                // lane and back as its marks come, as the branching it shows.
+                let past = path_through(&points[..=last_past]);
+                stroke(window, &past, with_alpha(TEXT_4, 0.9));
                 // On to the note being written, in the accent; then what is ahead, dashed.
                 let next = points.iter().position(|p| p.spot.part == Part::Next);
                 if let Some(next) = next {
-                    let from = point(rail_x, points[last_past].y);
+                    let from = point(points[last_past].x, points[last_past].y);
                     let to = point(points[next].x, points[next].y);
                     stroke(
                         window,
@@ -664,8 +624,7 @@ impl LivtkApp {
                         with_alpha(TEXT_4, 0.6),
                     );
                 }
-                // The dot travels the marks in order, lane to lane, to the last that happened.
-                let past = path_through(&points[..=last_past]);
+                // The dot travels the rail to the last that happened.
                 let reached = length(&past);
                 // The dot: travelling from where it was to the end of what happened.
                 let along = match (rail.from, rail.since) {

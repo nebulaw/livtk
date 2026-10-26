@@ -408,16 +408,11 @@ fn node_of(dir: &std::path::Path, key: &str) -> livtk_core::Node {
 }
 
 #[gpui_kit::test]
-fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
+fn a_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     open_detail(cx);
     click_on(cx, "detail-title");
-    app.read_with(cx, |a, _| {
-        assert_eq!(a.editing(), None, "one click does not edit")
-    });
-
-    double_click_on(cx, "detail-title");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("title")));
     // Select all: Cmd+A on macOS, Ctrl+A elsewhere.
     cx.simulate_keystrokes("secondary-a");
@@ -443,7 +438,7 @@ fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("escape");
     open_detail(cx);
-    double_click_on(cx, "detail-title");
+    click_on(cx, "detail-title");
     cx.simulate_input(" and more");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -453,6 +448,36 @@ fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
         "Esc saved nothing"
     );
     app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
+}
+
+/// What opens a title or body for editing is a setting: one click unless set to a double-click,
+/// in Settings, where one click then only selects; a body with nothing in it the same.
+#[gpui_kit::test]
+fn a_double_click_to_edit_is_a_setting(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    click_on(cx, "settings-opening-work");
+    redraw(cx);
+    click_on(cx, "settings-double-click-edit-off");
+    redraw(cx);
+    assert!(app.read_with(cx, |a, _| a.model().prefs.edit_on_double_click));
+    click_on(cx, "settings-back");
+    redraw(cx);
+    open_detail(cx);
+    for (read, part) in [("detail-title", "title"), ("detail-body", "body")] {
+        click_on(cx, read);
+        app.read_with(cx, |a, _| {
+            assert_eq!(a.editing(), None, "one click selects")
+        });
+        double_click_on(cx, read);
+        app.read_with(cx, |a, _| assert_eq!(a.editing(), Some(part)));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+    }
 }
 
 #[gpui_kit::test]
@@ -5458,6 +5483,20 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
     let dir = project();
+    // A title long enough to wrap: edited, it wraps the same, never one scrolling line.
+    let long = "A title long enough to wrap onto a second line and then a third one in the \
+                panel, as long titles do when a task says a lot about itself up front";
+    Workspace::open(dir.path())
+        .unwrap()
+        .execute(
+            Command::Edit {
+                node: "LIV-1".into(),
+                title: Some(long.into()),
+                body: None,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
@@ -5467,34 +5506,29 @@ fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
         "made and changed, under the title"
     );
     let reading = cx.debug_bounds("detail-title").expect("the title");
-    // One click selects; it does not edit.
-    click_on(cx, "detail-title");
+    let meta = cx.debug_bounds("detail-meta").unwrap();
     assert!(
-        cx.debug_bounds("title-editor").is_none(),
-        "a double-click edits"
+        reading.size.height > gpui_kit::px(60.),
+        "it wraps: {:?}",
+        reading.size
     );
-    double_click_on(cx, "detail-title");
+    click_on(cx, "detail-title");
+    redraw(cx);
     let editing = cx.debug_bounds("title-editor").expect("editing in place");
     assert_eq!(editing.origin, reading.origin, "where it was");
     assert_eq!(
         editing.size.height, reading.size.height,
-        "as tall as it was"
+        "as tall as it was, every line shown"
+    );
+    assert_eq!(
+        cx.debug_bounds("detail-meta").unwrap().origin,
+        meta.origin,
+        "nothing under it moves"
     );
     // Esc keeps the old title.
-    let (key, title) = app.read_with(cx, |a, _| {
-        let d = a.model().detail.as_ref().unwrap();
-        (d.node.key.clone(), d.node.title.clone())
-    });
     cx.simulate_input(" changed");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert_eq!(
-        Workspace::open(dir.path())
-            .unwrap()
-            .node(&key)
-            .unwrap()
-            .title,
-        title,
-        "Esc keeps it"
-    );
+    assert_eq!(node_of(dir.path(), "LIV-1").title, long, "Esc keeps it");
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
 }

@@ -36,19 +36,7 @@ impl LivtkApp {
         end: Option<Stateful<Div>>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let row = div()
-            .id(SharedString::from(selector.clone()))
-            .debug_selector(move || selector.clone())
-            .h(px(28.))
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_lg()
-            .bg(color(CONTENT))
-            .border_1()
-            .border_color(color(BORDER))
+        let row = link_row(selector)
             .hover(|h| h.bg(color(HOVER)))
             .child(state_mark(kind, state))
             .child(
@@ -57,14 +45,7 @@ impl LivtkApp {
                     .text_color(color(TEXT_4))
                     .child(key.to_owned()),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(color(TEXT_2))
-                    .child(title.to_owned()),
-            )
+            .child(link_title(title.to_owned()))
             .children(end);
         self.goes_to(row, key, open, cx)
     }
@@ -104,6 +85,45 @@ impl LivtkApp {
             .child(key.to_owned());
         self.goes_to(chip, key, OpenIn::View, cx)
     }
+}
+
+/// A row in a list of links (a node, a doc, a session): one frame, so every link reads alike.
+/// What leads it (a state mark or an icon), its title, a quiet aside and an end go inside.
+pub(super) fn link_row(selector: String) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector.clone())
+        .h(px(28.))
+        .pl_2()
+        .pr_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_lg()
+        .bg(color(CONTENT))
+        .border_1()
+        .border_color(color(BORDER))
+}
+
+/// A link row's title: it takes the room left, cut with an ellipsis.
+pub(super) fn link_title(title: impl Into<SharedString>) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .text_color(color(TEXT_2))
+        .child(title.into())
+}
+
+/// A link row's quiet aside after its title (a doc's path, who worked in a session and when).
+pub(super) fn link_aside(text: impl Into<SharedString>) -> Div {
+    div()
+        .flex_none()
+        .max_w(px(160.))
+        .truncate()
+        .text_xs()
+        .text_color(color(TEXT_4))
+        .child(text.into())
 }
 
 /// The × at the end of a link row: it removes the link, and only that, never opening the node.

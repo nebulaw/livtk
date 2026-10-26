@@ -1,6 +1,6 @@
 //! The detail panel: a node's title, body, state, links and docs, and a project's own section.
 
-use super::inline_edit::{InlineEdit, Opens};
+use super::inline_edit::{InlineEdit, Lines, Opens};
 use super::text_style::TextRole;
 use super::*;
 
@@ -37,21 +37,12 @@ impl LivtkApp {
                 || livtk_core::format::session(&session).to_owned(),
                 |r| r.name.clone(),
             );
-            let id = session.clone();
             list = list.child(
-                div()
-                    .id(SharedString::from(format!("task-session-{session}")))
-                    .debug_selector(move || format!("task-session-{id}"))
-                    .flex()
-                    .gap_2()
-                    .rounded_md()
+                link_row(format!("task-session-{session}"))
                     .hover(|h| h.bg(color(HOVER)))
-                    .child(div().text_color(color(TEXT)).child(name))
-                    .child(div().text_xs().text_color(color(TEXT_3)).child(format!(
-                        "{} · {}",
-                        by.join(", "),
-                        ago(&first)
-                    )))
+                    .child(icon(Icon::Sessions, 13., TEXT_4))
+                    .child(link_title(name))
+                    .child(link_aside(format!("{} · {}", by.join(", "), ago(&first))))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.go(View::Sessions, window, cx);
                         this.model.read_session(&session, Some(first.clone()));
@@ -64,45 +55,26 @@ impl LivtkApp {
 
     /// The open node's title: read, or edited in place on a double-click.
     pub(super) fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
-        let title = InlineEdit::new(TextRole::Title, "detail-title", "title-editor");
-        match &self.editing {
-            Some(Editing {
-                node,
-                field: Field::Title(state),
-                ..
-            }) if *node == n.id => title.editing_line(state, cx),
-            _ => title.reading(
-                n.title.clone(),
-                |this, w, cx| this.start_edit(false, w, cx),
-                cx,
-            ),
+        if let Some(field) = self.editing_of(n, Part::Title) {
+            return Part::Title.edit(&self.model.prefs).editing(field, cx);
         }
+        Part::Title.edit(&self.model.prefs).reading(
+            n.title.clone(),
+            |this, w, cx| this.start_edit(Part::Title, w, cx),
+            cx,
+        )
     }
 
-    /// The open node's body as markdown: read, or edited in place on a double-click (one click
-    /// when there is none yet).
+    /// The open node's body: read as markdown, or edited in place on a click.
     pub(super) fn detail_body(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
-        let empty = n.body.trim().is_empty();
-        // A body to read opens on a double-click; none yet, on one click, as there is nothing
-        // to read first.
-        let body = InlineEdit::new(TextRole::Body, "detail-body", "body-editor").opens(if empty {
-            Opens::Click
-        } else {
-            Opens::DoubleClick
-        });
-        if let Some(Editing {
-            node,
-            field: Field::Body(state),
-            ..
-        }) = &self.editing
-            && *node == n.id
-        {
-            return body.editing_area(state, cx);
+        let edit = Part::Body.edit(&self.model.prefs);
+        if let Some(field) = self.editing_of(n, Part::Body) {
+            return edit.editing(field, cx);
         }
-        let content = if empty {
+        let content = if n.body.trim().is_empty() {
             div()
                 .text_color(color(TEXT_4))
-                .child("Add a description…")
+                .child(BODY_PLACEHOLDER)
                 .into_any_element()
         } else {
             TextView::markdown(
@@ -111,7 +83,19 @@ impl LivtkApp {
             )
             .into_any_element()
         };
-        body.reading(content, |this, w, cx| this.start_edit(true, w, cx), cx)
+        edit.reading(
+            content,
+            |this, w, cx| this.start_edit(Part::Body, w, cx),
+            cx,
+        )
+    }
+
+    /// The field editing `part` of `n`, if it is being edited.
+    fn editing_of(&self, n: &livtk_core::Node, part: Part) -> Option<&Entity<TextareaState>> {
+        self.editing
+            .as_ref()
+            .filter(|e| e.node == n.id && e.part == part)
+            .map(|e| &e.field)
     }
 
     /// A node's state mark, with its `name` in the panel, that opens the states of its kind, as
@@ -414,66 +398,23 @@ impl LivtkApp {
             let unlink = format!("unlink-doc-{path}");
             let row = format!("detail-doc-{path}");
             out = out.child(
-                div()
-                    .id(SharedString::from(row.clone()))
-                    .debug_selector(move || row.clone())
-                    .h(px(28.))
-                    .pl_2()
-                    .pr_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .bg(color(CONTENT))
-                    .border_1()
-                    .border_color(color(BORDER))
+                link_row(row)
                     .when(!gone, |d| d.hover(|h| h.bg(color(HOVER))))
                     .child(icon(Icon::Docs, 13., TEXT_4))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(color(if gone { TEXT_4 } else { TEXT_2 }))
-                            .when(gone, |d| d.line_through())
-                            .child(title.clone().unwrap_or_else(|| path.clone())),
+                        link_title(title.clone().unwrap_or_else(|| path.clone()))
+                            .when(gone, |d| d.text_color(color(TEXT_4)).line_through()),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(px(160.))
-                            .truncate()
-                            .text_xs()
-                            .text_color(color(TEXT_4))
-                            .child(if gone {
-                                "missing".to_owned()
-                            } else {
-                                path.clone()
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(unlink.clone()))
-                            .debug_selector(move || unlink.clone())
-                            .group("unlink")
-                            .size(px(20.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .hover(|s| s.bg(color(HOVER)))
-                            .child(icon_hover(Icon::Unlink, 14., TEXT_4, "unlink", TEXT))
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Remove the link")
-                                    .build(window, cx)
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.model.link_doc(&node, &unlink_path, false);
-                                cx.notify();
-                            })),
-                    )
+                    .child(link_aside(if gone {
+                        "missing".to_owned()
+                    } else {
+                        path.clone()
+                    }))
+                    .child(unlink_button(
+                        unlink,
+                        move |this, _| this.model.link_doc(&node, &unlink_path, false),
+                        cx,
+                    ))
                     .when(!gone, |d| {
                         d.on_click(cx.listener(move |this, _, _, cx| {
                             this.model.open_doc(&open);
@@ -1068,16 +1009,45 @@ fn group_label(label: &str) -> Div {
 /// and by whom (its last change of any kind: a move, a link, a note).
 fn meta_line(d: &Detail) -> Div {
     let n = &d.node;
-    let made = format!("Created {} by {}", ago(&n.created), who(&n.created_by));
-    let changed = d
-        .history
-        .last()
-        .filter(|e| e.at != n.created)
-        .map(|e| format!(" · updated {} by {}", ago(&e.at), who(&e.by)))
-        .unwrap_or_default();
-    super::text_style::TextRole::Meta
+    let made = format!("created {} by {}", ago(&n.created), who(&n.created_by));
+    let line = match d.history.last().filter(|e| e.at != n.created) {
+        Some(e) => format!("Last update {} by {} · {made}", ago(&e.at), who(&e.by)),
+        None => upper_first(&made),
+    };
+    TextRole::Meta
         .style()
         .frame(div())
         .debug_selector(|| "detail-meta".into())
-        .child(format!("{made}{changed}"))
+        .child(line)
+}
+
+/// `s` with its first letter upper case.
+fn upper_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// What a node's body says while it has none.
+const BODY_PLACEHOLDER: &str = "Add a description…";
+
+impl Part {
+    /// How this part of a node's panel is edited in place: opened as `prefs` say, growing with
+    /// its text, never scrolling.
+    pub(super) fn edit(self, prefs: &crate::model::prefs::Prefs) -> InlineEdit {
+        let opens = if prefs.edit_on_double_click {
+            Opens::DoubleClick
+        } else {
+            Opens::Click
+        };
+        let edit = match self {
+            Part::Title => InlineEdit::new(TextRole::Title, "detail-title", "title-editor")
+                .placeholder("Title"),
+            Part::Body => InlineEdit::new(TextRole::Body, "detail-body", "body-editor")
+                .lines(Lines::Many)
+                .placeholder(BODY_PLACEHOLDER),
+        };
+        edit.opens(opens)
+    }
 }

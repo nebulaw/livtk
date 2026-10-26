@@ -670,14 +670,17 @@ impl Render for Dragged {
 /// A title or body being edited in the detail panel, for the node it belongs to.
 struct Editing {
     node: Uuid,
-    field: Field,
+    part: Part,
+    field: Entity<TextareaState>,
     /// Saves when the field loses focus; dropped with the edit, so a cancel saves nothing.
     _subscription: Subscription,
 }
 
-enum Field {
-    Title(Entity<InputState>),
-    Body(Entity<TextareaState>),
+/// The part of the open node edited in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Title,
+    Body,
 }
 
 /// The form that makes a node: its kind, its title and body, and the fields its kind adds.
@@ -1413,7 +1416,15 @@ impl LivtkApp {
                 if self.model.detail.is_none() {
                     self.model.open_detail();
                 }
-                self.start_edit(ask == Some(Ask::EditBody), window, cx);
+                self.start_edit(
+                    if ask == Some(Ask::EditBody) {
+                        Part::Body
+                    } else {
+                        Part::Title
+                    },
+                    window,
+                    cx,
+                );
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.set_help(true, window, cx),
@@ -1798,58 +1809,41 @@ impl LivtkApp {
     }
 
     pub fn editing(&self) -> Option<&'static str> {
-        self.editing.as_ref().map(|e| match e.field {
-            Field::Title(_) => "title",
-            Field::Body(_) => "body",
+        self.editing.as_ref().map(|e| match e.part {
+            Part::Title => "title",
+            Part::Body => "body",
         })
     }
 
-    /// Edit the open node's title or body in place, as in Linear: Enter (Ctrl+Enter for the
-    /// body) or clicking away saves, Esc cancels.
-    fn start_edit(&mut self, body: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Edit the open node's title or body in place, as its `InlineEdit` says: Enter (⌘Enter
+    /// for the body) or clicking away saves, Esc cancels.
+    fn start_edit(&mut self, part: Part, window: &mut Window, cx: &mut Context<Self>) {
         let Some(node) = self.model.detail.as_ref().map(|d| d.node.clone()) else {
             return;
         };
-        let (field, focus, subscription) = if body {
-            let state = cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .placeholder("Add a description…")
-                    .auto_grow(4, 24)
-                    .default_value(node.body.clone())
-            });
-            // The textarea takes Ctrl+Enter itself and reports it as a secondary Enter.
-            let sub = cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
-                match event {
-                    InputEvent::PressEnter {
-                        secondary: true, ..
-                    } => this.save_edit(true, window, cx),
-                    InputEvent::Blur => this.save_edit(false, window, cx),
-                    _ => {}
-                }
-            });
-            let focus = state.read(cx).focus_handle(cx);
-            (Field::Body(state), focus, sub)
-        } else {
-            let state = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Title")
-                    .default_value(node.title.clone())
-            });
-            let sub = cx.subscribe_in(&state, window, |this, _, event: &InputEvent, window, cx| {
-                match event {
-                    InputEvent::PressEnter { .. } => this.save_edit(true, window, cx),
-                    InputEvent::Blur => this.save_edit(false, window, cx),
-                    _ => {}
-                }
-            });
-            let focus = state.read(cx).focus_handle(cx);
-            (Field::Title(state), focus, sub)
+        let edit = part.edit(&self.model.prefs);
+        let value = match part {
+            Part::Title => node.title.clone(),
+            Part::Body => node.body.clone(),
         };
+        let field = edit.field(value, window, cx);
+        let subscription = cx.subscribe_in(
+            &field,
+            window,
+            move |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { secondary, .. } if edit.saves_on_enter(*secondary) => {
+                    this.save_edit(true, window, cx);
+                }
+                InputEvent::Blur => this.save_edit(false, window, cx),
+                _ => {}
+            },
+        );
         // Whatever was being edited before is saved first.
         self.save_edit(false, window, cx);
-        focus.focus(window, cx);
+        field.read(cx).focus_handle(cx).focus(window, cx);
         self.editing = Some(Editing {
             node: node.id,
+            part,
             field,
             _subscription: subscription,
         });
@@ -1861,16 +1855,10 @@ impl LivtkApp {
         let Some(edit) = self.editing.take() else {
             return;
         };
-        match &edit.field {
-            Field::Title(state) => {
-                let title = state.read(cx).value().to_string();
-                self.model.edit(edit.node, Some(&title), None);
-            }
-            Field::Body(state) => {
-                // Trailing blank lines carry nothing (Ctrl+Enter itself adds one).
-                let body = state.read(cx).value().trim_end().to_owned();
-                self.model.edit(edit.node, None, Some(&body));
-            }
+        let value = edit.part.edit(&self.model.prefs).value(&edit.field, cx);
+        match edit.part {
+            Part::Title => self.model.edit(edit.node, Some(&value), None),
+            Part::Body => self.model.edit(edit.node, None, Some(&value)),
         }
         if refocus {
             self.focus_main(window, cx);

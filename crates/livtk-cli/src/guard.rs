@@ -197,16 +197,39 @@ pub fn refuse_bash(cmd: &str) -> Option<String> {
     None
 }
 
-/// Why a file tool must not write `path`, if it must not.
+/// Why a file tool must not write `path`, if it must not: anything in `.livtk/`, which changes
+/// only through livtk's commands. A build's own worktree sits in `.livtk/` too
+/// (`.livtk/runs/worktrees/<KEY>/`); a file in it is judged by its place in that worktree, so its
+/// code is the build's to edit and its own `.livtk/` is refused as any checkout's is. A path that
+/// steps back (`..`) is never taken for a worktree's.
 pub fn refuse_path(path: &str) -> Option<String> {
-    Path::new(path)
-        .components()
-        .any(|c| c.as_os_str() == ".livtk")
-        .then(|| {
-            "Files in .livtk/ change only through livtk commands, so every change stays an event \
-             in the log."
-                .into()
-        })
+    use std::path::Component;
+    let parts: Vec<Component> = Path::new(path).components().collect();
+    let stepped_back = parts.iter().any(|c| matches!(c, Component::ParentDir));
+    let in_livtk = |parts: &[Component]| parts.iter().position(|c| c.as_os_str() == ".livtk");
+    let mut rest: &[Component] = &parts;
+    while let Some(at) = in_livtk(rest) {
+        // `.livtk/runs/worktrees/<KEY>/<a file>`: on to the file's place in the worktree.
+        let worktree = rest
+            .get(at + 1)
+            .is_some_and(|c| c.as_os_str() == livtk_core::run::RUNS)
+            && rest
+                .get(at + 2)
+                .is_some_and(|c| c.as_os_str() == livtk_core::run::WORKTREES)
+            && rest
+                .get(at + 3)
+                .is_some_and(|c| matches!(c, Component::Normal(_)))
+            && rest.len() > at + 4;
+        if !worktree || stepped_back {
+            return Some(
+                "Files in .livtk/ change only through livtk commands, so every change stays an \
+                 event in the log."
+                    .into(),
+            );
+        }
+        rest = &rest[at + 4..];
+    }
+    None
 }
 
 /// livtk's own flags that say who runs a command: the Claude Code session, and the subagent
@@ -403,6 +426,18 @@ mod tests {
         assert!(refuse_path(".livtk/config.toml").is_some());
         assert_eq!(refuse_path("/p/src/livtk.rs"), None);
         assert_eq!(refuse_path("/p/docs/.livtkrc"), None);
+        // A build's own worktree: its code is the build's, its own `.livtk/` is not.
+        let wt = "/p/.livtk/runs/worktrees/TAS-93";
+        assert_eq!(refuse_path(&format!("{wt}/crates/app/src/main.rs")), None);
+        assert_eq!(refuse_path(".livtk/runs/worktrees/TAS-93/README.md"), None);
+        assert!(refuse_path(&format!("{wt}/.livtk/events.jsonl")).is_some());
+        assert!(refuse_path(&format!("{wt}/.livtk/runs/worktrees/X/a.rs")).is_none());
+        // Only that shape: the worktrees folder itself, other run files, steps back.
+        assert!(refuse_path("/p/.livtk/runs/worktrees/TAS-93").is_some());
+        assert!(refuse_path("/p/.livtk/runs/worktrees").is_some());
+        assert!(refuse_path("/p/.livtk/runs/TAS-93.json").is_some());
+        assert!(refuse_path("/p/.livtk/runs/worktrees/TAS-93/../../config.toml").is_some());
+        assert!(refuse_path("/p/.livtk/runs/worktrees/../events.jsonl").is_some());
     }
 
     #[test]

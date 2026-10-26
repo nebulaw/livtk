@@ -256,8 +256,13 @@ pub struct Live {
 
 /// The folder runs keep their state in, inside the project's `.livtk/`: never committed.
 pub fn runs_dir(livtk: &Path) -> PathBuf {
-    livtk.join("runs")
+    livtk.join(RUNS)
 }
+
+/// Where runs keep their state in `.livtk/`, and where builds' worktrees are in it: the path's
+/// parts, so a guard can know a worktree's files from `.livtk/`'s own.
+pub const RUNS: &str = "runs";
+pub const WORKTREES: &str = "worktrees";
 
 fn live_path(livtk: &Path, session: &str) -> PathBuf {
     runs_dir(livtk).join(format!("{session}.json"))
@@ -1057,7 +1062,7 @@ fn said(text: &str) -> String {
 
 /// Where builds' worktrees are, beside the runs: never committed.
 fn worktrees_dir(livtk: &Path) -> PathBuf {
-    runs_dir(livtk).join("worktrees")
+    runs_dir(livtk).join(WORKTREES)
 }
 
 /// The branch task `key`'s builds work on.

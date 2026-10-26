@@ -5372,11 +5372,31 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
             .map(|p| p.key)
     };
     assert_eq!(in_project("LIV-2"), Some(prj.clone()));
+    app.read_with(cx, |a, _| {
+        let d = a.model().detail.as_ref().unwrap();
+        assert_eq!(
+            d.in_project.as_ref().map(|p| p.key.clone()),
+            Some(prj.clone()),
+            "the panel follows"
+        );
+        assert!(
+            matches!(d.history.last().unwrap().op, livtk_core::Op::EdgeAdd { .. }),
+            "its last change is the move, as Updated says"
+        );
+    });
     click_on(cx, "detail-project");
     redraw(cx);
     click_on(cx, "set-project-none");
     settle(cx);
     assert_eq!(in_project("LIV-2"), None);
+    // A sub-task of a task in no project: none, read-only, naming its parent.
+    app.update(cx, |a, _| a.model_mut().go_to(&sub));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-project-through").is_some(),
+        "names its parent"
+    );
+    assert!(cx.debug_bounds("detail-project").is_none());
     // The first, with a sub-task, in the project: its sub-task's project is through it.
     Workspace::open(&root)
         .unwrap()
@@ -5397,5 +5417,31 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("detail-project").is_none(),
         "changed on the parent"
+    );
+    // A canceled sub-task is out of the count; a closed task waits for nothing.
+    {
+        let mut ws = Workspace::open(&root).unwrap();
+        for k in [sub.as_str(), "LIV-2"] {
+            ws.execute(
+                Command::Move {
+                    node: k.into(),
+                    to: State::Canceled,
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+        }
+    }
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-sub-tasks").is_none(),
+        "its only sub-task canceled: none to count"
+    );
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-blocked").is_none(),
+        "canceled: waits for nothing"
     );
 }

@@ -41,7 +41,8 @@ pub(super) fn rows(d: &Detail) -> Vec<Row> {
     out.extend(project.and_then(|g| g.target.as_ref()).map(|_| Row::Target));
     if task {
         out.extend([Row::Agent, Row::Project]);
-        out.extend(n.blocked.then_some(Row::Blocked));
+        // Waiting matters only while the task is open, as its row in the list says.
+        out.extend((n.blocked && !n.kind.is_closed(n.state)).then_some(Row::Blocked));
         out.extend(d.sub_tasks.map(|_| Row::SubTasks));
     }
     out.extend([Row::Created, Row::Updated]);
@@ -156,15 +157,15 @@ impl LivtkApp {
                 text(format!("{} by {}", ago(&n.created), who(&n.created_by))),
             ),
             Row::Updated => {
-                let by = d
+                // Its last change, a link or a project move too: when and by whom, of one event.
+                let said = d
                     .history
                     .last()
-                    .map(|e| who(&e.by).to_owned())
-                    .unwrap_or_default();
+                    .map(|e| format!("{} by {}", ago(&e.at), who(&e.by)))
+                    .unwrap_or_else(|| ago(&n.updated));
                 (
                     "Updated".into(),
-                    text(format!("{} by {by}", ago(&n.updated)))
-                        .debug_selector(|| "detail-updated".into()),
+                    text(said).debug_selector(|| "detail-updated".into()),
                 )
             }
             Row::Sessions => {
@@ -186,23 +187,33 @@ impl LivtkApp {
         }
     }
 
-    /// The task's project: picked from every open project, or none; through its parent task,
-    /// named and gone to, changed on the parent.
+    /// The task's project: picked from every open project, or none. A sub-task's is its
+    /// parent's, named, read-only, and gone to (its project if any, else the parent).
     fn project_button(&self, d: &Detail, cx: &mut Context<Self>) -> Div {
         let id = d.node.id;
-        if let Some((p, Some(parent))) = &d.in_project {
+        if let Some(parent) = &d.parent_task {
+            let (label, to) = match &d.in_project {
+                Some(p) => (
+                    format!("{}  {}  (through {})", p.key, p.title, parent.key),
+                    p.key.clone(),
+                ),
+                None => (
+                    format!("None (as {} is in none)", parent.key),
+                    parent.key.clone(),
+                ),
+            };
             let el = div()
                 .id("detail-project-through")
                 .debug_selector(|| "detail-project-through".into())
                 .rounded_md()
                 .hover(|h| h.bg(color(HOVER)))
-                .child(format!("{}  {}  (through {})", p.key, p.title, parent.key));
-            return div().child(self.goes_to(el, &p.key, OpenIn::View, cx));
+                .child(label);
+            return div().child(self.goes_to(el, &to, OpenIn::View, cx));
         }
         let current = d
             .in_project
             .as_ref()
-            .map(|(p, _)| (p.key.clone(), p.title.clone()));
+            .map(|p| (p.key.clone(), p.title.clone()));
         let label = current
             .as_ref()
             .map_or_else(|| "None".to_owned(), |(k, t)| format!("{k}  {t}"));

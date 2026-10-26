@@ -499,8 +499,10 @@ pub struct Detail {
     pub sessions: Vec<livtk_core::SessionUse>,
     /// Its latest run of Claude, if it has had one.
     pub run: Option<livtk_core::run::Run>,
-    /// The project it is in, and the parent task it is in it through, if that is how.
-    pub in_project: Option<(Brief, Option<Brief>)>,
+    /// The project it is in, directly or through its parent task.
+    pub in_project: Option<Brief>,
+    /// The task it is part of, if any: its project is that task's, changed there.
+    pub parent_task: Option<Brief>,
     /// When it came into its state, as the log writes times.
     pub entered: Option<String>,
     /// Its sub-tasks: how many are done, of how many; none without any.
@@ -2713,26 +2715,25 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         .filter(|g| !g.briefs.is_empty())
         .collect();
     // Where it sits: its project, directly or through its parent task.
-    let in_project = match ws.project_of(&key)? {
-        Some(p) => {
-            let through = part_of.first().filter(|b| b.kind != Kind::Project).cloned();
-            let brief = Brief {
-                key: p.key,
-                title: p.title,
-                state: p.state,
-                kind: p.kind,
-            };
-            Some((brief, through))
-        }
-        None => None,
-    };
-    let tasks: Vec<&Brief> = parts.iter().filter(|b| b.kind == Kind::Task).collect();
+    let in_project = ws.project_of(&key)?.map(|p| Brief {
+        key: p.key,
+        title: p.title,
+        state: p.state,
+        kind: p.kind,
+    });
+    let parent_task = part_of.first().filter(|b| b.kind != Kind::Project).cloned();
+    // Its sub-tasks still to count: a canceled one is no longer part of the work.
+    let tasks: Vec<&Brief> = parts
+        .iter()
+        .filter(|b| b.kind == Kind::Task && b.state != State::Canceled)
+        .collect();
     let sub_tasks = (node.kind == Kind::Task && !tasks.is_empty()).then(|| {
         let done = tasks.iter().filter(|b| b.state == State::Done).count();
         (done, tasks.len())
     });
     Ok(Detail {
         in_project,
+        parent_task,
         entered: ws.entered(&key)?,
         sub_tasks,
         choices: choices_with(node.kind, node.state, ws.gates()),

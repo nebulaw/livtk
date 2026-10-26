@@ -79,13 +79,35 @@ impl BlockAt {
     /// it there; added after the last if it is new.
     pub(in crate::ui) fn write(&self, source: &str, text: &str) -> String {
         if self.range.is_empty() && self.text.is_empty() {
-            md::append(source, text)
-        } else if source.get(self.range.clone()) == Some(self.text.as_str()) {
-            md::splice(source, self.range.clone(), text)
-        } else {
-            // The source moved under the edit (written elsewhere meanwhile): kept, after it.
-            md::append(source, text)
+            return md::append(source, text);
         }
+        if text.trim_end_matches(['\n', '\r']) == self.text {
+            return source.to_owned();
+        }
+        if source.get(self.range.clone()) == Some(self.text.as_str()) {
+            return md::splice(source, self.range.clone(), text);
+        }
+        // The source moved under the edit (written elsewhere meanwhile): the block where it is
+        // now, if it is still there; kept after the last otherwise, never lost.
+        match self.nearest_in(source, &md::blocks(source)) {
+            Some(i) => md::splice(source, md::blocks(source)[i].range.clone(), text),
+            None => md::append(source, text),
+        }
+    }
+
+    /// Which of `blocks` (of `source`) holds this block's text now, nearest its old place.
+    fn nearest_in(&self, source: &str, blocks: &[Block]) -> Option<usize> {
+        blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| source[b.range.clone()] == self.text)
+            .min_by_key(|(i, _)| i.abs_diff(self.index))
+            .map(|(i, _)| i)
+    }
+
+    /// Whether this is a new block, after the last.
+    fn is_new(&self) -> bool {
+        self.range.is_empty() && self.text.is_empty()
     }
 
     /// The look a block of this kind reads and edits in.
@@ -99,6 +121,25 @@ impl BlockAt {
 }
 
 pub(in crate::ui) use super::inline_edit::Edge;
+
+/// A block's text as drawn alone: with the body's link definitions after it, when it is a kind
+/// that may hold a link (a code block's text is its own; an unclosed fence would take them in).
+fn with_context(text: &str, kind: BlockKind, context: &str) -> String {
+    let links = matches!(
+        kind,
+        BlockKind::Paragraph
+            | BlockKind::Heading { .. }
+            | BlockKind::List { .. }
+            | BlockKind::Quote
+            | BlockKind::Table
+            | BlockKind::Footnote
+    );
+    if links && !context.is_empty() {
+        format!("{text}\n\n{context}")
+    } else {
+        text.to_owned()
+    }
+}
 
 /// Each block's view state, kept between frames by its selector, so a click's place in the
 /// source can be read back from it.
@@ -171,21 +212,22 @@ impl Blocks {
             .flex_col()
             // The last block's gap is the body's own end.
             .mb(-BLOCK_GAP);
+        // The block the edit stands in for as drawn: the one holding its text, nearest its old
+        // place (the source may have moved under it); its old place if none does.
+        let edited_at = editing
+            .filter(|(edited, _)| !edited.is_new())
+            .map(|(edited, _)| edited.nearest_in(source, &blocks).unwrap_or(edited.index));
         for (i, block) in blocks.iter().enumerate() {
             let at = BlockAt::of(source, i, block);
             if let Some((edited, field)) = editing
-                && edited.index == i
+                && edited_at == Some(i)
             {
                 out = out.child(self.edit(edited).editing(field, heights, cx));
                 continue;
             }
             // Drawn alone, with the link definitions any block may name.
             let text = &source[block.range.clone()];
-            let shown = if context.is_empty() || block.kind == BlockKind::Definition {
-                text.to_owned()
-            } else {
-                format!("{text}\n\n{context}")
-            };
+            let shown = with_context(text, block.kind, &context);
             let key = self.read_id(i);
             let state = views.state(&key, &shown, cx);
             let (len, located, open) = (text.len(), state.clone(), open.clone());
@@ -194,6 +236,8 @@ impl Blocks {
                     task_lists(
                         markdown(TextView::new(&state), self.width),
                         block.range.start,
+                        context.clone(),
+                        self.width,
                     )
                     .style(body_style()),
                     // The word the double-click picked, in the block's source, as the renderer maps
@@ -210,7 +254,7 @@ impl Blocks {
         }
         // After the last: a new block being written, or the placeholder of an empty source.
         if let Some((edited, field)) = editing
-            && edited.index >= blocks.len()
+            && (edited.is_new() || edited_at.is_some_and(|i| i >= blocks.len()))
         {
             out = out.child(self.edit(edited).editing(field, heights, cx));
         } else if blocks.is_empty() {

@@ -51,9 +51,17 @@ pub(in crate::ui) fn markdown(view: TextView, width: f32) -> TextView {
 
 /// `view` with its lists that hold task boxes drawn by hand, each box a button that ticks it:
 /// `base` is where the view's source starts in the source the boxes are ticked in.
-pub(in crate::ui) fn task_lists(view: TextView, base: usize) -> TextView {
+/// Only a list at the top, not one in a quote or nested in an item (those keep the renderer's
+/// own boxes). `context`, the link definitions the items' links may name; `width`, how wide a
+/// diagram in one may draw.
+pub(in crate::ui) fn task_lists(
+    view: TextView,
+    base: usize,
+    context: String,
+    width: f32,
+) -> TextView {
     view.markdown_block_parser(move |node, cx| match node {
-        markdown_ast::Node::List(_) => {
+        markdown_ast::Node::List(_) if node.position()?.start.column == 1 => {
             let text = cx.node_source(node)?;
             let start = cx.offset() + node.position()?.start.offset;
             let items = livtk_core::md::list_items(text);
@@ -73,15 +81,16 @@ pub(in crate::ui) fn task_lists(view: TextView, base: usize) -> TextView {
         }
         _ => None,
     })
-    .markdown_block_renderer("task-list", |node, _, _| {
+    .markdown_block_renderer("task-list", move |node, _, _| {
         node.data::<Vec<ListItem>>()
-            .map(|items| task_list(items))
+            .map(|items| task_list(items, &context, width))
             .unwrap_or_else(|| div().into_any_element())
     })
 }
 
-/// A list with task boxes: each item its box (or its marker), then its content as markdown.
-fn task_list(items: &[ListItem]) -> AnyElement {
+/// A list with task boxes: each item its box (or its marker), then its content as the app's
+/// markdown, its links followed.
+fn task_list(items: &[ListItem], context: &str, width: f32) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -106,9 +115,16 @@ fn task_list(items: &[ListItem]) -> AnyElement {
                     .flex_1()
                     .min_w_0()
                     .when(checked, |d| d.text_color(color(TEXT_4)))
-                    .child(TextView::markdown(
-                        SharedString::from(format!("task-item-{:x}", hash_of(&item.content))),
-                        item.content.clone(),
+                    .child(markdown(
+                        TextView::markdown(
+                            SharedString::from(format!("task-item-{:x}", hash_of(&item.content))),
+                            if context.is_empty() {
+                                item.content.clone()
+                            } else {
+                                format!("{}\n\n{context}", item.content)
+                            },
+                        ),
+                        width,
                     )),
             )
         }))

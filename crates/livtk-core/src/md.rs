@@ -124,12 +124,13 @@ pub fn splice(source: &str, range: Range<usize>, text: &str) -> String {
     }
     let range = range.start.min(source.len())..range.end.min(source.len());
     let range = if text.trim().is_empty() {
-        let after = source[range.end..].len() - source[range.end..].trim_start().len();
-        if range.end + after < source.len() {
-            range.start..range.end + after
+        // The blank lines after it go with it, up to the next block's line (its indent kept);
+        // after the last, the blank lines before it, from the end of the line above.
+        let next_line = blank_lines_after(source, range.end);
+        if next_line < source.len() {
+            range.start..next_line
         } else {
-            let before = source[..range.start].len() - source[..range.start].trim_end().len();
-            range.start - before..source.len()
+            blank_lines_before(source, range.start)..source.len()
         }
     } else {
         range
@@ -140,6 +141,30 @@ pub fn splice(source: &str, range: Range<usize>, text: &str) -> String {
     out.push_str(text);
     out.push_str(&source[range.end..]);
     out
+}
+
+/// Where the first line after `at` with anything on it starts (`source`'s end if none): the
+/// rest of `at`'s line and the blank lines after it end there.
+fn blank_lines_after(source: &str, at: usize) -> usize {
+    let mut line = at;
+    for (i, c) in source[at..].char_indices() {
+        if c == '\n' {
+            line = at + i + 1;
+        } else if !c.is_whitespace() {
+            return line;
+        }
+    }
+    source.len()
+}
+
+/// Where the line break ending the last line before `at` with anything on it is (`0` if none):
+/// the blank lines before `at` start there.
+fn blank_lines_before(source: &str, at: usize) -> usize {
+    let head = &source[..at];
+    let Some(last) = head.rfind(|c: char| !c.is_whitespace()) else {
+        return 0;
+    };
+    head[last..].find(['\r', '\n']).map_or(at, |i| last + i)
 }
 
 /// `source` with `text` added as a new last block, a blank line between them.
@@ -474,6 +499,23 @@ mod tests {
         );
         assert_eq!(splice(source, bs[2].range.clone(), ""), "One.\n\nTwo.");
         assert_eq!(splice("Only.", 0..5, ""), "");
+    }
+
+    #[test]
+    fn an_emptied_block_takes_only_blank_lines_with_it() {
+        // The next block's indent is its own: indented code stays code.
+        let source = "A\n\nB\n\n    code\n    more";
+        let bs = blocks(source);
+        let out = splice(source, bs[1].range.clone(), "");
+        assert_eq!(out, "A\n\n    code\n    more");
+        assert_eq!(kinds(&out)[1], BlockKind::Code { fenced: false });
+        // The last one: the line above keeps its own bytes, trailing spaces too.
+        let source = "Hard  \n\nGone";
+        let out = splice(source, blocks(source)[1].range.clone(), "");
+        assert_eq!(out, "Hard  ");
+        let source = "One\r\n\r\nTwo\r\n";
+        let out = splice(source, blocks(source)[1].range.clone(), "");
+        assert_eq!(out, "One");
     }
 
     #[test]

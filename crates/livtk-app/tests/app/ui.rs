@@ -5884,3 +5884,84 @@ fn a_task_box_ticks_from_reading(cx: &mut TestAppContext) {
         "the other unticked"
     );
 }
+
+/// The body written elsewhere while a block of it is open (by an agent, or the CLI): saving
+/// the block unchanged keeps the body as it now is; saving it changed writes it where its text
+/// now is, nothing duplicated and nothing lost.
+#[gpui_kit::test]
+fn a_block_saves_into_the_body_as_it_now_is(cx: &mut TestAppContext) {
+    let dir = project();
+    rich_body(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    let elsewhere =
+        |app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext, body: &str| {
+            let body = body.to_owned();
+            app.update(cx, |a, cx| {
+                let id = a.model().detail.as_ref().unwrap().node.id;
+                a.model_mut().edit(id, None, Some(&body));
+                cx.notify();
+            });
+            redraw(cx);
+        };
+    // Unchanged: the body as written elsewhere stays.
+    double_click_on(cx, "body-block-4");
+    redraw(cx);
+    let moved = format!("Inserted first.\n\n{RICH_BODY}");
+    elsewhere(&app, cx, &moved);
+    cx.simulate_keystrokes("secondary-enter");
+    cx.run_until_parked();
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        moved,
+        "nothing duplicated"
+    );
+    // Changed: written where its text now is.
+    double_click_on(cx, "body-block-5");
+    redraw(cx);
+    assert_eq!(
+        app.read_with(cx, |a, cx| a.editing_text(cx)).as_deref(),
+        Some("Last paragraph.")
+    );
+    let moved_again = format!("Again.\n\n{moved}");
+    elsewhere(&app, cx, &moved_again);
+    cx.simulate_keystrokes("secondary-right");
+    cx.simulate_input(" More.");
+    cx.simulate_keystrokes("secondary-enter");
+    cx.run_until_parked();
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        moved_again.replace("Last paragraph.", "Last paragraph. More."),
+        "written where it now is"
+    );
+}
+
+/// A block emptied, then Down: the block that was below it opens, not a new one at the end.
+#[gpui_kit::test]
+fn down_from_an_emptied_block_opens_the_next(cx: &mut TestAppContext) {
+    let dir = project();
+    rich_body(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    double_click_on(cx, "body-block-1");
+    redraw(cx);
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("   ");
+    cx.simulate_keystrokes("down");
+    redraw(cx);
+    assert_eq!(
+        app.read_with(cx, |a, cx| a.editing_text(cx)).as_deref(),
+        Some("```rust\nfn main() {}\n```"),
+        "the code block that was below"
+    );
+    assert!(
+        !node_of(dir.path(), "LIV-1").body.contains("Ship"),
+        "the emptied one gone"
+    );
+}

@@ -1947,8 +1947,14 @@ impl LivtkApp {
         let Some(body) = self.save_edit(false, window, cx) else {
             return;
         };
+        // What the edit wrote: nothing if it emptied the block.
+        let written = if text.trim().is_empty() {
+            0
+        } else {
+            text.trim_end_matches(['\n', '\r']).len()
+        };
         let next = at
-            .beside(&body, text.len(), edge)
+            .beside(&body, written, edge)
             .unwrap_or_else(|| text::BlockAt::new_after(&body));
         let caret = match edge {
             text::Edge::Above => next.text.len(),

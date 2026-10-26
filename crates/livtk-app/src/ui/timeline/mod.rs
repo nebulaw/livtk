@@ -673,16 +673,20 @@ impl LivtkApp {
     }
 }
 
-/// The rail's polyline through `points`: straight down a lane, and onto another straight down
-/// the one it leaves to the next mark's height, then across into it (the corner rounded when
-/// drawn), so it never cuts over what sits between.
+/// The rail's polyline through `points`, straight down a lane, never over what sits between:
+/// branching out to a lane further in, down the one it leaves to the next mark's height, then
+/// across into it; coming back to one further out, across from the mark it leaves onto that
+/// lane, then down it into the next mark, as the rail always enters its marks (each corner
+/// rounded when drawn).
 fn path_through(points: &[RailPoint]) -> Vec<Point<Pixels>> {
     let mut out: Vec<Point<Pixels>> = Vec::new();
     for (i, p) in points.iter().enumerate() {
         if i > 0 {
             let a = points[i - 1];
-            if a.x != p.x {
+            if p.x > a.x {
                 out.push(point(a.x, p.y));
+            } else if p.x < a.x {
+                out.push(point(p.x, a.y));
             }
         }
         out.push(point(p.x, p.y));

@@ -1409,3 +1409,64 @@ fn a_worktree_writes_to_the_main_checkouts_log() {
     let ours = Workspace::open(&main).unwrap();
     assert_eq!(ours.tasks(&[]).unwrap().len(), 2, "both in the main log");
 }
+
+/// Making a project checks everything it is given before writing anything; its done-when ends
+/// its body; committed to at once by the human, never by Claude.
+#[test]
+fn a_project_is_made_whole_or_not_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let human = Actor::Human;
+    let bad = livtk_core::NewProject {
+        title: "Ship the importer".into(),
+        target: Some("next week".into()),
+        ..Default::default()
+    };
+    assert!(ws.new_project(&bad, &human).is_err());
+    let claude_owns = livtk_core::NewProject {
+        title: "Ship the importer".into(),
+        owner: Some("claude".into()),
+        ..Default::default()
+    };
+    assert!(ws.new_project(&claude_owns, &human).is_err());
+    assert!(ws.projects().unwrap().is_empty(), "nothing written");
+    let claude = Actor::Claude { agent: None };
+    let committed_by_claude = livtk_core::NewProject {
+        title: "Ship the importer".into(),
+        commit: true,
+        ..Default::default()
+    };
+    assert!(ws.new_project(&committed_by_claude, &claude).is_err());
+    let p = livtk_core::NewProject {
+        title: "Ship the importer".into(),
+        body: "Bring the old data across.".into(),
+        done_when: "every record reads the same in both".into(),
+        target: Some("2026-12-01".into()),
+        owner: Some("Karl".into()),
+        commit: true,
+        ..Default::default()
+    };
+    let events = ws.new_project(&p, &human).unwrap();
+    let id = events[0].op.subjects().0.to_string();
+    let n = ws.node(&id).unwrap();
+    assert_eq!(n.state, State::Active, "committed to");
+    assert!(
+        n.body
+            .ends_with("Done when: every record reads the same in both"),
+        "{}",
+        n.body
+    );
+    assert_eq!(n.props["target"], "2026-12-01");
+    assert_eq!(n.props["owner"], "Karl");
+    // Part of it: a proposed one, inside.
+    let inner = livtk_core::NewProject {
+        title: "Map the fields".into(),
+        part_of: Some(n.key.clone()),
+        ..Default::default()
+    };
+    let e = ws.new_project(&inner, &claude).unwrap();
+    let inner = ws.node(&e[0].op.subjects().0.to_string()).unwrap();
+    assert_eq!(inner.state, State::Proposed);
+    let (part_of, _) = ws.related(&inner.key, Rel::Parent).unwrap();
+    assert_eq!(part_of[0].key, n.key);
+}

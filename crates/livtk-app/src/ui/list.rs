@@ -62,11 +62,14 @@ impl LivtkApp {
                 }),
             ));
         }
-        (self.model.view() == View::Tasks).then(|| {
+        // A view of what the form makes offers to make one: Tasks a task, Projects a project.
+        let view = self.model.view();
+        Making::lists(view).then(|| {
+            let making = Making::for_view(view);
             empty_action(
-                "empty-new-task",
-                "New task",
-                cx.listener(|this, _, window, cx| this.open_form(window, cx)),
+                making.ids().2,
+                making.title(),
+                cx.listener(move |this, _, window, cx| this.open_form(making, window, cx)),
             )
         })
     }

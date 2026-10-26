@@ -17,6 +17,7 @@ mod flow;
 mod graph;
 pub mod grid;
 pub mod keys;
+pub mod making;
 mod palette;
 pub mod prefs;
 pub mod runs;
@@ -1748,40 +1749,6 @@ impl Model {
             );
             // A run waiting on the task reads it next: at once, not a beat later.
             self.survey_runs_soon();
-        }
-    }
-
-    pub fn create_task(&mut self, title: &str, body: &str, priority: Option<u8>) -> bool {
-        let cmd = Command::Create {
-            kind: Kind::Task,
-            title: title.to_owned(),
-            body: body.to_owned(),
-            priority,
-            links: Vec::<(Rel, String)>::new(),
-        };
-        let Some(project) = self.projects.get_mut(self.current) else {
-            return false;
-        };
-        let before = project.ws.newest_event().ok().flatten();
-        match project.ws.execute(cmd, &Actor::Human) {
-            Ok(events) => {
-                if !project.ws.config().on.is_empty() {
-                    self.wrote.push((project.dir.clone(), before));
-                }
-                self.toasts.clear_errors();
-                let created = events.first().map(|e| e.op.subjects().0);
-                // Into the tasks, wherever they show: their pane, or this one.
-                self.set_view(View::Tasks);
-                self.reload();
-                if let Some(id) = created {
-                    self.select(id);
-                }
-                true
-            }
-            Err(e) => {
-                self.warn(e.to_string());
-                false
-            }
         }
     }
 

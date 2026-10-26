@@ -5163,3 +5163,58 @@ fn key_hints_are_a_setting(cx: &mut TestAppContext) {
     click_on(cx, "shortcuts");
     assert!(app.read_with(cx, |a, _| a.help_open()), "the shortcuts");
 }
+
+/// P makes a project from anywhere, through the same form as a task: a bad target is refused
+/// and nothing made; filled right, it is made active with its done-when ending its body, and
+/// shown in Projects. N still makes a task.
+#[gpui_kit::test]
+fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("p");
+    settle(cx);
+    assert!(cx.debug_bounds("new-project-card").is_some(), "New project");
+    cx.simulate_input("Ship the importer");
+    click_on(cx, "new-project-done");
+    cx.simulate_input("every record reads the same");
+    click_on(cx, "new-project-target");
+    cx.simulate_input("next week");
+    click_on(cx, "create-project");
+    redraw(cx);
+    let projects = |dir: &std::path::Path| Workspace::open(dir).unwrap().projects().unwrap();
+    assert!(projects(dir.path()).is_empty(), "refused: nothing made");
+    assert!(
+        cx.debug_bounds("new-project-card").is_some(),
+        "the form stays"
+    );
+    // Put right.
+    click_on(cx, "new-project-target");
+    cx.simulate_keystrokes("secondary-a backspace");
+    cx.simulate_input("2026-12-01");
+    click_on(cx, "create-project");
+    settle(cx);
+    let made = projects(dir.path());
+    assert_eq!(made.len(), 1);
+    let n = Workspace::open(dir.path())
+        .unwrap()
+        .node(&made[0].key)
+        .unwrap();
+    assert_eq!(n.title, "Ship the importer");
+    assert_eq!(n.state, State::Active, "committed to, made by you");
+    assert!(
+        n.body.ends_with("Done when: every record reads the same"),
+        "{}",
+        n.body
+    );
+    assert_eq!(n.props["target"], "2026-12-01");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().view(), View::Projects, "shown where projects are");
+        assert!(!a.form_open());
+    });
+    // N is still a task.
+    cx.simulate_keystrokes("n");
+    settle(cx);
+    assert!(cx.debug_bounds("new-task-card").is_some(), "New task");
+}

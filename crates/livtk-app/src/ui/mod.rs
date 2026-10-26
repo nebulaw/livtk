@@ -43,6 +43,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::model::making::{Making, New};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{self, Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
@@ -100,6 +101,7 @@ actions!(
         Standing,
         Reject,
         NewTask,
+        NewProject,
         ToggleLayout,
         ToggleAll,
         PrevColumn,
@@ -377,6 +379,7 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ),
     ("Decide", &["X"], "Reject"),
     ("Work", &["N", "or", keys::MOD, "+", "N"], "New task"),
+    ("Work", &["P"], "New project"),
     ("Work", &["C"], "Add a note"),
     (
         "Work",
@@ -488,7 +491,12 @@ pub fn dock_actions(window: AnyWindowHandle, app: WeakEntity<LivtkApp>, cx: &mut
             });
         });
     }
-    on::<NewTask>(window, &app, cx, |_, app, w, cx| app.open_form(w, cx));
+    on::<NewTask>(window, &app, cx, |_, app, w, cx| {
+        app.open_form(Making::Task, w, cx)
+    });
+    on::<NewProject>(window, &app, cx, |_, app, w, cx| {
+        app.open_form(Making::Project, w, cx)
+    });
     // Quit is answered here alone: the app-wide quit behind it must not run after the
     // window has asked (global listeners all hear an action unless one stops it).
     let quit_app = app.clone();
@@ -539,6 +547,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
         KeyBinding::new("n", NewTask, nav),
+        KeyBinding::new("p", NewProject, nav),
         KeyBinding::new("b", ToggleLayout, nav),
         KeyBinding::new("s d", ToggleAll, nav),
         KeyBinding::new("h", PrevColumn, nav),
@@ -668,10 +677,27 @@ enum Field {
     Body(Entity<TextareaState>),
 }
 
-struct NewTaskForm {
+/// The form that makes a node: its kind, its title and body, and the fields its kind adds.
+struct NewForm {
+    making: Making,
     title: Entity<InputState>,
     body: Entity<TextareaState>,
-    priority: u8,
+    fields: Fields,
+}
+
+/// The fields a kind adds to the form.
+enum Fields {
+    Task {
+        priority: u8,
+    },
+    Project {
+        done_when: Entity<InputState>,
+        target: Entity<InputState>,
+        owner: Entity<InputState>,
+        /// The project it is part of: its key and title.
+        part_of: Option<(String, String)>,
+        commit: bool,
+    },
 }
 
 pub struct LivtkApp {
@@ -777,7 +803,7 @@ pub struct LivtkApp {
     /// was last written there, so it is written only when something changed.
     saved_path: Option<PathBuf>,
     last_saved: Saved,
-    form: Option<NewTaskForm>,
+    form: Option<NewForm>,
     help: bool,
     /// The About modal is open.
     about: bool,
@@ -1181,6 +1207,7 @@ impl LivtkApp {
             Menu::GridWhat => "grid-what",
             Menu::DetailMode => "detail-mode",
             Menu::DetailAgent => "detail-agent",
+            Menu::PartOf => "part-of",
         })
     }
 
@@ -1371,7 +1398,7 @@ impl LivtkApp {
         // Going to a node may have cleared the filter that hid it.
         self.sync_filter(window, cx);
         match ask {
-            Some(Ask::NewTask) => self.open_form(window, cx),
+            Some(Ask::New(m)) => self.open_form(m, window, cx),
             Some(Ask::AddNote) => {
                 if self.model.detail.is_none() {
                     self.model.open_detail();
@@ -1669,16 +1696,18 @@ impl LivtkApp {
 
     /// New Task, from anywhere: the form, over whatever else was open. One already open keeps its
     /// half-typed text and gets the keys back.
-    fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open the form making a node of kind `making`; one already open keeps the keys.
+    fn open_form(&mut self, making: Making, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(form) = &self.form {
             form.title.read(cx).focus_handle(cx).focus(window, cx);
             return;
         }
         self.close_overlays(window, cx);
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder("Task title"));
+        let (title_hint, body_hint) = making.placeholders();
+        let title = cx.new(|cx| InputState::new(window, cx).placeholder(title_hint));
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("Add a plan: goal, approach, acceptance check…")
+                .placeholder(body_hint)
                 .auto_grow(5, 14)
         });
         let sub = cx.subscribe_in(&title, window, |this, _, event: &InputEvent, window, cx| {
@@ -1698,11 +1727,27 @@ impl LivtkApp {
             }
         });
         self._subscriptions.push(sub);
+        let fields = match making {
+            Making::Task => Fields::Task { priority: 3 },
+            Making::Project => {
+                let field = |hint: &'static str, window: &mut Window, cx: &mut Context<Self>| {
+                    cx.new(|cx| InputState::new(window, cx).placeholder(hint))
+                };
+                Fields::Project {
+                    done_when: field("Done when… (what will be true)", window, cx),
+                    target: field("YYYY-MM-DD", window, cx),
+                    owner: field("Who owns it", window, cx),
+                    part_of: None,
+                    commit: true,
+                }
+            }
+        };
         title.read(cx).focus_handle(cx).focus(window, cx);
-        self.form = Some(NewTaskForm {
+        self.form = Some(NewForm {
+            making,
             title,
             body,
-            priority: 3,
+            fields,
         });
         cx.notify();
     }
@@ -1712,7 +1757,33 @@ impl LivtkApp {
         let title = form.title.read(cx).value().to_string();
         // Without the newline Ctrl+Enter leaves at the end.
         let body = form.body.read(cx).value().trim_end().to_owned();
-        if self.model.create_task(&title, &body, Some(form.priority)) {
+        let value = |f: &Entity<InputState>| -> Option<String> {
+            let v = f.read(cx).value().trim().to_owned();
+            (!v.is_empty()).then_some(v)
+        };
+        let new = match &form.fields {
+            Fields::Task { priority } => New::Task {
+                title,
+                body,
+                priority: *priority,
+            },
+            Fields::Project {
+                done_when,
+                target,
+                owner,
+                part_of,
+                commit,
+            } => New::Project(livtk_core::NewProject {
+                title,
+                body,
+                done_when: value(done_when).unwrap_or_default(),
+                target: value(target),
+                owner: value(owner),
+                part_of: part_of.as_ref().map(|(k, _)| k.clone()),
+                commit: *commit,
+            }),
+        };
+        if self.model.create(new) {
             self.form = None;
             self.sync_filter(window, cx);
             self.focus_main(window, cx);
@@ -2454,9 +2525,51 @@ impl LivtkApp {
         })
     }
 
+    /// The project a new one is part of: none, or any project there is.
+    fn part_of_menu(&self, cx: &mut Context<Self>) -> Div {
+        let current = match self.form.as_ref().map(|f| &f.fields) {
+            Some(Fields::Project { part_of, .. }) => part_of.as_ref().map(|(k, _)| k.clone()),
+            _ => None,
+        };
+        let mut panel = menu_panel(280.).debug_selector(|| "part-of-menu".into());
+        let choices = std::iter::once(None).chain(
+            self.model
+                .project_names()
+                .iter()
+                .map(|(_, b)| Some((b.key.clone(), b.title.clone()))),
+        );
+        for choice in choices {
+            let key = choice.as_ref().map(|(k, _)| k.clone());
+            let id = format!("part-of-{}", key.as_deref().unwrap_or("none"));
+            let label = choice
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), |(k, t)| format!("{k}  {t}"));
+            panel = panel.child(
+                option_row(SharedString::from(id.clone()))
+                    .debug_selector(move || id.clone())
+                    .child(div().flex_1().truncate().child(label))
+                    .child(check(current == key))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(NewForm {
+                            fields: Fields::Project { part_of, .. },
+                            ..
+                        }) = &mut this.form
+                        {
+                            part_of.clone_from(&choice);
+                        }
+                        this.close_menu(window, cx);
+                    })),
+            );
+        }
+        panel
+    }
+
     /// The new task's priority, chosen from a menu as in Linear's issue composer.
     fn priority_menu(&self, cx: &mut Context<Self>) -> Div {
-        let current = self.form.as_ref().map_or(3, |f| f.priority);
+        let current = match self.form.as_ref().map(|f| &f.fields) {
+            Some(Fields::Task { priority }) => *priority,
+            _ => 3,
+        };
         let mut panel = menu_panel(180.).debug_selector(|| "priority-menu".into());
         for p in 1..=4u8 {
             let id = PRIORITY_IDS[usize::from(p - 1)];
@@ -2467,8 +2580,12 @@ impl LivtkApp {
                     .child(PRIORITY_NAMES[usize::from(p - 1)])
                     .child(check(current == p))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(f) = &mut this.form {
-                            f.priority = p;
+                        if let Some(NewForm {
+                            fields: Fields::Task { priority },
+                            ..
+                        }) = &mut this.form
+                        {
+                            *priority = p;
                         }
                         this.close_menu(window, cx);
                     })),
@@ -3017,7 +3134,14 @@ impl Render for LivtkApp {
                 cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
             )
             // From anywhere, typing included, as their keys (Cmd on macOS) and the menu bar do.
-            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.open_form(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &NewTask, window, cx| {
+                    this.open_form(Making::Task, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &NewProject, window, cx| {
+                this.open_form(Making::Project, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &OpenFolder, _, cx| this.open_folder(cx)))
             .on_action(
                 cx.listener(|this, link: &FollowLink, _, cx| this.follow_link(&link.href, cx)),
@@ -3234,6 +3358,8 @@ enum Menu {
     Standing,
     /// The projects, from the collapsed sidebar's rail.
     Projects,
+    /// The project a new one is part of, in the form.
+    PartOf,
     /// The activity grid's range, and what it counts.
     GridWhat,
     /// How a node's detail opens: side peek, center peek, full page.
@@ -3874,5 +4000,14 @@ pub(super) fn ago(at: &str) -> String {
         3600..86400 => format!("{}h", secs / 3600),
         86400..604800 => format!("{}d", secs / 86400),
         _ => at.get(..10).unwrap_or(at).to_owned(),
+    }
+}
+
+/// The icon making a kind wears, on the dock's button and in the palette: a task's pencil, a
+/// project's folder.
+fn making_icon(m: Making) -> Icon {
+    match m {
+        Making::Task => Icon::NewTask,
+        Making::Project => Icon::Project,
     }
 }

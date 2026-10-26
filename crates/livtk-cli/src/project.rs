@@ -8,7 +8,7 @@ use clap::Subcommand;
 use jiff::Timestamp;
 use livtk_core::format::duration;
 use livtk_core::{
-    ACTIVE_AT_ONCE, Actor, Command, Health, Kind, Progress, Rel, State, Summary, Workspace,
+    ACTIVE_AT_ONCE, Actor, Command, Health, Progress, Rel, State, Summary, Workspace,
 };
 use serde_json::json;
 
@@ -68,29 +68,17 @@ pub fn run(ws: &mut Workspace, cmd: ProjectCmd, by: &Actor, json: bool) -> Resul
             part_of,
         } => {
             let body = crate::read_body(body)?.unwrap_or_default();
-            let mut events = ws.execute(
-                Command::Create {
-                    kind: Kind::Project,
+            let events = ws.new_project(
+                &livtk_core::NewProject {
                     title,
                     body,
-                    priority: None,
-                    links: part_of.map(|p| (Rel::Parent, p)).into_iter().collect(),
+                    target,
+                    owner,
+                    part_of,
+                    ..Default::default()
                 },
                 by,
             )?;
-            if (target.is_some() || owner.is_some())
-                && let Some(livtk_core::Op::NodeCreate { node, .. }) = events.first().map(|e| &e.op)
-            {
-                let node = node.to_string();
-                events.extend(ws.execute(
-                    Command::SetProject {
-                        node,
-                        target,
-                        owner,
-                    },
-                    by,
-                )?);
-            }
             crate::output::created(ws, &events, json)
         }
         ProjectCmd::List { all } => {

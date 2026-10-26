@@ -118,6 +118,10 @@ menu still moves it).
 - **Radii**: `rounded_lg` for rows, fields and buttons; `rounded_xl` for menus, popovers, bars
   that float, cards.
 - **Empty states**: an icon, a line, what to do, and a button that does it.
+- **New-node form**: one modal for every kind it makes, its fields from the kind. N makes a task
+  (title, plan, priority), P a project (outcome, why and how, done when, target, owner, part of,
+  and Commit to it now, on). The dock's main button and an empty list make what the view lists.
+  A new kind joins the form as a row of `Making` and its fields, never as another form.
 - **Composer** (the note bar at the foot of a panel): one `rounded_xl` card on `SURFACE` holding
   the text and a send button, nothing else; a `BORDER` hairline, `BORDER_STRONG` on hover,
   `ACCENT` while it has the keys. The send button, 24px at the bottom right, is quiet until there

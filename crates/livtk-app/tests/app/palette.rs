@@ -235,7 +235,11 @@ fn what_only_the_view_can_do_comes_back_to_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = app(dir.path());
     for (query, ask) in [
-        ("new task", Ask::NewTask),
+        ("new task", Ask::New(livtk_app::model::making::Making::Task)),
+        (
+            "new project",
+            Ask::New(livtk_app::model::making::Making::Project),
+        ),
         ("add a note", Ask::AddNote),
         ("edit title", Ask::EditTitle),
         ("keyboard shortcuts", Ask::Help),

@@ -121,7 +121,9 @@ impl LivtkApp {
             })
     }
 
+    /// The dock's main button: make what the view lists (a project in Projects), else a task.
     pub(super) fn dock_new_task(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let making = Making::for_view(self.model.view());
         div()
             .id("dock-new-task")
             .debug_selector(|| "dock-new-task".into())
@@ -138,14 +140,19 @@ impl LivtkApp {
             .text_color(color(TEXT))
             .font_weight(FontWeight::MEDIUM)
             .hover(|s| s.bg(color(ACCENT_HOVER)))
-            .child(icon(Icon::NewTask, 16., TEXT))
+            .child(icon(making_icon(making), 16., TEXT))
             .when(wide, |b| {
-                b.child(div().whitespace_nowrap().child("New task"))
+                b.child(div().whitespace_nowrap().child(making.title()))
             })
-            .tooltip(|window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new("New task · N").build(window, cx)
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(format!(
+                    "{} · {}",
+                    making.title(),
+                    making.key()
+                ))
+                .build(window, cx)
             })
-            .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.open_form(making, window, cx)))
             .into_any_element()
     }
 

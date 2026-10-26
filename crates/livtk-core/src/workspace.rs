@@ -27,7 +27,9 @@ use crate::search::{
 };
 use crate::store::{Applied, Brief, Node, Snapshot, Store, Summary};
 pub use flow::{Flow, Lead, Queue, StateTime};
-pub use project::{ACTIVE_AT_ONCE, Progress, UPDATE_EVERY_DAYS, Update, Waiting, done_when};
+pub use project::{
+    ACTIVE_AT_ONCE, NewProject, Progress, UPDATE_EVERY_DAYS, Update, Waiting, done_when,
+};
 
 /// Recall injects at most this many items into a prompt.
 pub const RECALL_MAX: usize = 3;
@@ -1943,21 +1945,11 @@ impl Workspace {
                 }
                 let mut props = serde_json::Map::new();
                 if let Some(t) = target {
-                    let t = t.trim();
-                    if !t.is_empty() && t.parse::<jiff::civil::Date>().is_err() {
-                        return Err(Error::Invalid(format!(
-                            "target `{t}` is not a date (YYYY-MM-DD)"
-                        )));
-                    }
+                    let t = project::check_target(&t)?;
                     props.insert("target".into(), prop_value(t));
                 }
                 if let Some(o) = owner {
-                    let o = o.trim();
-                    if o.eq_ignore_ascii_case("claude") || o.starts_with("claude:") {
-                        return Err(Error::Refused(
-                            "Claude never owns an outcome; name the person who does".into(),
-                        ));
-                    }
+                    let o = project::check_owner(&o)?;
                     props.insert("owner".into(), prop_value(o));
                 }
                 // Only what changes.

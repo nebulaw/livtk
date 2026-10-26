@@ -10,10 +10,10 @@ use crate::model::View;
 
 use super::{
     About, AddLinkMenu, BringToFront, CheckForUpdates, CloseWindow, Decide, GoView, HideApp,
-    HideOthers, InstallCli, Minimize, NewTask, Note, OpenFolder, OpenGitHub, OpenPalette,
-    OpenSettings, Priority1, Priority2, Priority3, Priority4, Quit, Reject, ReportIssue,
-    RestartToUpdate, ShowAll, Standing, ToggleAll, ToggleBottom, ToggleEmpty, ToggleHelp,
-    ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
+    HideOthers, InstallCli, Minimize, NewProject, NewTask, Note, OpenFolder, OpenGitHub,
+    OpenPalette, OpenSettings, Priority1, Priority2, Priority3, Priority4, Quit, Reject,
+    ReportIssue, RestartToUpdate, ShowAll, Standing, ToggleAll, ToggleBottom, ToggleEmpty,
+    ToggleHelp, ToggleLayout, TogglePanel, ToggleSidebar, ZoomFit, ZoomIn, ZoomOut, ZoomWindow,
 };
 
 /// What the menus show of the app's state: the projects and which is open, the view and its
@@ -109,6 +109,7 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
         ),
         Menu::new("File").items([
             MenuItem::action("New Task", NewTask),
+            MenuItem::action("New Project", NewProject),
             MenuItem::action("Open Another Project…", OpenFolder),
             MenuItem::submenu(Menu::new("Projects").items(projects(state))),
             MenuItem::separator(),

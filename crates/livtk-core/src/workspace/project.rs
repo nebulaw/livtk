@@ -21,6 +21,62 @@ pub fn done_when(body: &str) -> Option<&str> {
         .or_else(|| lines().next())
 }
 
+/// A target as a project takes it: empty, or a date (YYYY-MM-DD).
+pub fn check_target(target: &str) -> Result<&str> {
+    let t = target.trim();
+    if !t.is_empty() && t.parse::<jiff::civil::Date>().is_err() {
+        return Err(Error::Invalid(format!(
+            "target `{t}` is not a date (YYYY-MM-DD)"
+        )));
+    }
+    Ok(t)
+}
+
+/// An owner as a project takes it: empty, or a person; never Claude.
+pub fn check_owner(owner: &str) -> Result<&str> {
+    let o = owner.trim();
+    if o.eq_ignore_ascii_case("claude") || o.starts_with("claude:") {
+        return Err(Error::Refused(
+            "Claude never owns an outcome; name the person who does".into(),
+        ));
+    }
+    Ok(o)
+}
+
+/// A project to make: what `livtk project new` and the app's form both ask for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewProject {
+    /// The outcome, in a line.
+    pub title: String,
+    /// What it is for and how it gets there.
+    pub body: String,
+    /// What done means, in a line: the body's last line, `Done when: …`. Empty when the body
+    /// says it already.
+    pub done_when: String,
+    pub target: Option<String>,
+    pub owner: Option<String>,
+    /// The project it is part of, by key.
+    pub part_of: Option<String>,
+    /// Committed to at once (active), as the human may; else proposed.
+    pub commit: bool,
+}
+
+impl NewProject {
+    /// Its body as stored: the body, then its `Done when:` line unless the body has one.
+    pub fn full_body(&self) -> String {
+        let body = self.body.trim();
+        let done = self.done_when.trim();
+        let has = body
+            .lines()
+            .any(|l| l.trim().to_lowercase().starts_with("done when"));
+        match (done.is_empty() || has, body.is_empty()) {
+            (true, _) => body.to_owned(),
+            (false, true) => format!("Done when: {done}"),
+            (false, false) => format!("{body}\n\nDone when: {done}"),
+        }
+    }
+}
+
 /// An active project with no update for this long reads "update missing".
 pub const UPDATE_EVERY_DAYS: i64 = 7;
 
@@ -64,6 +120,70 @@ pub struct Update {
 }
 
 impl Workspace {
+    /// Make project `p`: everything it is given checked before anything is written, then made,
+    /// its target and owner set, and committed to when asked (the human's move). The events
+    /// written, the project's creation first.
+    pub fn new_project(&mut self, p: &NewProject, by: &crate::Actor) -> Result<Vec<crate::Event>> {
+        use crate::workspace::Command;
+        if p.title.trim().is_empty() {
+            return Err(Error::Invalid(
+                "a project needs its outcome, in a line".into(),
+            ));
+        }
+        let target = p.target.as_deref().map(check_target).transpose()?;
+        let owner = p.owner.as_deref().map(check_owner).transpose()?;
+        if let Some(parent) = &p.part_of {
+            let n = self.node(parent)?;
+            if n.kind != Kind::Project {
+                return Err(Error::Invalid(format!("{} is not a project", n.key)));
+            }
+        }
+        if p.commit && !by.is_human() {
+            return Err(Error::Refused(
+                "committing to a project is the human's move".into(),
+            ));
+        }
+        let mut events = self.execute(
+            Command::Create {
+                kind: Kind::Project,
+                title: p.title.trim().to_owned(),
+                body: p.full_body(),
+                priority: None,
+                links: p
+                    .part_of
+                    .iter()
+                    .map(|k| (crate::Rel::Parent, k.clone()))
+                    .collect(),
+            },
+            by,
+        )?;
+        let Some(crate::Op::NodeCreate { node, .. }) = events.first().map(|e| e.op.clone()) else {
+            return Ok(events);
+        };
+        let node = node.to_string();
+        let set = |v: Option<&str>| v.filter(|s| !s.is_empty()).map(str::to_owned);
+        if target.is_some_and(|t| !t.is_empty()) || owner.is_some_and(|o| !o.is_empty()) {
+            events.extend(self.execute(
+                Command::SetProject {
+                    node: node.clone(),
+                    target: set(target),
+                    owner: set(owner),
+                },
+                by,
+            )?);
+        }
+        if p.commit {
+            events.extend(self.execute(
+                Command::Move {
+                    node,
+                    to: State::Active,
+                },
+                by,
+            )?);
+        }
+        Ok(events)
+    }
+
     /// What project `key` has come to: counted from its tasks, as of `now`.
     pub fn progress(&self, key: &str, now: Timestamp) -> Result<Progress> {
         let p = self.node(key)?;

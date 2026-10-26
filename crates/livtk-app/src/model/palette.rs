@@ -108,7 +108,8 @@ pub enum Run {
 pub enum Ask {
     /// The palette reopened to pick a link's other end: its field starts empty.
     PickLink,
-    NewTask,
+    /// Make a node of this kind, in the form.
+    New(super::making::Making),
     AddNote,
     EditTitle,
     EditBody,
@@ -602,7 +603,9 @@ impl Model {
             shortcut,
             run,
         };
-        out.push(plain("New task", Some("N"), Run::Ask(Ask::NewTask)));
+        for m in super::making::Making::ALL {
+            out.push(plain(m.title(), Some(m.key()), Run::Ask(Ask::New(m))));
+        }
         // Every view with its go-to key, as the views say them.
         for v in View::ALL {
             let Some(keys) = v.go_keys() else { continue };

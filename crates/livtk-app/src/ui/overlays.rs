@@ -1,5 +1,6 @@
 //! What opens over the window: the new-task form, the command palette, the help.
 
+use super::form::{field, toggle};
 use super::*;
 
 impl LivtkApp {
@@ -66,21 +67,108 @@ impl LivtkApp {
 
     pub(super) fn form_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.as_ref()?;
-        let priority = self.select(
-            Menu::Priority,
-            "priority-select",
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(priority_mark(form.priority))
-                .child(PRIORITY_NAMES[usize::from(form.priority.clamp(1, 4) - 1)]),
-            Self::priority_menu,
-            cx,
-        );
+        let making = form.making;
+        let (card_id, create_id, _) = making.ids();
+        // What the kind adds: a task its priority beside the button; a project its fields
+        // under the body.
+        let (beside, fields): (Option<Div>, Option<Div>) =
+            match &form.fields {
+                Fields::Task { priority } => (
+                    Some(
+                        self.select(
+                            Menu::Priority,
+                            "priority-select",
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(priority_mark(*priority))
+                                .child(PRIORITY_NAMES[usize::from((*priority).clamp(1, 4) - 1)]),
+                            Self::priority_menu,
+                            cx,
+                        ),
+                    ),
+                    None,
+                ),
+                Fields::Project {
+                    done_when,
+                    target,
+                    owner,
+                    part_of,
+                    commit,
+                } => {
+                    let label = |l: &'static str| {
+                        div()
+                            .w(px(84.))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child(l)
+                    };
+                    let line = |l: &'static str, id: &'static str, f: &Entity<InputState>| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(label(l))
+                            .child(div().flex_1().child(field(f, id)))
+                    };
+                    let parent = part_of
+                        .as_ref()
+                        .map_or_else(|| "None".to_owned(), |(k, t)| format!("{k}  {t}"));
+                    let part = self.select(
+                        Menu::PartOf,
+                        "part-of-select",
+                        div().child(parent),
+                        Self::part_of_menu,
+                        cx,
+                    );
+                    let on = *commit;
+                    (
+                        Some(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(color(TEXT_3))
+                                .child(toggle("new-project-commit".into(), on).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        if let Some(NewForm {
+                                            fields: Fields::Project { commit, .. },
+                                            ..
+                                        }) = &mut this.form
+                                        {
+                                            *commit = !*commit;
+                                        }
+                                        cx.notify();
+                                    }),
+                                ))
+                                .child("Commit to it now"),
+                        ),
+                        Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(line("Done when", "new-project-done", done_when))
+                                .child(line("Target", "new-project-target", target))
+                                .child(line("Owner", "new-project-owner", owner))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(label("Part of"))
+                                        .child(part),
+                                ),
+                        ),
+                    )
+                }
+            };
         let create = div()
-            .id("create-task")
-            .debug_selector(|| "create-task".into())
+            .id(create_id)
+            .debug_selector(move || create_id.into())
             .flex_none()
             .h(px(28.))
             .px_3()
@@ -92,7 +180,7 @@ impl LivtkApp {
             .text_color(color(TEXT))
             .font_weight(FontWeight::MEDIUM)
             .hover(|s| s.bg(color(ACCENT_HOVER)))
-            .child("Create task")
+            .child(making.create())
             .child(
                 div()
                     .text_xs()
@@ -101,7 +189,7 @@ impl LivtkApp {
             )
             .on_click(cx.listener(|this, _, window, cx| this.submit_form(window, cx)));
         let card = div()
-            .debug_selector(|| "new-task-card".into())
+            .debug_selector(move || card_id.into())
             .w(px(640.))
             .p_4()
             .flex()
@@ -121,8 +209,12 @@ impl LivtkApp {
                             .unwrap_or_default(),
                     )
                     .child("›")
-                    .child("New task")
-                    .child(div().text_color(color(TEXT_4)).child("· starts in Backlog")),
+                    .child(making.title())
+                    .child(
+                        div()
+                            .text_color(color(TEXT_4))
+                            .child(format!("· {}", making.starts())),
+                    ),
             )
             // Flush with the card's edge, as the breadcrumb above them is.
             .child(flush_input(Input::new(&form.title).text_lg(), 32.))
@@ -138,6 +230,7 @@ impl LivtkApp {
                     ),
                 &form.body,
             ))
+            .children(fields)
             .child(div().h(px(1.)).bg(color(BORDER)))
             .child(
                 div()
@@ -145,7 +238,7 @@ impl LivtkApp {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(priority)
+                    .children(beside)
                     .child(div().flex_1())
                     .child(create),
             );
@@ -312,7 +405,7 @@ impl LivtkApp {
             Run::ToggleEmpty => Icon::ViewOptions,
             Run::FitGraph => Icon::Fit,
             Run::PickLink(_) | Run::Ask(Ask::PickLink) => Icon::Link,
-            Run::Ask(Ask::NewTask) => Icon::NewTask,
+            Run::Ask(Ask::New(m)) => making_icon(*m),
             Run::Ask(Ask::AddNote) => Icon::Notes,
             Run::Ask(Ask::EditTitle | Ask::EditBody) => Icon::Edit,
             Run::Ask(Ask::OpenFolder) => Icon::OpenProject,

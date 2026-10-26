@@ -5834,7 +5834,7 @@ fn arrows_walk_a_body_block_by_block(cx: &mut TestAppContext) {
         "down into the paragraph"
     );
     // To the last block, then past it: a new one, typed into and kept.
-    double_click_on(cx, "body-block-5");
+    double_click_on(cx, "body-block-4");
     redraw(cx);
     cx.simulate_keystrokes("secondary-down");
     cx.simulate_keystrokes("down");
@@ -5908,7 +5908,7 @@ fn a_block_saves_into_the_body_as_it_now_is(cx: &mut TestAppContext) {
             redraw(cx);
         };
     // Unchanged: the body as written elsewhere stays.
-    double_click_on(cx, "body-block-5");
+    double_click_on(cx, "body-block-4");
     redraw(cx);
     let moved = format!("Inserted first.\n\n{RICH_BODY}");
     elsewhere(&app, cx, &moved);
@@ -5920,7 +5920,7 @@ fn a_block_saves_into_the_body_as_it_now_is(cx: &mut TestAppContext) {
         "nothing duplicated"
     );
     // Changed: written where its text now is.
-    double_click_on(cx, "body-block-6");
+    double_click_on(cx, "body-block-5");
     redraw(cx);
     assert_eq!(
         app.read_with(cx, |a, cx| a.editing_text(cx)).as_deref(),
@@ -6157,174 +6157,4 @@ fn the_timeline_sticks_what_heads_the_view(cx: &mut TestAppContext) {
         &all.last().unwrap().op,
         livtk_core::event::Op::NodeNote { data, .. } if data.text == "typed while stuck or not"
     ));
-}
-
-/// The gap a body's blocks keep after them (`text::style::BLOCK_GAP`).
-const BLOCK_GAP: gpui_kit::Pixels = gpui_kit::px(12.);
-/// The gap a list's items keep after them (`text::style::ITEM_GAP`).
-const ITEM_GAP: gpui_kit::Pixels = gpui_kit::px(3.5);
-
-/// A body with each kind of block whose lines must not move between reading and editing.
-const LINES_BODY: &str = "A paragraph long enough to wrap over two lines or more in the panel, so its first and last lines are not one line, as long notes do.\n\nWith `inline code` in it, and more words after the code so it wraps over two lines in the panel.\n\n# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n\n- first item\n- second item\n- third item\n\n- [ ] a box\n- [x] a ticked box";
-
-/// Each block's lines fall in the same place reading and editing: the first line's middle at
-/// the block's top plus half its line, the last line's at its bottom (less the gap after it)
-/// less half its line; a list edited item by item, each where it reads.
-#[gpui_kit::test]
-fn a_blocks_lines_fall_alike_reading_and_editing(cx: &mut TestAppContext) {
-    let dir = project();
-    Workspace::open(dir.path())
-        .unwrap()
-        .execute(
-            Command::Edit {
-                node: "LIV-1".into(),
-                title: None,
-                body: Some(LINES_BODY.into()),
-            },
-            &Actor::Human,
-        )
-        .unwrap();
-    let (app, cx) = open_app(cx, dir.path());
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    resize(cx, 1400., 2400.);
-    open_detail(cx);
-    redraw(cx);
-    let mut off = Vec::new();
-    for i in 0..40 {
-        let sel: &'static str = Box::leak(format!("body-block-{i}").into_boxed_str());
-        let Some(read) = cx.debug_bounds(sel) else {
-            break;
-        };
-        // The gap after it, its own: the next block's top less its bottom.
-        let next: &'static str = Box::leak(format!("body-block-{}", i + 1).into_boxed_str());
-        let gap = cx
-            .debug_bounds(next)
-            .map_or(gpui_kit::px(0.), |n| n.top() - read.bottom());
-        let _ = gap;
-        double_click_at(
-            cx,
-            gpui_kit::point(
-                read.origin.x + gpui_kit::px(12.),
-                read.origin.y + gpui_kit::px(8.),
-            ),
-        );
-        redraw(cx);
-        if app.read_with(cx, |a, _| a.editing()) != Some("body") {
-            off.push(format!("{i}: did not open"));
-            continue;
-        }
-        let edit = cx.debug_bounds("body-block-editor").unwrap();
-        cx.simulate_keystrokes("secondary-up");
-        redraw(cx);
-        let (first, line) = app.read_with(cx, |a, cx| a.editing_caret(cx)).unwrap();
-        cx.simulate_keystrokes("secondary-down");
-        redraw(cx);
-        let (last, _) = app.read_with(cx, |a, cx| a.editing_caret(cx)).unwrap();
-        let text = app.read_with(cx, |a, cx| a.editing_text(cx)).unwrap();
-        let first_mid = first.center().y;
-        let last_mid = last.center().y;
-        let want_first = read.top() + line / 2.;
-        // The reading block holds its lines, then the gap after it (its own, below them): a
-        // block's, or a list item's.
-        let want_last = [BLOCK_GAP, ITEM_GAP]
-            .map(|g| read.bottom() - g - line / 2.)
-            .into_iter()
-            .min_by(|a, b| {
-                (*a - last_mid)
-                    .abs()
-                    .partial_cmp(&(*b - last_mid).abs())
-                    .unwrap()
-            })
-            .unwrap();
-        let lines = ((last_mid - first_mid) / line).round() as usize + 1;
-        let read_lines_h = edit.size.height;
-        if (first_mid - want_first).abs() > gpui_kit::px(0.5)
-            || (last_mid - want_last).abs() > gpui_kit::px(0.5)
-        {
-            off.push(format!(
-                "{i} {text:?}: first line {first_mid:?} want {want_first:?}, last {last_mid:?} \
-                 want {want_last:?}; {lines} lines"
-            ));
-        }
-        let _ = read_lines_h;
-        cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
-        redraw(cx);
-    }
-    assert!(off.is_empty(), "lines moved:\n{}", off.join("\n"));
-}
-
-/// Opening a block to edit draws all its lines from the first frame: the field is as tall as
-/// the text it read from the moment it opens, not one row and then its height (a flash).
-#[gpui_kit::test]
-fn a_block_opens_whole_from_its_first_frame(cx: &mut TestAppContext) {
-    let dir = project();
-    Workspace::open(dir.path())
-        .unwrap()
-        .execute(
-            Command::Edit {
-                node: "LIV-1".into(),
-                title: None,
-                body: Some(LINES_BODY.into()),
-            },
-            &Actor::Human,
-        )
-        .unwrap();
-    let (app, cx) = open_app(cx, dir.path());
-    cx.update(|_, cx| cx.set_reduce_motion(true));
-    resize(cx, 1400., 1600.);
-    open_detail(cx);
-    redraw(cx);
-    let read = cx.debug_bounds("body-block-0").unwrap();
-    let at = gpui_kit::point(
-        read.origin.x + gpui_kit::px(12.),
-        read.origin.y + gpui_kit::px(8.),
-    );
-    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
-    redraw(cx);
-    // Every frame from the first press on: the block is drawn, as read or as edited, whole.
-    let mut frames = Vec::new();
-    let mut frame = |cx: &mut gpui_kit::VisualTestContext, when: &str| {
-        cx.update(|window, _| window.refresh());
-        cx.run_until_parked();
-        let reading = cx.debug_bounds("body-block-0");
-        let editing = cx.debug_bounds("body-block-editor");
-        let field = app.read_with(cx, |a, cx| a.editing_bounds(cx));
-        frames.push(format!(
-            "{when}: read {reading:?} edit {editing:?} field {field:?}"
-        ));
-        let shown = editing.or(reading).expect("the block drawn");
-        assert!(
-            shown.size.height >= read.size.height - gpui_kit::px(0.5),
-            "{when}: whole, {shown:?} against {read:?}\n{}",
-            frames.join("\n")
-        );
-        if let Some(f) = field {
-            assert!(
-                f.size.height >= gpui_kit::px(44.),
-                "{when}: its lines all shown: {f:?}"
-            );
-        }
-    };
-    for click_count in [1, 2] {
-        cx.simulate_event(gpui_kit::MouseDownEvent {
-            position: at,
-            modifiers: gpui_kit::Modifiers::default(),
-            button: gpui_kit::MouseButton::Left,
-            click_count,
-            first_mouse: false,
-        });
-        frame(cx, &format!("down {click_count}"));
-        cx.simulate_event(gpui_kit::MouseUpEvent {
-            position: at,
-            modifiers: gpui_kit::Modifiers::default(),
-            button: gpui_kit::MouseButton::Left,
-            click_count,
-        });
-        frame(cx, &format!("up {click_count}"));
-    }
-    for k in 0..3 {
-        frame(cx, &format!("after {k}"));
-    }
-    app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
 }

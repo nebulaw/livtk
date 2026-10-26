@@ -40,11 +40,10 @@ pub(in crate::ui) struct TextStyle {
 
 /// The body's text size, which a heading's is measured against.
 const BODY_SIZE: f32 = 14.;
-/// The headings' sizes, 1 to 6: each, by the renderer's line ratio, on a whole-pixel line (H3
-/// shares H2's size, H5 H6's), so a heading's lines fall alike reading and editing on any screen.
-const HEADING_SIZES: [f32; 6] = [20., 17., 17., 14., 12., 12.];
+/// The headings' sizes, 1 to 6.
+const HEADING_SIZES: [f32; 6] = [20., 17., 15., 14., 13., 12.];
 /// The markdown renderer's heading line heights, relative to their size, 1 to 6 (its own,
-/// fixed): a heading's editor takes the same line, as the whole pixel the renderer snaps to.
+/// fixed): a heading's editor takes the same line.
 const HEADING_LINES: [f32; 6] = [1.25, 1.35, 1.35, 1.35, 1.35, 1.35];
 /// The renderer's code block: its text size, line (relative), and room across and down.
 const CODE_SIZE: f32 = 13.;
@@ -53,8 +52,6 @@ const CODE_PAD_X: f32 = 16.;
 const CODE_PAD_Y: f32 = 14.;
 /// The gap between a body's blocks.
 pub(in crate::ui) const BLOCK_GAP: Pixels = px(12.);
-/// The gap between a list's items, as the renderer spaces them (a quarter of the body's size).
-pub(in crate::ui) const ITEM_GAP: Pixels = px(BODY_SIZE * 0.25);
 
 /// A heading's size at `level` (1 to 6; deeper reads as 6).
 pub(in crate::ui) fn heading_size(level: u8) -> Pixels {
@@ -71,8 +68,7 @@ impl TextRole {
             size: px(BODY_SIZE),
             line: px(22.),
             weight: FontWeight::NORMAL,
-            // The renderer's foreground (the theme's), which a block's editor matches.
-            color: TEXT,
+            color: TEXT_2,
             pad_x: px(8.),
             pad_y: px(0.),
             code: false,
@@ -91,7 +87,7 @@ impl TextRole {
                 let size = HEADING_SIZES[heading_ix(level)];
                 TextStyle {
                     size: px(size),
-                    line: px((size * HEADING_LINES[heading_ix(level)]).round()),
+                    line: px(size * HEADING_LINES[heading_ix(level)]),
                     weight: FontWeight::SEMIBOLD,
                     ..plain
                 }
@@ -143,9 +139,9 @@ impl TextStyle {
             .font_weight(self.weight)
             .text_color(color(self.color));
         if self.code {
-            // On the theme's `muted`, which the renderer paints code on (the app's surface).
+            // On the theme's accent, which the renderer paints code on (the app's hover colour).
             el.font_family(gpui_component::Theme::global(cx).mono_font_family.clone())
-                .bg(color(SURFACE))
+                .bg(color(HOVER))
                 .border_1()
                 .border_color(color(BORDER))
         } else {

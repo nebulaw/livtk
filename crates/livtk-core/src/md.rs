@@ -42,15 +42,6 @@ pub enum BlockKind {
     Footnote,
     /// Anything else the parser finds at the top.
     Other,
-    /// One item of a list at the top, as a place to edit (`places`): its list's kind, where it
-    /// is in it (its number, from 0), whether it is the list's last, and whether a blank line
-    /// follows it inside the list (a loose list's items stand apart).
-    Item {
-        ordered: bool,
-        index: usize,
-        last: bool,
-        spaced: bool,
-    },
 }
 
 /// A top-level block of a source: its kind and its bytes, `source[range]`, which never start or
@@ -187,105 +178,6 @@ pub fn append(source: &str, text: &str) -> String {
         return text.to_owned();
     }
     format!("{kept}\n\n{text}")
-}
-
-/// The places of `source` a reader edits one at a time: its blocks, each list's items apart
-/// (a list's items are spaced as lines of one field can't be, and edited alone each sits where
-/// it reads). An item holds what is nested in it.
-pub fn places(source: &str) -> Vec<Block> {
-    let Ok(Node::Root(root)) = to_mdast(source, &options()) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for node in &root.children {
-        let Some(p) = node.position() else {
-            continue;
-        };
-        let range = trim_breaks(source, p.start.offset..p.end.offset);
-        if range.is_empty() {
-            continue;
-        }
-        let Node::List(list) = node else {
-            out.push(Block {
-                kind: kind_of(node, &source[range.clone()]),
-                range,
-            });
-            continue;
-        };
-        let items: Vec<Range<usize>> = list
-            .children
-            .iter()
-            .filter_map(|i| i.position())
-            .map(|p| trim_breaks(source, p.start.offset..p.end.offset))
-            .collect();
-        for (index, item) in items.iter().enumerate() {
-            let last = index + 1 == items.len();
-            let spaced = !last
-                && source[item.end..items[index + 1].start]
-                    .matches('\n')
-                    .count()
-                    > 1;
-            out.push(Block {
-                kind: BlockKind::Item {
-                    ordered: list.ordered,
-                    index,
-                    last,
-                    spaced,
-                },
-                range: item.clone(),
-            });
-        }
-    }
-    out
-}
-
-/// `source` with `block` (one of its `places`) written as `text`: as `splice` does, and an item
-/// emptied that ends its list takes the line break before it, so what follows the list is not
-/// drawn into the item above.
-pub fn write(source: &str, block: &Block, text: &str) -> String {
-    let emptied = text.trim().is_empty();
-    match block.kind {
-        BlockKind::Item {
-            index, last: true, ..
-        } if emptied && index > 0 => {
-            let start = source[..block.range.start]
-                .rfind('\n')
-                .map_or(block.range.start, |i| {
-                    // A `\r\n` goes whole.
-                    if i > 0 && source.as_bytes()[i - 1] == b'\r' {
-                        i - 1
-                    } else {
-                        i
-                    }
-                });
-            let mut out = String::with_capacity(source.len());
-            out.push_str(&source[..start]);
-            out.push_str(&source[block.range.end..]);
-            out
-        }
-        _ => splice(source, block.range.clone(), text),
-    }
-}
-
-/// An ordered item's text as drawn alone, numbered as in its list: the number written on it
-/// (`1.` on every item, as many write them) replaced by `number`. With how many bytes longer
-/// the drawn text's marker is than the written one (negative when shorter).
-pub fn renumbered(text: &str, number: u64) -> (String, isize) {
-    let digits = text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    if digits == 0 {
-        return (text.to_owned(), 0);
-    }
-    let n = number.to_string();
-    (
-        format!("{n}{}", &text[digits..]),
-        n.len() as isize - digits as isize,
-    )
-}
-
-/// The number an ordered list starting with `first` (its first item's text) counts from.
-pub fn start_of(first: &str) -> u64 {
-    let digits: String = first.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().unwrap_or(1)
 }
 
 /// What a block needs besides its own text to read as it does in the whole source: the link
@@ -685,67 +577,6 @@ mod tests {
         assert_eq!(ordered[0].marker, "3.");
         assert_eq!(ordered[0].content, "three");
         assert!(has_task_box("- [ ] a") && !has_task_box("- a") && !has_task_box("text"));
-    }
-
-    #[test]
-    fn a_lists_items_are_places_of_their_own() {
-        let source = "Text.\n\n- one\n- two\n  - nested\n- three\n\n1. a\n\n1. b\n\nAfter.";
-        let ps = places(source);
-        let kinds: Vec<_> = ps.iter().map(|b| b.kind).collect();
-        assert_eq!(kinds.len(), 7, "{kinds:?}");
-        assert_eq!(
-            &source[ps[2].range.clone()],
-            "- two\n  - nested",
-            "nested stays in"
-        );
-        assert!(matches!(
-            ps[3].kind,
-            BlockKind::Item {
-                last: true,
-                spaced: false,
-                ..
-            }
-        ));
-        assert!(matches!(
-            ps[4].kind,
-            BlockKind::Item {
-                ordered: true,
-                index: 0,
-                spaced: true,
-                ..
-            }
-        ));
-        // Each writes back byte for byte.
-        for p in &ps {
-            let text = source[p.range.clone()].to_owned();
-            assert_eq!(write(source, p, &text), source);
-        }
-    }
-
-    #[test]
-    fn an_emptied_item_leaves_its_list_whole() {
-        let source = "- one\n- two\n- three\n\nAfter.";
-        let ps = places(source);
-        // The last: the line break before it goes, so `After.` stays a paragraph of its own.
-        let out = write(source, &ps[2], "");
-        assert_eq!(out, "- one\n- two\n\nAfter.");
-        assert_eq!(blocks(&out).len(), 2);
-        // A middle one: the line it was on goes.
-        assert_eq!(write(source, &ps[1], ""), "- one\n- three\n\nAfter.");
-        // The first: its line goes.
-        assert_eq!(write(source, &ps[0], ""), "- two\n- three\n\nAfter.");
-        let crlf = "- one\r\n- two\r\n\r\nAfter.";
-        assert_eq!(write(crlf, &places(crlf)[1], ""), "- one\r\n\r\nAfter.");
-    }
-
-    #[test]
-    fn an_ordered_item_is_drawn_with_its_lists_number() {
-        assert_eq!(renumbered("1. b", 2), ("2. b".to_owned(), 0));
-        assert_eq!(renumbered("9. b", 10), ("10. b".to_owned(), 1));
-        assert_eq!(renumbered("10) b", 9), ("9) b".to_owned(), -1));
-        assert_eq!(renumbered("- b", 3), ("- b".to_owned(), 0));
-        assert_eq!(start_of("3. a"), 3);
-        assert_eq!(start_of("a"), 1);
     }
 
     proptest::proptest! {

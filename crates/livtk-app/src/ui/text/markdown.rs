@@ -10,7 +10,7 @@ use gpui_component::text::{MarkdownNode, TextView, TextViewStyle, markdown_ast};
 use super::super::icons::{Icon, icon, icon_hover};
 use super::super::theme::*;
 use super::super::{FollowLink, ToggleTaskBox};
-use super::style::{ITEM_GAP, heading_size};
+use super::style::heading_size;
 use crate::model::docs::{CalloutKind, callout};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -94,7 +94,7 @@ fn task_list(items: &[ListItem], context: &str, width: f32) -> AnyElement {
     div()
         .flex()
         .flex_col()
-        .gap(ITEM_GAP)
+        .gap_1()
         .children(items.iter().map(|item| {
             let checked = item.task.is_some_and(|t| t.checked);
             let lead = match item.task {

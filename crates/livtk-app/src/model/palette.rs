@@ -120,6 +120,8 @@ pub enum Ask {
     ClosePane,
     NextPane,
     NewTerminal,
+    /// Quit and install the staged build.
+    RestartToUpdate,
 }
 
 /// A node the palette found.
@@ -733,6 +735,14 @@ impl Model {
             Some(super::keys::HELP),
             Run::Ask(Ask::Help),
         ));
+        if let Some(build) = self.staged_build {
+            out.push(Action {
+                label: format!("Restart to update · build {build}"),
+                context: None,
+                shortcut: None,
+                run: Run::Ask(Ask::RestartToUpdate),
+            });
+        }
         out
     }
 }

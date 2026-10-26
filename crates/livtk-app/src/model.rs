@@ -652,6 +652,9 @@ pub struct Model {
     pub detail_pane: Option<u64>,
     /// Your own on/off choices about what the window shows.
     pub prefs: prefs::Prefs,
+    /// A newer build staged and waiting for a restart, by its number: what offers the restart
+    /// (the sidebar, its rail, the palette) reads it here.
+    pub staged_build: Option<u64>,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
     /// What came into an inbox from someone else since the view last took it.
@@ -887,6 +890,7 @@ impl Model {
             detail_mode: DetailMode::default(),
             detail_pane: None,
             prefs: prefs::Prefs::default(),
+            staged_build: None,
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,

@@ -750,6 +750,8 @@ pub struct LivtkApp {
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
+    /// How often a restart to update was asked for, for tests.
+    restarts_asked: u32,
     /// A newer build, staged and verified, waiting for "Restart to Update".
     update: Option<livtk_update::stage::Staged>,
     /// A look for updates under way.
@@ -1027,6 +1029,7 @@ impl LivtkApp {
             palette_input,
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
+            restarts_asked: 0,
             column_scrolls: Default::default(),
             grid_state,
             update: None,
@@ -1456,6 +1459,7 @@ impl LivtkApp {
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.set_help(true, window, cx),
+            Some(Ask::RestartToUpdate) => self.restart_to_update(cx),
             Some(Ask::SplitRight) => self.split_pane(PaneAxis::Row, window, cx),
             Some(Ask::SplitDown) => self.split_pane(PaneAxis::Column, window, cx),
             Some(Ask::ClosePane) => self.close_pane(window, cx),
@@ -1836,6 +1840,19 @@ impl LivtkApp {
         }
     }
 
+    /// Stage build `build` as if it had been found, for tests: what offers the restart shows,
+    /// and a restart asked for is only counted, never installs.
+    #[doc(hidden)]
+    pub fn stage_update_for_test(&mut self, build: u64) {
+        self.model.staged_build = Some(build);
+    }
+
+    /// How often a restart to update was asked for, for tests.
+    #[doc(hidden)]
+    pub fn restarts_asked(&self) -> u32 {
+        self.restarts_asked
+    }
+
     /// What the field being edited holds, for tests.
     #[doc(hidden)]
     pub fn editing_text(&self, cx: &App) -> Option<String> {
@@ -2083,6 +2100,7 @@ impl LivtkApp {
                                 .about("livtk", "Update")
                                 .action("Restart to Update", Act::RestartToUpdate),
                         );
+                        app.model.staged_build = Some(staged.manifest.build);
                         app.update = Some(staged);
                     }
                     Ok(None) if asked => app
@@ -2105,6 +2123,7 @@ impl LivtkApp {
     /// Restart to Update: start the helper that installs the staged build once this app has
     /// quit, and quit (what the app remembers is written on the way out).
     fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+        self.restarts_asked += 1;
         if self.update.is_some() {
             self.ask_quit(runs::Then::Update, cx);
         }

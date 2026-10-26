@@ -65,31 +65,7 @@ impl LivtkApp {
             side = side.child(self.side_move(view.title(), row.into_any_element(), cx));
         }
         side.child(div().flex_1())
-            .when_some(self.update.as_ref(), |side, staged| {
-                side.child(
-                    div()
-                        .id("restart-to-update")
-                        .debug_selector(|| "restart-to-update".into())
-                        .px_2()
-                        .h(px(NAV_ROW))
-                        .text_size(px(NAV_TEXT))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded_lg()
-                        .text_color(color(ACCENT_HOVER))
-                        .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-                        .child(div().size(px(6.)).rounded_full().bg(color(ACCENT)))
-                        .child(div().flex_1().child("Restart to Update"))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(color(TEXT_4))
-                                .child(format!("build {}", staged.manifest.build)),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
-                )
-            })
+            .children(self.update_row(cx))
             .child(
                 div()
                     .id("shortcuts")
@@ -432,6 +408,7 @@ impl LivtkApp {
             rail = rail.child(self.side_move(view.title(), button.into_any_element(), cx));
         }
         rail.child(div().flex_1())
+            .children(self.update_rail_button(cx))
             .child(
                 rail_button(
                     "rail-shortcuts".into(),
@@ -455,6 +432,71 @@ impl LivtkApp {
                 })),
             )
             .into_any_element()
+    }
+
+    /// A staged build's restart, as the full sidebar offers it: the one row in the accent. As
+    /// the sidebar narrows, the build's number goes first, then its label is cut, so it never
+    /// runs past the edge; its tooltip says it all.
+    fn update_row(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let build = self.model.staged_build?;
+        let roomy = self.sidebar_width >= UPDATE_ROW_ROOMY;
+        Some(
+            div()
+                .id("restart-to-update")
+                .debug_selector(|| "restart-to-update".into())
+                .px_2()
+                .h(px(NAV_ROW))
+                .text_size(px(NAV_TEXT))
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .rounded_lg()
+                .text_color(color(ACCENT_HOVER))
+                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(color(ACCENT)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child("Restart to update"),
+                )
+                .when(roomy, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(color(TEXT_4))
+                            .child(format!("build {build}")),
+                    )
+                })
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(update_tip(build)).build(window, cx)
+                })
+                .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
+        )
+    }
+
+    /// A staged build's restart on the collapsed rail: its icon in the accent, a dot on it.
+    fn update_rail_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let build = self.model.staged_build?;
+        Some(
+            rail_button(
+                "rail-update".into(),
+                Icon::Meteor,
+                false,
+                true,
+                update_tip(build).into(),
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
+        )
     }
 
     /// The projects, from the rail: pick one, or open another.
@@ -876,4 +918,12 @@ pub(super) fn nav_item(
                     }),
             )
         })
+}
+
+/// From how wide the sidebar's update row shows the build's number beside its label.
+const UPDATE_ROW_ROOMY: f32 = 240.;
+
+/// What a staged build's restart says in its tooltip.
+fn update_tip(build: u64) -> String {
+    format!("Restart to update · build {build}")
 }

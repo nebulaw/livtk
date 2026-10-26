@@ -6158,3 +6158,47 @@ fn the_timeline_sticks_what_heads_the_view(cx: &mut TestAppContext) {
         livtk_core::event::Op::NodeNote { data, .. } if data.text == "typed while stuck or not"
     ));
 }
+
+/// A staged build's restart is offered wherever the sidebar is: a row that fits the sidebar at
+/// any width, a button on the collapsed rail, a command in the palette; each restarts. With
+/// nothing staged, none of them shows.
+#[gpui_kit::test]
+fn restart_to_update_is_offered_at_any_sidebar_width(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("restart-to-update").is_none(),
+        "nothing staged"
+    );
+    app.update(cx, |a, cx| {
+        a.stage_update_for_test(267);
+        cx.notify();
+    });
+    redraw(cx);
+    // At the sidebar's narrowest, the row stays inside it.
+    drag_to(cx, "sidebar-edge", 170.);
+    redraw(cx);
+    let side = cx.debug_bounds("sidebar").unwrap();
+    let row = cx.debug_bounds("restart-to-update").expect("the row");
+    assert!(
+        row.right() <= side.right() + gpui_kit::px(0.5),
+        "inside the sidebar: {row:?} in {side:?}"
+    );
+    click_on(cx, "restart-to-update");
+    assert_eq!(app.read_with(cx, |a, _| a.restarts_asked()), 1);
+    // Collapsed: a button on the rail.
+    cx.simulate_keystrokes("secondary-b");
+    redraw(cx);
+    assert!(cx.debug_bounds("restart-to-update").is_none());
+    click_on(cx, "rail-update");
+    assert_eq!(app.read_with(cx, |a, _| a.restarts_asked()), 2);
+    // The palette offers it too.
+    cx.simulate_keystrokes("secondary-k");
+    cx.simulate_input("restart to update");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert_eq!(app.read_with(cx, |a, _| a.restarts_asked()), 3);
+}

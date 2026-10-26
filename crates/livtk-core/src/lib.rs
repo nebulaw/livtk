@@ -12,6 +12,7 @@ pub mod event;
 pub mod export;
 pub mod format;
 mod log;
+pub mod md;
 pub mod model;
 pub mod on;
 pub mod registry;

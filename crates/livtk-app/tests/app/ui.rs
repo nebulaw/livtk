@@ -368,6 +368,15 @@ fn double_click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str)
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("{selector} is drawn"))
         .center();
+    double_click_at(cx, at);
+}
+
+/// A double-click at `at`, a frame drawn while the button is down the second time, as one is
+/// between a real press and release (a word picked by a double-click is worked out drawing).
+fn double_click_at(cx: &mut gpui_kit::VisualTestContext, at: gpui_kit::Point<gpui_kit::Pixels>) {
+    // The pointer comes to it first, as a real one does: what is under it is hovered.
+    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
     for click_count in [1, 2] {
         cx.simulate_event(gpui_kit::MouseDownEvent {
             position: at,
@@ -376,6 +385,8 @@ fn double_click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str)
             click_count,
             first_mouse: false,
         });
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
         cx.simulate_event(gpui_kit::MouseUpEvent {
             position: at,
             modifiers: gpui_kit::Modifiers::default(),
@@ -408,11 +419,11 @@ fn node_of(dir: &std::path::Path, key: &str) -> livtk_core::Node {
 }
 
 #[gpui_kit::test]
-fn a_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
+fn a_double_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     open_detail(cx);
-    click_on(cx, "detail-title");
+    double_click_on(cx, "detail-title");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("title")));
     // Select all: Cmd+A on macOS, Ctrl+A elsewhere.
     cx.simulate_keystrokes("secondary-a");
@@ -438,7 +449,8 @@ fn a_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("escape");
     open_detail(cx);
-    click_on(cx, "detail-title");
+    double_click_on(cx, "detail-title");
+    cx.simulate_keystrokes("secondary-right");
     cx.simulate_input(" and more");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -450,23 +462,14 @@ fn a_click_edits_the_title_and_esc_cancels(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
 }
 
-/// What opens a title or body for editing is a setting: one click unless set to a double-click,
-/// in Settings, where one click then only selects; a body with nothing in it the same.
+/// A title or a body opens for editing on a double-click; one click only selects. A body with
+/// nothing in it the same.
 #[gpui_kit::test]
-fn a_double_click_to_edit_is_a_setting(cx: &mut TestAppContext) {
+fn a_double_click_edits_one_click_only_selects(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
-    cx.simulate_keystrokes("secondary-,");
-    redraw(cx);
-    click_on(cx, "settings-opening-work");
-    redraw(cx);
-    click_on(cx, "settings-double-click-edit-off");
-    redraw(cx);
-    assert!(app.read_with(cx, |a, _| a.model().prefs.edit_on_double_click));
-    click_on(cx, "settings-back");
-    redraw(cx);
     open_detail(cx);
     for (read, part) in [("detail-title", "title"), ("detail-body", "body")] {
         click_on(cx, read);
@@ -485,8 +488,8 @@ fn the_body_is_edited_in_place_and_saved_with_ctrl_enter(cx: &mut TestAppContext
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     open_detail(cx);
-    // An empty body offers itself with one click.
-    click_on(cx, "detail-body");
+    // An empty body opens on a double-click too.
+    double_click_on(cx, "detail-body");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
     cx.simulate_input("goal: ship it");
     cx.simulate_keystrokes("enter");
@@ -5512,7 +5515,7 @@ fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
         "it wraps: {:?}",
         reading.size
     );
-    click_on(cx, "detail-title");
+    double_click_on(cx, "detail-title");
     redraw(cx);
     let editing = cx.debug_bounds("title-editor").expect("editing in place");
     assert_eq!(editing.origin, reading.origin, "where it was");
@@ -5531,8 +5534,8 @@ fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(node_of(dir.path(), "LIV-1").title, long, "Esc keeps it");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
-    // The caret starts where the click fell: in the middle, not at the start or the end.
-    click_on(cx, "detail-title");
+    // The word double-clicked is picked editing: typing replaces it, in the middle.
+    double_click_on(cx, "detail-title");
     cx.simulate_input("§");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -5540,8 +5543,13 @@ fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
     let at = saved.find('§').expect("typed");
     assert!(
         at > 10 && at < long.len() - 10,
-        "typed where it was clicked, at {at} of {}: {saved}",
+        "typed where it was double-clicked, at {at} of {}: {saved}",
         long.len()
+    );
+    let word = &long[at..long.len() - (saved.len() - at - '§'.len_utf8())];
+    assert!(
+        !word.is_empty() && word.chars().all(char::is_alphanumeric),
+        "a whole word replaced: {word:?}"
     );
 }
 
@@ -5585,13 +5593,29 @@ fn a_body_edited_down_the_panel_keeps_its_place_and_a_click_outside_saves(cx: &m
         reading.origin.y < gpui_kit::px(0.),
         "scrolled down to it: {reading:?}"
     );
-    let click = gpui_kit::point(reading.center().x, gpui_kit::px(400.));
-    cx.simulate_click(click, gpui_kit::Modifiers::default());
+    // The block a third of the way down the window, every point of the body being one's;
+    // double-clicked on its text.
+    let row = gpui_kit::point(reading.center().x, gpui_kit::px(400.));
+    let block = (0..60)
+        .filter_map(|i| cx.debug_bounds(Box::leak(format!("body-block-{i}").into_boxed_str())))
+        .find(|b| b.contains(&row))
+        .expect("a block there");
+    let click = gpui_kit::point(
+        block.origin.x + gpui_kit::px(20.),
+        block.origin.y + gpui_kit::px(11.),
+    );
+    double_click_at(cx, click);
     redraw(cx);
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
-    let editing = cx.debug_bounds("body-editor").expect("editing in place");
-    assert_eq!(editing.origin, reading.origin, "the panel kept its scroll");
+    let editing = cx
+        .debug_bounds("body-block-editor")
+        .expect("editing in place");
+    assert_eq!(editing.origin, block.origin, "the panel kept its scroll");
+    assert_eq!(
+        editing.size.height, block.size.height,
+        "and the block its height"
+    );
     // A click on the panel's plain space outside it saves and leaves.
     cx.simulate_keystrokes("secondary-down");
     cx.simulate_input("\n\nMore.");
@@ -5610,8 +5634,8 @@ fn a_body_edited_down_the_panel_keeps_its_place_and_a_click_outside_saves(cx: &m
     redraw(cx);
     app.read_with(cx, |a, _| assert_eq!(a.editing(), None, "left editing"));
     assert!(
-        node_of(dir.path(), "LIV-1").body.ends_with("More."),
-        "saved"
+        node_of(dir.path(), "LIV-1").body.contains(".\n\nMore.\n\n"),
+        "saved, a block of its own after the one clicked"
     );
 }
 
@@ -5638,7 +5662,7 @@ fn a_title_wraps_the_same_edited_at_every_length(cx: &mut TestAppContext) {
             });
             redraw(cx);
             let reading = cx.debug_bounds("detail-title").unwrap();
-            click_on(cx, "detail-title");
+            double_click_on(cx, "detail-title");
             redraw(cx);
             let editing = cx.debug_bounds("title-editor").expect("editing");
             if editing.size.height != reading.size.height {
@@ -5655,5 +5679,208 @@ fn a_title_wraps_the_same_edited_at_every_length(cx: &mut TestAppContext) {
         differ.is_empty(),
         "wrapped differently:\n{}",
         differ.join("\n")
+    );
+}
+
+/// A body that holds a little of everything, block by block.
+const RICH_BODY: &str = "## Goal\n\nShip the **block editor** with [links](https://x.y) and the caret where it was clicked.\n\n```rust\nfn main() {}\n```\n\n- [ ] first box\n- [x] second box\n\nLast paragraph.";
+
+fn rich_body(dir: &std::path::Path) {
+    Workspace::open(dir)
+        .unwrap()
+        .execute(
+            Command::Edit {
+                node: "LIV-1".into(),
+                title: None,
+                body: Some(RICH_BODY.into()),
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+}
+
+/// Each block of a body edits in its own place, at its own style: a heading, a paragraph with
+/// markup, a code block; the rest stay drawn; a click puts the caret where it fell, past the
+/// markup before it; Esc drops the edit, ⌘Enter keeps it; nothing else in the body changes.
+#[gpui_kit::test]
+fn each_block_of_a_body_edits_in_its_place(cx: &mut TestAppContext) {
+    let dir = project();
+    rich_body(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    for (i, what) in [(0, "heading"), (1, "paragraph"), (2, "code")] {
+        let sel: &'static str = Box::leak(format!("body-block-{i}").into_boxed_str());
+        let reading = cx
+            .debug_bounds(sel)
+            .unwrap_or_else(|| panic!("{what} drawn"));
+        double_click_on(cx, sel);
+        redraw(cx);
+        app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body"), "{what}"));
+        let editing = cx.debug_bounds("body-block-editor").expect("editing");
+        assert_eq!(
+            editing.origin, reading.origin,
+            "{what} edits where it reads"
+        );
+        if what != "code" {
+            assert_eq!(editing.size.height, reading.size.height, "{what}: as tall");
+        }
+        // The other blocks stay drawn.
+        assert!(
+            cx.debug_bounds("body-block-3").is_some(),
+            "the list still drawn"
+        );
+        cx.simulate_input("XYZ");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(
+            node_of(dir.path(), "LIV-1").body,
+            RICH_BODY,
+            "Esc dropped it"
+        );
+        redraw(cx);
+    }
+    // A double-click picks the word under it in the source, past the markup around it: typing
+    // replaces exactly that word, inside bold, inside a link's text, after both.
+    let block = cx.debug_bounds("body-block-1").unwrap();
+    let y = block.origin.y + gpui_kit::px(11.);
+    let mut words = Vec::new();
+    for step in 0..24 {
+        // On the text: past the room the block hangs into the margin.
+        let at = gpui_kit::point(block.origin.x + gpui_kit::px(12. + step as f32 * 18.), y);
+        double_click_at(cx, at);
+        redraw(cx);
+        if app.read_with(cx, |a, _| a.editing()).is_none() {
+            continue;
+        }
+        cx.simulate_input("§");
+        cx.simulate_keystrokes("secondary-enter");
+        cx.run_until_parked();
+        let saved = node_of(dir.path(), "LIV-1").body;
+        let mark = saved.find('§').expect("typed");
+        let word = &RICH_BODY[mark..mark + RICH_BODY.len() + '§'.len_utf8() - saved.len()];
+        // Past the line's end there is no word: the caret goes to the block's end.
+        if word.is_empty() {
+            assert_eq!(saved, RICH_BODY.replacen("clicked.", "clicked.§", 1));
+            app.update(cx, |a, cx| {
+                let id = a.model().detail.as_ref().unwrap().node.id;
+                a.model_mut().edit(id, None, Some(RICH_BODY));
+                cx.notify();
+            });
+            redraw(cx);
+            continue;
+        }
+        // A word, or the space between two.
+        assert!(
+            !word.is_empty() && (word.chars().all(char::is_alphanumeric) || word.trim().is_empty()),
+            "a whole word, its markup kept: {word:?} in {saved:?}"
+        );
+        assert_eq!(
+            saved.replacen('§', word, 1),
+            RICH_BODY,
+            "only that word changed"
+        );
+        words.push(word.to_owned());
+        // Back as it was, for the next.
+        app.update(cx, |a, cx| {
+            let id = a.model().detail.as_ref().unwrap().node.id;
+            a.model_mut().edit(id, None, Some(RICH_BODY));
+            cx.notify();
+        });
+        redraw(cx);
+    }
+    for want in ["Ship", "block", "editor", "links", "and"] {
+        assert!(words.iter().any(|w| w == want), "{want} picked: {words:?}");
+    }
+}
+
+/// Up on a block's first line walks into the block above, Down on its last into the block
+/// below, saving as it goes; Down past the last block starts a new one.
+#[gpui_kit::test]
+fn arrows_walk_a_body_block_by_block(cx: &mut TestAppContext) {
+    let dir = project();
+    rich_body(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    let editing_text = |app: &gpui_kit::Entity<LivtkApp>, cx: &mut gpui_kit::VisualTestContext| {
+        app.read_with(cx, |a, cx| a.editing_text(cx))
+    };
+    double_click_on(cx, "body-block-1");
+    redraw(cx);
+    cx.simulate_keystrokes("secondary-up");
+    cx.simulate_keystrokes("up");
+    redraw(cx);
+    assert_eq!(
+        editing_text(&app, cx).as_deref(),
+        Some("## Goal"),
+        "up into the heading"
+    );
+    cx.simulate_keystrokes("up");
+    redraw(cx);
+    assert_eq!(
+        editing_text(&app, cx).as_deref(),
+        Some("## Goal"),
+        "nothing above the first"
+    );
+    cx.simulate_keystrokes("down");
+    redraw(cx);
+    assert!(
+        editing_text(&app, cx).unwrap().starts_with("Ship the"),
+        "down into the paragraph"
+    );
+    // To the last block, then past it: a new one, typed into and kept.
+    double_click_on(cx, "body-block-4");
+    redraw(cx);
+    cx.simulate_keystrokes("secondary-down");
+    cx.simulate_keystrokes("down");
+    redraw(cx);
+    assert_eq!(editing_text(&app, cx).as_deref(), Some(""), "a new block");
+    cx.simulate_input("Added.");
+    cx.simulate_keystrokes("secondary-enter");
+    cx.run_until_parked();
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        format!("{RICH_BODY}\n\nAdded.")
+    );
+}
+
+/// A task box in a body ticks and unticks from reading, with one click, without opening the
+/// list to edit; only its mark changes in the body.
+#[gpui_kit::test]
+fn a_task_box_ticks_from_reading(cx: &mut TestAppContext) {
+    let dir = project();
+    rich_body(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1200.);
+    open_detail(cx);
+    redraw(cx);
+    let first = RICH_BODY.find("[ ] first").unwrap() + 1;
+    let second = RICH_BODY.find("[x] second").unwrap() + 1;
+    let first_box: &'static str = Box::leak(format!("task-box-{first}").into_boxed_str());
+    let second_box: &'static str = Box::leak(format!("task-box-{second}").into_boxed_str());
+    click_on(cx, first_box);
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.editing(), None, "not opened to edit")
+    });
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        RICH_BODY.replace("[ ] first", "[x] first"),
+        "ticked, nothing else changed"
+    );
+    click_on(cx, second_box);
+    redraw(cx);
+    assert_eq!(
+        node_of(dir.path(), "LIV-1").body,
+        RICH_BODY
+            .replace("[ ] first", "[x] first")
+            .replace("[x] second", "[ ] second"),
+        "the other unticked"
     );
 }

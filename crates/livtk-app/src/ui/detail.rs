@@ -1,7 +1,6 @@
 //! The detail panel: a node's title, body, state, links and docs, and a project's own section.
 
-use super::inline_edit::{InlineEdit, Lines, Opens};
-use super::text_style::TextRole;
+use super::text::{Blocks, InlineEdit, TextRole};
 use super::*;
 
 impl LivtkApp {
@@ -52,14 +51,15 @@ impl LivtkApp {
         list
     }
 
-    /// The open node's title: read, or edited in place on a double-click.
+    /// The open node's title: read, or edited in place.
     pub(super) fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(field) = self.editing_of(n, Part::Title) {
-            return Part::Title
-                .edit(&self.model.prefs)
-                .editing(field, &self.read_heights, cx);
+        let edit = self.part_edit(&Part::Title);
+        if let Some(Editing { field, .. }) = self.editing_of(n)
+            && self.editing.as_ref().is_some_and(|e| e.part == Part::Title)
+        {
+            return edit.editing(field, &self.read_heights, cx);
         }
-        Part::Title.edit(&self.model.prefs).reading_text(
+        edit.reading_text(
             n.title.clone(),
             |this, at, w, cx| this.start_edit(Part::Title, at, w, cx),
             &self.read_heights,
@@ -67,38 +67,47 @@ impl LivtkApp {
         )
     }
 
-    /// The open node's body: read as markdown, or edited in place on a click.
+    /// The open node's body, block by block: each read as markdown, one edited in place.
     pub(super) fn detail_body(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
-        let edit = Part::Body.edit(&self.model.prefs);
-        if let Some(field) = self.editing_of(n, Part::Body) {
-            return edit.editing(field, &self.read_heights, cx);
-        }
-        let content = if n.body.trim().is_empty() {
-            div()
-                .text_color(color(TEXT_4))
-                .child(BODY_PLACEHOLDER)
-                .into_any_element()
-        } else {
-            TextView::markdown(
-                SharedString::from(format!("body-{}", n.key)),
-                n.body.clone(),
-            )
+        let editing = self.editing_of(n).and_then(|e| match &e.part {
+            Part::Block(at) => Some((at, &e.field)),
+            Part::Title => None,
+        });
+        div()
+            .debug_selector(|| "detail-body".into())
+            .child(self.body_blocks().render(
+                &n.body,
+                editing,
+                |this, at, picked, w, cx| this.start_edit(Part::Block(at), picked, w, cx),
+                &self.block_views,
+                &self.read_heights,
+                cx,
+            ))
             .into_any_element()
-        };
-        edit.reading(
-            content,
-            |this, at, w, cx| this.start_edit(Part::Body, at, w, cx),
-            &self.read_heights,
-            cx,
-        )
     }
 
-    /// The field editing `part` of `n`, if it is being edited.
-    fn editing_of(&self, n: &livtk_core::Node, part: Part) -> Option<&Entity<TextareaState>> {
-        self.editing
-            .as_ref()
-            .filter(|e| e.node == n.id && e.part == part)
-            .map(|e| &e.field)
+    /// The edit under way on `n`, if any.
+    fn editing_of(&self, n: &livtk_core::Node) -> Option<&Editing> {
+        self.editing.as_ref().filter(|e| e.node == n.id)
+    }
+
+    /// How a body's blocks read and open: a double-click, as a word is picked, so the editor
+    /// opens with the word picked in the source.
+    fn body_blocks(&self) -> Blocks {
+        Blocks {
+            prefix: "body",
+            placeholder: BODY_PLACEHOLDER,
+            width: BODY_DIAGRAM_W,
+        }
+    }
+
+    /// How `part` of a node's panel is edited in place.
+    pub(super) fn part_edit(&self, part: &Part) -> InlineEdit {
+        match part {
+            Part::Title => InlineEdit::new(TextRole::Title, "detail-title", "title-editor")
+                .placeholder("Title"),
+            Part::Block(at) => self.body_blocks().edit(at),
+        }
     }
 
     /// A node's state mark, with its `name` in the panel, that opens the states of its kind, as
@@ -683,7 +692,7 @@ impl LivtkApp {
                             .flex_col()
                             .gap_1()
                             .child(title)
-                            .child(meta_line(d)),
+                            .child(meta_line(d, cx)),
                     )
                     .when(has_flow(n.kind) && !self.model.prefs.hide_state_flow, |d| {
                         d.child(flow)
@@ -1010,7 +1019,7 @@ fn group_label(label: &str) -> Div {
 
 /// The quiet line under a node's title: when it was made and by whom, and when it last changed
 /// and by whom (its last change of any kind: a move, a link, a note).
-fn meta_line(d: &Detail) -> Div {
+fn meta_line(d: &Detail, cx: &App) -> Div {
     let n = &d.node;
     let made = format!("created {} by {}", ago(&n.created), who(&n.created_by));
     let line = match d.history.last().filter(|e| e.at != n.created) {
@@ -1019,7 +1028,7 @@ fn meta_line(d: &Detail) -> Div {
     };
     TextRole::Meta
         .style()
-        .frame(div())
+        .frame(div(), cx)
         .debug_selector(|| "detail-meta".into())
         .child(line)
 }
@@ -1034,23 +1043,5 @@ fn upper_first(s: &str) -> String {
 
 /// What a node's body says while it has none.
 const BODY_PLACEHOLDER: &str = "Add a description…";
-
-impl Part {
-    /// How this part of a node's panel is edited in place: opened as `prefs` say, growing with
-    /// its text, never scrolling.
-    pub(super) fn edit(self, prefs: &crate::model::prefs::Prefs) -> InlineEdit {
-        let opens = if prefs.edit_on_double_click {
-            Opens::DoubleClick
-        } else {
-            Opens::Click
-        };
-        let edit = match self {
-            Part::Title => InlineEdit::new(TextRole::Title, "detail-title", "title-editor")
-                .placeholder("Title"),
-            Part::Body => InlineEdit::new(TextRole::Body, "detail-body", "body-editor")
-                .lines(Lines::Many)
-                .placeholder(BODY_PLACEHOLDER),
-        };
-        edit.opens(opens)
-    }
-}
+/// How wide a diagram in a body may draw: the panel's text, at its narrowest.
+const BODY_DIAGRAM_W: f32 = 360.;

@@ -35,6 +35,8 @@ clap = { version = "4.6.7", features = ["derive"] }
 # Mermaid diagrams in docs, drawn to SVG in pure Rust; no CLI, no PNG.
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 jiff = "0.2.38"
+# Markdown split into blocks, by the parser the app's renderer uses (so the same version).
+markdown = "=1.0.0"
 # The app's log file; already in the tree through GPUI, which logs through it.
 log = "0.4.34"
 gpui-kit = "=0.7.3"

@@ -12,8 +12,6 @@ pub struct Prefs {
     pub hide_state_flow: bool,
     /// The keys beside buttons, rows and menus are left out (the shortcuts list keeps them).
     pub hide_key_hints: bool,
-    /// A node's title and body open for editing on a double-click, not one click.
-    pub edit_on_double_click: bool,
 }
 
 /// Where in Settings a switch sits.
@@ -37,7 +35,7 @@ pub struct Switch {
 }
 
 /// Every switch, in the order Settings lists them.
-pub const SWITCHES: [Switch; 3] = [
+pub const SWITCHES: [Switch; 2] = [
     Switch {
         id: "state-graph",
         label: "State graph",
@@ -45,14 +43,6 @@ pub const SWITCHES: [Switch; 3] = [
         place: Place::Detail,
         shown: |p| !p.hide_state_flow,
         flip: |p| p.hide_state_flow = !p.hide_state_flow,
-    },
-    Switch {
-        id: "double-click-edit",
-        label: "Edit on double-click",
-        what: "A title or body opens for editing on a double-click; off, on one click.",
-        place: Place::Detail,
-        shown: |p| p.edit_on_double_click,
-        flip: |p| p.edit_on_double_click = !p.edit_on_double_click,
     },
     Switch {
         id: "key-hints",

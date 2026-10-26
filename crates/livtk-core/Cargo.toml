@@ -15,6 +15,7 @@ embed = ["dep:model2vec-rs", "dep:unicode-normalization-alignments", "dep:unicod
 
 [dependencies]
 jiff.workspace = true
+markdown.workspace = true
 rustix.workspace = true
 model2vec-rs = { workspace = true, optional = true }
 unicode-normalization-alignments = { workspace = true, optional = true }

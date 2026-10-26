@@ -17,7 +17,6 @@ mod feed;
 mod form;
 mod graph;
 pub mod icons;
-mod inline_edit;
 mod list;
 pub mod menus;
 mod node_ref;
@@ -32,7 +31,7 @@ mod sidebar;
 pub mod state_flow;
 pub mod terminal;
 mod terminals;
-mod text_style;
+mod text;
 mod theme;
 
 use detail::*;
@@ -91,6 +90,14 @@ pub struct GoView {
 #[action(namespace = livtk, no_json)]
 pub struct FollowLink {
     pub href: String,
+}
+
+/// A task box ticked or unticked in the open node's body, read: the byte of its mark in the
+/// body.
+#[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
+#[action(namespace = livtk, no_json)]
+pub struct ToggleTaskBox {
+    pub at: usize,
 }
 
 actions!(
@@ -675,15 +682,18 @@ struct Editing {
     node: Uuid,
     part: Part,
     field: Entity<TextareaState>,
+    /// The body when a block of it opened, written to if the panel has moved on to another.
+    source: String,
     /// Saves when the field loses focus; dropped with the edit, so a cancel saves nothing.
     _subscription: Subscription,
 }
 
 /// The part of the open node edited in place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Part {
     Title,
-    Body,
+    /// A block of its body, as it was when it opened.
+    Block(text::BlockAt),
 }
 
 /// The form that makes a node: its kind, its title and body, and the fields its kind adds.
@@ -832,7 +842,9 @@ pub struct LivtkApp {
     menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
     /// How tall each in-place text last read, so its editor opens no shorter.
-    read_heights: inline_edit::ReadHeights,
+    read_heights: text::ReadHeights,
+    /// Each block of a body as last drawn, to read where a click fell in its source.
+    block_views: text::BlockViews,
     /// The detail panel's last frame while open, kept to animate it out after it closes.
     last_detail: Option<Detail>,
     /// The panel closing, drawn until its animation ends.
@@ -1061,7 +1073,8 @@ impl LivtkApp {
             agent_form,
             menu_state: None,
             editing: None,
-            read_heights: inline_edit::ReadHeights::default(),
+            read_heights: text::ReadHeights::default(),
+            block_views: text::BlockViews::default(),
             last_detail: None,
             detail_leaving: None,
             detail_epoch: 0,
@@ -1422,16 +1435,13 @@ impl LivtkApp {
                 if self.model.detail.is_none() {
                     self.model.open_detail();
                 }
-                self.start_edit(
-                    if ask == Some(Ask::EditBody) {
-                        Part::Body
-                    } else {
-                        Part::Title
-                    },
-                    None,
-                    window,
-                    cx,
-                );
+                let part = match ask {
+                    Some(Ask::EditBody) => self.last_block(),
+                    _ => Some(Part::Title),
+                };
+                if let Some(part) = part {
+                    self.start_edit(part, None, window, cx);
+                }
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.set_help(true, window, cx),
@@ -1815,32 +1825,42 @@ impl LivtkApp {
         }
     }
 
+    /// What the field being edited holds, for tests.
+    #[doc(hidden)]
+    pub fn editing_text(&self, cx: &App) -> Option<String> {
+        self.editing
+            .as_ref()
+            .map(|e| e.field.read(cx).value().to_string())
+    }
+
     pub fn editing(&self) -> Option<&'static str> {
         self.editing.as_ref().map(|e| match e.part {
             Part::Title => "title",
-            Part::Body => "body",
+            Part::Block(_) => "body",
         })
     }
 
-    /// Edit the open node's title or body in place, as its `InlineEdit` says: Enter (⌘Enter
-    /// for the body) or clicking away saves, Esc cancels.
-    /// `at`: where in the text the caret starts (a byte offset), the end when not known.
+    /// Edit the open node's title or a block of its body in place, as its `InlineEdit` says:
+    /// Enter (⌘Enter in a block) or clicking away saves, Esc cancels. `picked`: the bytes of
+    /// the text selected as it opens (the word double-clicked), the caret at the end if none.
     fn start_edit(
         &mut self,
         part: Part,
-        at: Option<usize>,
+        picked: Option<std::ops::Range<usize>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Whatever was being edited before is saved first.
+        self.save_edit(false, window, cx);
         let Some(node) = self.model.detail.as_ref().map(|d| d.node.clone()) else {
             return;
         };
-        let edit = part.edit(&self.model.prefs);
-        let value = match part {
+        let edit = self.part_edit(&part);
+        let value = match &part {
             Part::Title => node.title.clone(),
-            Part::Body => node.body.clone(),
+            Part::Block(b) => b.text.clone(),
         };
-        let field = edit.field(value, at, window, cx);
+        let field = edit.field(value, picked, window, cx);
         let subscription = cx.subscribe_in(
             &field,
             window,
@@ -1848,36 +1868,111 @@ impl LivtkApp {
                 InputEvent::PressEnter { secondary, .. } if edit.saves_on_enter(*secondary) => {
                     this.save_edit(true, window, cx);
                 }
-                InputEvent::Blur => this.save_edit(false, window, cx),
+                InputEvent::Blur => {
+                    this.save_edit(false, window, cx);
+                }
                 _ => {}
             },
         );
-        // Whatever was being edited before is saved first.
-        self.save_edit(false, window, cx);
         field.read(cx).focus_handle(cx).focus(window, cx);
         self.editing = Some(Editing {
             node: node.id,
             part,
             field,
+            source: node.body.clone(),
             _subscription: subscription,
         });
         cx.notify();
     }
 
-    /// Save the edit, if any; `refocus` gives the keys back to the list.
-    fn save_edit(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(edit) = self.editing.take() else {
-            return;
+    /// Save the edit, if any; `refocus` gives the keys back to the list. Returns the body as
+    /// saved, when a block of it was.
+    fn save_edit(
+        &mut self,
+        refocus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let edit = self.editing.take()?;
+        let value = self.part_edit(&edit.part).value(&edit.field, cx);
+        let saved = match &edit.part {
+            Part::Title => {
+                self.model.edit(edit.node, Some(&value), None);
+                None
+            }
+            Part::Block(at) => {
+                // The body as the panel shows it now, if it still shows this node.
+                let source = self
+                    .model
+                    .detail
+                    .as_ref()
+                    .filter(|d| d.node.id == edit.node)
+                    .map_or(edit.source.clone(), |d| d.node.body.clone());
+                let body = at.write(&source, &value);
+                if body != source {
+                    self.model.edit(edit.node, None, Some(&body));
+                }
+                Some(body)
+            }
         };
-        let value = edit.part.edit(&self.model.prefs).value(&edit.field, cx);
-        match edit.part {
-            Part::Title => self.model.edit(edit.node, Some(&value), None),
-            Part::Body => self.model.edit(edit.node, None, Some(&value)),
-        }
         if refocus {
             self.focus_main(window, cx);
         }
         cx.notify();
+        saved
+    }
+
+    /// Up on a block's first line, or Down on its last: save it and edit the block beside it,
+    /// the caret at the near end. Past the last block, a new one; above the first, nothing.
+    fn leave_edit(&mut self, edge: text::Edge, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Editing {
+            part: Part::Block(at),
+            field,
+            ..
+        }) = self.editing.as_ref()
+        else {
+            return;
+        };
+        let (at, text) = (
+            at.clone(),
+            self.part_edit(&Part::Block(at.clone())).value(field, cx),
+        );
+        // Above the first block there is nowhere to go; below the last, a new one, unless this
+        // one is empty.
+        if edge == text::Edge::Above && at.index == 0
+            || edge == text::Edge::Below && text.trim().is_empty() && at.range.is_empty()
+        {
+            return;
+        }
+        let Some(body) = self.save_edit(false, window, cx) else {
+            return;
+        };
+        let next = at
+            .beside(&body, text.len(), edge)
+            .unwrap_or_else(|| text::BlockAt::new_after(&body));
+        let caret = match edge {
+            text::Edge::Above => next.text.len(),
+            text::Edge::Below => 0,
+        };
+        self.start_edit(Part::Block(next), Some(caret..caret), window, cx);
+    }
+
+    /// Tick or untick the task box whose mark is at `at` in the open node's body.
+    fn toggle_task_box(&mut self, at: usize) {
+        let Some(node) = self.model.detail.as_ref().map(|d| d.node.clone()) else {
+            return;
+        };
+        if let Some(body) = livtk_core::md::toggle_task(&node.body, at) {
+            self.model.edit(node.id, None, Some(&body));
+        }
+    }
+
+    /// The open node's last block, to edit from the keyboard: a new one when it has none.
+    fn last_block(&self) -> Option<Part> {
+        let body = &self.model.detail.as_ref()?.node.body;
+        Some(Part::Block(
+            text::BlockAt::last(body).unwrap_or_else(|| text::BlockAt::new_after(body)),
+        ))
     }
 
     fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3148,6 +3243,10 @@ impl Render for LivtkApp {
             .on_action(
                 cx.listener(|this, link: &FollowLink, _, cx| this.follow_link(&link.href, cx)),
             )
+            .on_action(cx.listener(|this, t: &ToggleTaskBox, _, cx| {
+                this.toggle_task_box(t.at);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
                 if cfg!(target_os = "macos") {
                     cx.hide();

@@ -11,17 +11,16 @@ use std::time::Duration;
 
 use gpui_component::Sizable;
 use gpui_component::input::{Editor, EditorState, Input, InputEvent, InputState};
-use gpui_component::text::{
-    MarkdownNode, RangeHighlight, TextView, TextViewState, TextViewStyle, markdown_ast,
-};
+use gpui_component::text::{RangeHighlight, TextView, TextViewState, TextViewStyle};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::icons::{Icon, icon, icon_hover};
 use super::node_ref::{OpenIn, unlink_button};
+use super::text::markdown;
 use super::theme::*;
-use super::{FollowLink, LivtkApp, RevealInDoc, ease_out_cubic, state_mark};
-use crate::model::docs::{CalloutKind, DocRow, Saved, callout, capitalised, find_in};
+use super::{LivtkApp, RevealInDoc, ease_out_cubic, state_mark};
+use crate::model::docs::{DocRow, Saved, capitalised, find_in};
 
 /// The marks of linked tasks a doc's row shows, before it counts the rest.
 const MARKS: usize = 4;
@@ -1481,37 +1480,8 @@ fn section(i: usize, state: &Entity<TextViewState>, reading: crate::model::Readi
         .line_height(relative(reading.line()))
         .text_color(color(TEXT_2))
         .child(
-            TextView::new(state)
+            markdown(TextView::new(state), READING_W)
                 .style(style)
-                // Callouts (`> [!NOTE]`) and mermaid diagrams: blocks of their own.
-                .markdown_block_parser(|node, cx| match node {
-                    markdown_ast::Node::Blockquote(_) => {
-                        let (kind, title, body) = callout(cx.node_source(node)?)?;
-                        Some(MarkdownNode::new("callout", (kind, title, body)))
-                    }
-                    markdown_ast::Node::Code(code) if code.lang.as_deref() == Some("mermaid") => {
-                        Some(MarkdownNode::new("mermaid", code.value.clone()))
-                    }
-                    _ => None,
-                })
-                .markdown_block_renderer("callout", |node, _, _| {
-                    node.data::<(CalloutKind, Option<String>, String)>()
-                        .map(|(kind, title, body)| callout_box(*kind, title.as_deref(), body))
-                        .unwrap_or_else(|| div().into_any_element())
-                })
-                .markdown_block_renderer("mermaid", |node, _, _| {
-                    node.data::<String>()
-                        .map(|source| super::diagram::mermaid(source, READING_W))
-                        .unwrap_or_else(|| div().into_any_element())
-                })
-                .on_link_click(|href, _, window, cx| {
-                    window.dispatch_action(
-                        Box::new(FollowLink {
-                            href: href.to_string(),
-                        }),
-                        cx,
-                    );
-                })
                 .on_reveal(|bounds, window, cx| {
                     window.dispatch_action(
                         Box::new(RevealInDoc {
@@ -1519,81 +1489,8 @@ fn section(i: usize, state: &Entity<TextViewState>, reading: crate::model::Readi
                         }),
                         cx,
                     );
-                })
-                .code_block_actions(|block, _, _| {
-                    let code = block.code();
-                    div()
-                        .id(SharedString::from(format!(
-                            "copy-code-{:x}",
-                            hash_of(&code)
-                        )))
-                        .group("copy-code")
-                        .size(px(24.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_lg()
-                        .hover(|h| h.bg(color(HOVER)))
-                        .child(icon_hover(Icon::Copy, 14., TEXT_4, "copy-code", TEXT))
-                        .tooltip(|window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new("Copy").build(window, cx)
-                        })
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
-                        })
                 }),
         )
-}
-
-/// A callout, as GitHub draws them: a bar and an icon in its kind's colour, its title (its
-/// kind's name, unless it gives one), then its body as markdown.
-fn callout_box(kind: CalloutKind, title: Option<&str>, body: &str) -> AnyElement {
-    let (hue, glyph) = match kind {
-        CalloutKind::Note => (ACCENT, Icon::Info),
-        CalloutKind::Tip => (REVIEW, Icon::Claude),
-        CalloutKind::Important => (0xb46ce0, Icon::Message),
-        CalloutKind::Warning => (PROGRESS, Icon::Error),
-        CalloutKind::Caution => (RED, Icon::Bug),
-    };
-    div()
-        .debug_selector(move || format!("callout-{}", kind.name().to_lowercase()))
-        .w_full()
-        .pl_4()
-        .pr_3()
-        .py_3()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .rounded_lg()
-        .border_l_2()
-        .border_color(color(hue))
-        .bg(with_alpha(hue, 0.06))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(color(hue))
-                .child(icon(glyph, 14., hue))
-                .child(title.unwrap_or(kind.name()).to_owned()),
-        )
-        .when(!body.is_empty(), |d| {
-            d.child(TextView::markdown(
-                SharedString::from(format!("callout-{:x}", hash_of(body))),
-                body.to_owned(),
-            ))
-        })
-        .into_any_element()
-}
-
-/// A short hash of `s`, to tell code blocks apart.
-fn hash_of(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    h.finish()
 }
 
 /// A section's name, as the panel's are.

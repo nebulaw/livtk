@@ -5061,6 +5061,111 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("row-writing").is_none());
 }
 
+/// A run asking to run a command is answered from its row, with no panel open, by the keys that
+/// decide: A allows it once, X denies it, Shift+A allows it always. A question is left to a note,
+/// and on a task with no run the keys decide as before.
+#[gpui_kit::test]
+fn a_runs_ask_is_answered_with_the_keys_that_decide(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
+    let runner = livtk_core::run::Runner {
+        claude: claude_stub().join("claude"),
+    };
+    std::fs::write(root.join(".stub-turns"), "deny\ndeny\ndeny\nask\nslow\n").unwrap();
+    let mut ws = Workspace::open(&root).unwrap();
+    ws.execute(
+        Command::Move {
+            node: "LIV-1".into(),
+            to: State::Acked,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    runner
+        .start(&mut ws, "LIV-1", None, None, &[], &Actor::Human)
+        .unwrap();
+    let args = |n: usize| {
+        let start = Instant::now();
+        loop {
+            let a = std::fs::read_to_string(root.join(".stub-args")).unwrap_or_default();
+            if let Some(l) = a.lines().nth(n - 1) {
+                return l.to_owned();
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let (app, cx) = open_app(cx, &root);
+    // Its row selected, no panel open.
+    app.update(cx, |a, _| {
+        a.model_mut().go_to("LIV-1");
+        a.model_mut().close_detail();
+    });
+    settle(cx);
+    let answer = |keys: &str, cx: &mut gpui_kit::VisualTestContext| {
+        until_runs(&app, cx, |m| m.run_asks_permission("LIV-1"));
+        assert!(
+            app.read_with(cx, |a, _| a.model().detail.is_none()),
+            "no panel"
+        );
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+    };
+    // A: allowed once.
+    answer("a", cx);
+    assert!(args(2).contains("Bash(cargo test)"), "{}", args(2));
+    // X: denied.
+    answer("x", cx);
+    assert!(
+        args(3).contains("Not allowed: Bash(cargo test)"),
+        "{}",
+        args(3)
+    );
+    // Shift+A: allowed always, into the stage's rules.
+    answer("shift-a", cx);
+    args(4);
+    let own = Workspace::open(&root)
+        .unwrap()
+        .config()
+        .runs
+        .allow
+        .get("build")
+        .cloned()
+        .unwrap_or_default();
+    assert!(own.contains(&"Bash(cargo test:*)".to_owned()), "{own:?}");
+    // A question: A and X leave it be.
+    until_runs(&app, cx, |m| {
+        m.run_needs_you("LIV-1") && !m.run_asks_permission("LIV-1")
+    });
+    let before = state_of(&root, "LIV-1");
+    cx.simulate_keystrokes("a x");
+    cx.run_until_parked();
+    assert_eq!(state_of(&root, "LIV-1"), before);
+    let mut ws = Workspace::open(&root).unwrap();
+    livtk_core::run::settle(&mut ws, &runner).unwrap();
+    assert!(
+        ws.runs().unwrap().last().unwrap().needs_you(),
+        "still needs you"
+    );
+    let turns = std::fs::read_to_string(root.join(".stub-args")).unwrap();
+    assert_eq!(turns.lines().count(), 4, "no turn started: {turns}");
+    // No run: X does nothing to a planned task, A acknowledges it; X rejects a lesson.
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
+    settle(cx);
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    assert_eq!(state_of(&root, "LIV-2"), State::Planned);
+    cx.simulate_keystrokes("a");
+    cx.run_until_parked();
+    assert_eq!(state_of(&root, "LIV-2"), State::Acked);
+    app.update(cx, |a, _| a.model_mut().go_to("LES-1"));
+    settle(cx);
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    assert_eq!(state_of(&root, "LES-1"), State::Rejected);
+}
+
 /// A task waiting for unfinished work offers no Start in its panel, and says what it waits for.
 #[gpui_kit::test]
 fn a_blocked_task_offers_no_start(cx: &mut TestAppContext) {

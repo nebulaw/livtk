@@ -146,9 +146,9 @@ pub fn menu_bar(state: &MenuState) -> Vec<Menu> {
                 ]),
         ),
         Menu::new("Task").items([
-            MenuItem::action("Acknowledge, Ratify or Accept", Decide),
-            MenuItem::action("Ratify as Standing Rule", Standing),
-            MenuItem::action("Reject", Reject),
+            MenuItem::action("Acknowledge, Ratify, Accept or Allow Once", Decide),
+            MenuItem::action("Ratify as Standing Rule or Allow Always", Standing),
+            MenuItem::action("Reject or Deny", Reject),
             MenuItem::separator(),
             MenuItem::submenu(Menu::new("Priority").items([
                 MenuItem::action("Urgent", Priority1),

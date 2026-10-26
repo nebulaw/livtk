@@ -385,13 +385,17 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
         "Close the pane",
     ),
     ("Panes", &[keys::MOD, "+", "T"], "Another terminal"),
-    ("Decide", &["A"], "Acknowledge, ratify or accept"),
+    (
+        "Decide",
+        &["A"],
+        "Acknowledge, ratify, accept or allow once",
+    ),
     (
         "Decide",
         &[keys::SHIFT, "+", "A"],
-        "Ratify as a standing rule",
+        "Ratify as a standing rule or allow always",
     ),
-    ("Decide", &["X"], "Reject"),
+    ("Decide", &["X"], "Reject or deny"),
     ("Work", &["N", "or", keys::MOD, "+", "N"], "New task"),
     ("Work", &["P"], "New project"),
     ("Work", &["C"], "Add a note"),
@@ -3134,13 +3138,23 @@ impl Render for LivtkApp {
                     cx.notify();
                 }
             }))
+            // A run waiting on a permission is answered first: its task is never in a state
+            // these keys decide.
             .on_action(cx.listener(|this, _: &Decide, _, cx| {
-                this.model.decide();
-                cx.notify();
+                if !this.answer_acted_on(runs::Ask::Allow, cx) {
+                    this.model.decide();
+                    cx.notify();
+                }
             }))
-            .on_action(cx.listener(|this, _: &Standing, _, cx| this.choice_where(|c| c.always, cx)))
+            .on_action(cx.listener(|this, _: &Standing, _, cx| {
+                if !this.answer_acted_on(runs::Ask::AllowAlways, cx) {
+                    this.choice_where(|c| c.always, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Reject, _, cx| {
-                this.choice_where(|c| c.to == State::Rejected, cx)
+                if !this.answer_acted_on(runs::Ask::Deny, cx) {
+                    this.choice_where(|c| c.to == State::Rejected, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
                 this.menu = Some(Menu::Filter);

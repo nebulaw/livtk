@@ -23,6 +23,9 @@ pub struct RunRow {
     pub title: String,
     pub agent: Option<String>,
     pub stage: Stage,
+    /// It waits on a permission, answered with allow or deny (not on a question, answered with
+    /// a note).
+    pub asks_permission: bool,
 }
 
 /// What the app knows of the runs in its projects.
@@ -75,6 +78,7 @@ pub fn survey(roots: &[PathBuf], runner: Option<&Runner>) -> Found {
                 title: t.title,
                 agent: None,
                 stage: Stage::Build,
+                asks_permission: false,
             });
         }
         let writing = run::writing_sessions(ws.dir());
@@ -86,6 +90,7 @@ pub fn survey(roots: &[PathBuf], runner: Option<&Runner>) -> Found {
                 title: ws.node(&r.key).map(|n| n.title).unwrap_or_default(),
                 agent: r.agent.clone(),
                 stage: r.stage,
+                asks_permission: r.needs_you() && !r.asks_to_run().is_empty(),
             };
             // The latest run on its task only: a quit run since continued is not offered.
             let latest = runs.iter().rev().find(|x| x.node == r.node) == Some(r);
@@ -119,6 +124,7 @@ pub fn survey(roots: &[PathBuf], runner: Option<&Runner>) -> Found {
                         title: b.title.clone(),
                         agent: None,
                         stage: Stage::Build,
+                        asks_permission: false,
                     });
                 }
             }
@@ -233,6 +239,29 @@ impl Model {
             .filter(|r| r.root == root)
             .cloned()
             .collect()
+    }
+
+    /// Whether task `key` of the open project has a run waiting on a permission: allow or deny
+    /// answers it. One waiting on a question is answered with a note.
+    pub fn run_asks_permission(&self, key: &str) -> bool {
+        let Some(root) = self.project().map(|p| p.ws.root()) else {
+            return false;
+        };
+        self.runs
+            .needs_you
+            .iter()
+            .any(|r| r.asks_permission && r.key == key && r.root == root)
+    }
+
+    /// Task `key`'s run of the open project was answered or stopped: it waits for you no more,
+    /// at once, not at the next survey (a key pressed again meanwhile finds nothing to answer).
+    pub fn run_answered(&mut self, key: &str) {
+        let Some(root) = self.project().map(|p| p.ws.root().to_path_buf()) else {
+            return;
+        };
+        self.runs
+            .needs_you
+            .retain(|r| !(r.key == key && r.root == root));
     }
 
     fn in_project(&self, rows: &[RunRow], key: &str) -> bool {

@@ -629,6 +629,21 @@ impl LivtkApp {
         Some(block)
     }
 
+    /// Answer the permission the run of the task acted on waits on with `ask`, as its button
+    /// does: whether there was one to answer. A run waiting on a question is left to a note.
+    pub(super) fn answer_acted_on(&mut self, ask: Ask, cx: &mut Context<Self>) -> bool {
+        let Some(key) = self
+            .model
+            .acted_on()
+            .map(|r| r.key.clone())
+            .filter(|k| self.model.run_asks_permission(k))
+        else {
+            return false;
+        };
+        self.ask_run(&key, ask, cx);
+        true
+    }
+
     /// Do `ask` to task `key`'s run, off the window's thread: the run's own process starts or
     /// stops there, and its notes come back through the log.
     fn ask_run(&mut self, key: &str, ask: Ask, cx: &mut Context<Self>) {
@@ -669,8 +684,9 @@ impl LivtkApp {
             let done = done.await;
             let _ = this.update(cx, |app, cx| {
                 app.asked.remove(&key);
-                if let Err(e) = done {
-                    app.model.warn(format!("{key}: {e}"));
+                match done {
+                    Ok(()) => app.model.run_answered(&key),
+                    Err(e) => app.model.warn(format!("{key}: {e}")),
                 }
                 app.model.survey_runs_soon();
                 app.model.tick();

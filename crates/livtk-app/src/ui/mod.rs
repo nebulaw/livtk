@@ -1839,6 +1839,12 @@ impl LivtkApp {
         self.editing.as_ref()?.field.read(cx).cursor_layout()
     }
 
+    /// Where the field being edited drew its text last frame, for tests.
+    #[doc(hidden)]
+    pub fn editing_bounds(&self, cx: &App) -> Option<Bounds<Pixels>> {
+        self.editing.as_ref()?.field.read(cx).text_bounds()
+    }
+
     /// What the field being edited holds, for tests.
     #[doc(hidden)]
     pub fn editing_text(&self, cx: &App) -> Option<String> {

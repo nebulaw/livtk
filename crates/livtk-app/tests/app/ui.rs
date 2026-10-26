@@ -6253,3 +6253,78 @@ fn a_blocks_lines_fall_alike_reading_and_editing(cx: &mut TestAppContext) {
     }
     assert!(off.is_empty(), "lines moved:\n{}", off.join("\n"));
 }
+
+/// Opening a block to edit draws all its lines from the first frame: the field is as tall as
+/// the text it read from the moment it opens, not one row and then its height (a flash).
+#[gpui_kit::test]
+fn a_block_opens_whole_from_its_first_frame(cx: &mut TestAppContext) {
+    let dir = project();
+    Workspace::open(dir.path())
+        .unwrap()
+        .execute(
+            Command::Edit {
+                node: "LIV-1".into(),
+                title: None,
+                body: Some(LINES_BODY.into()),
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 1600.);
+    open_detail(cx);
+    redraw(cx);
+    let read = cx.debug_bounds("body-block-0").unwrap();
+    let at = gpui_kit::point(
+        read.origin.x + gpui_kit::px(12.),
+        read.origin.y + gpui_kit::px(8.),
+    );
+    cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
+    redraw(cx);
+    // Every frame from the first press on: the block is drawn, as read or as edited, whole.
+    let mut frames = Vec::new();
+    let mut frame = |cx: &mut gpui_kit::VisualTestContext, when: &str| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let reading = cx.debug_bounds("body-block-0");
+        let editing = cx.debug_bounds("body-block-editor");
+        let field = app.read_with(cx, |a, cx| a.editing_bounds(cx));
+        frames.push(format!(
+            "{when}: read {reading:?} edit {editing:?} field {field:?}"
+        ));
+        let shown = editing.or(reading).expect("the block drawn");
+        assert!(
+            shown.size.height >= read.size.height - gpui_kit::px(0.5),
+            "{when}: whole, {shown:?} against {read:?}\n{}",
+            frames.join("\n")
+        );
+        if let Some(f) = field {
+            assert!(
+                f.size.height >= gpui_kit::px(44.),
+                "{when}: its lines all shown: {f:?}"
+            );
+        }
+    };
+    for click_count in [1, 2] {
+        cx.simulate_event(gpui_kit::MouseDownEvent {
+            position: at,
+            modifiers: gpui_kit::Modifiers::default(),
+            button: gpui_kit::MouseButton::Left,
+            click_count,
+            first_mouse: false,
+        });
+        frame(cx, &format!("down {click_count}"));
+        cx.simulate_event(gpui_kit::MouseUpEvent {
+            position: at,
+            modifiers: gpui_kit::Modifiers::default(),
+            button: gpui_kit::MouseButton::Left,
+            click_count,
+        });
+        frame(cx, &format!("up {click_count}"));
+    }
+    for k in 0..3 {
+        frame(cx, &format!("after {k}"));
+    }
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
+}

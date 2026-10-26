@@ -306,18 +306,31 @@ impl InlineEdit {
                 ))
             })
             .map(|d| {
+                // A field just made is laid out one row tall in its first frame, and grows to
+                // its lines only in the next: till it has drawn once, it takes the height its
+                // text had read, so no line blinks out as it opens.
+                let first = field
+                    .read(cx)
+                    .text_bounds()
+                    .is_none()
+                    .then(|| heights.get(&self.read_id))
+                    .flatten()
+                    .map(|h| h - style.pad_y * 2. - self.below);
                 // Wider by the caret's room on the right, so it wraps where the text read.
-                let text = div().mr(-FIELD_CARET_ROOM).child(
-                    // Extra small: `TEXTAREA_PX` across, nothing down, so only the frame's room
-                    // counts.
-                    Textarea::new(field)
-                        .appearance(false)
-                        .xsmall()
-                        .text_size(style.size)
-                        .line_height(style.line)
-                        .font_weight(style.weight)
-                        .text_color(color(style.color)),
-                );
+                let text = div()
+                    .mr(-FIELD_CARET_ROOM)
+                    .when_some(first, |d, h| d.h(h))
+                    .child(
+                        // Extra small: `TEXTAREA_PX` across, nothing down, so only the frame's room
+                        // counts.
+                        Textarea::new(field)
+                            .appearance(false)
+                            .xsmall()
+                            .text_size(style.size)
+                            .line_height(style.line)
+                            .font_weight(style.weight)
+                            .text_color(color(style.color)),
+                    );
                 // Several lines take Tab to indent; one line leaves it to move on.
                 d.child(match self.lines {
                     Lines::One => text,

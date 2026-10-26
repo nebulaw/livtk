@@ -14,6 +14,10 @@ use serde_json::json;
 
 #[derive(Subcommand)]
 pub enum ProjectCmd {
+    /// Put task KEY in project PRJ, out of the one it was in.
+    Add { key: String, project: String },
+    /// Take task KEY out of its project.
+    Remove { key: String },
     /// Propose a project: an outcome, its body ending in a "Done when:" line. It is committed to
     /// once the human moves it to active.
     New {
@@ -204,6 +208,38 @@ pub fn run(ws: &mut Workspace, cmd: ProjectCmd, by: &Actor, json: bool) -> Resul
                 by,
             )?;
             crate::output::noted(&key, &events, json)
+        }
+        ProjectCmd::Add { key, project } => {
+            let events = ws.set_project_of(&key, Some(&project), by)?;
+            let (key, project) = (ws.node(&key)?.key, ws.node(&project)?.key);
+            if json {
+                return crate::output::print_json(&events);
+            }
+            println!(
+                "{key}: {}",
+                if events.is_empty() {
+                    format!("in {project} already")
+                } else {
+                    format!("now in {project}")
+                }
+            );
+            Ok(())
+        }
+        ProjectCmd::Remove { key } => {
+            let events = ws.set_project_of(&key, None, by)?;
+            let key = ws.node(&key)?.key;
+            if json {
+                return crate::output::print_json(&events);
+            }
+            println!(
+                "{key}: {}",
+                if events.is_empty() {
+                    "in no project"
+                } else {
+                    "out of its project"
+                }
+            );
+            Ok(())
         }
         ProjectCmd::Set { key, target, owner } => {
             let before = ws.node(&key)?;

@@ -1391,3 +1391,27 @@ fn a_run_from_the_command_line() {
         "{args}"
     );
 }
+
+/// A task put in a project from the command line, moved, and taken out.
+#[test]
+fn a_task_goes_into_a_project_and_out() {
+    let dir = project();
+    let d = dir.path();
+    ok(d, As::Claude, &["new", "work"]);
+    ok(
+        d,
+        As::Human,
+        &["project", "new", "One", "--done-when", "done"],
+    );
+    ok(
+        d,
+        As::Human,
+        &["project", "new", "Two", "--done-when", "done"],
+    );
+    let one = ok(d, As::Human, &["project", "add", "LIV-1", "PRJ-1"]);
+    assert!(one.contains("now in PRJ-1"), "{one}");
+    let two = ok(d, As::Human, &["project", "add", "LIV-1", "PRJ-2"]);
+    assert!(two.contains("now in PRJ-2"), "{two}");
+    let out = ok(d, As::Human, &["project", "remove", "LIV-1"]);
+    assert!(out.contains("out of its project"), "{out}");
+}

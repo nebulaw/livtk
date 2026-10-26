@@ -1498,3 +1498,59 @@ fn a_projects_done_when_is_said_once() {
     };
     assert!(!none.says_done());
 }
+
+/// A task is put in a project, moved to another (the first losing it, the second gaining it),
+/// and taken out; a sub-task is moved on its parent, and saying so is refused.
+#[test]
+fn a_task_moves_between_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = init(dir.path());
+    let human = Actor::Human;
+    let project = |ws: &mut Workspace, t: &str| {
+        let e = ws
+            .new_project(
+                &livtk_core::NewProject {
+                    title: t.into(),
+                    commit: true,
+                    ..Default::default()
+                },
+                &human,
+            )
+            .unwrap();
+        ws.node(&e[0].op.subjects().0.to_string()).unwrap().key
+    };
+    let (a, b) = (project(&mut ws, "A"), project(&mut ws, "B"));
+    let t = task(&mut ws, "work");
+    let now = jiff::Timestamp::now();
+    ws.set_project_of(&t, Some(&a), &human).unwrap();
+    assert_eq!(ws.progress(&a, now).unwrap().total, 1);
+    ws.set_project_of(&t, Some(&b), &human).unwrap();
+    assert_eq!(ws.progress(&a, now).unwrap().total, 0, "out of A");
+    assert_eq!(ws.progress(&b, now).unwrap().total, 1, "into B");
+    assert!(
+        ws.set_project_of(&t, Some(&b), &human).unwrap().is_empty(),
+        "already there"
+    );
+    // A sub-task's project is its parent's.
+    let sub = task(&mut ws, "part");
+    ws.execute(
+        Command::Link {
+            src: sub.clone(),
+            rel: Rel::Parent,
+            dst: t.clone(),
+        },
+        &human,
+    )
+    .unwrap();
+    let refused = ws
+        .set_project_of(&sub, Some(&a), &human)
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains(&t), "names the parent: {refused}");
+    ws.set_project_of(&t, None, &human).unwrap();
+    assert_eq!(ws.progress(&b, now).unwrap().total, 0, "taken out");
+    assert!(
+        ws.set_project_of(&t, Some(&t), &human).is_err(),
+        "not a project"
+    );
+}

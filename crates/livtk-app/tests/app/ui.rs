@@ -4960,7 +4960,7 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
         )
         .unwrap();
     let (app, cx) = open_app(cx, &root);
-    resize(cx, 1400., 900.);
+    resize(cx, 1400., 1400.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
     settle(cx);
     // Given to an agent from the panel, once the runs are known (claude is there).
@@ -5283,4 +5283,119 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("n");
     settle(cx);
     assert!(cx.debug_bounds("new-task-card").is_some(), "New task");
+}
+
+/// A task's panel accounts for what it carries: how long it has been in its state, when it was
+/// last changed and by whom, what it waits for, its sub-tasks, a prop no row knows (by its
+/// name), and its project, picked and changed there; a sub-task's project is its parent's.
+#[gpui_kit::test]
+fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
+    let dir = linked_project(); // LIV-2 waits for LIV-1
+    let root = dir.path().canonicalize().unwrap();
+    let (prj, sub) = {
+        let mut ws = Workspace::open(&root).unwrap();
+        let e = ws
+            .new_project(
+                &livtk_core::NewProject {
+                    title: "Ship it".into(),
+                    done_when: "shipped".into(),
+                    commit: true,
+                    ..Default::default()
+                },
+                &Actor::Human,
+            )
+            .unwrap();
+        let prj = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+        let e = ws
+            .execute(
+                Command::Create {
+                    kind: Kind::Task,
+                    title: "a part of the first".into(),
+                    body: String::new(),
+                    priority: None,
+                    links: vec![(livtk_core::Rel::Parent, "LIV-1".into())],
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        let sub = ws.node(&e[0].op.subjects().0.to_string()).unwrap().key;
+        // A prop set by some tool the panel has no row for.
+        let node = ws.node("LIV-2").unwrap().id;
+        let mut props = serde_json::Map::new();
+        props.insert("estimate".into(), serde_json::Value::String("3h".into()));
+        let e = livtk_core::Event::new(
+            ws.newest_event().unwrap(),
+            &CLAUDE,
+            livtk_core::Op::NodeSet {
+                node,
+                data: livtk_core::event::NodePatch {
+                    props: Some(props),
+                    ..Default::default()
+                },
+            },
+        );
+        use std::io::Write as _;
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(".livtk/events.jsonl"))
+            .unwrap();
+        writeln!(log, "{}", e.to_line().unwrap()).unwrap();
+        (prj, sub)
+    };
+    let (app, cx) = open_app(cx, &root);
+    resize(cx, 1400., 1400.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
+    settle(cx);
+    for sel in [
+        "detail-state-since",
+        "detail-updated",
+        "detail-blocked",
+        "detail-prop-estimate",
+        "detail-project",
+    ] {
+        assert!(cx.debug_bounds(sel).is_some(), "{sel}");
+    }
+    assert!(
+        cx.debug_bounds("blocked-by-LIV-1").is_some(),
+        "naming what it waits for"
+    );
+    // Its project, picked from the panel, then taken back.
+    click_on(cx, "detail-project");
+    redraw(cx);
+    click_on(cx, named(format!("set-project-{prj}")));
+    settle(cx);
+    let in_project = |k: &str| {
+        Workspace::open(&root)
+            .unwrap()
+            .project_of(k)
+            .unwrap()
+            .map(|p| p.key)
+    };
+    assert_eq!(in_project("LIV-2"), Some(prj.clone()));
+    click_on(cx, "detail-project");
+    redraw(cx);
+    click_on(cx, "set-project-none");
+    settle(cx);
+    assert_eq!(in_project("LIV-2"), None);
+    // The first, with a sub-task, in the project: its sub-task's project is through it.
+    Workspace::open(&root)
+        .unwrap()
+        .set_project_of("LIV-1", Some(&prj), &Actor::Human)
+        .unwrap();
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-sub-tasks").is_some(),
+        "its sub-tasks"
+    );
+    app.update(cx, |a, _| a.model_mut().go_to(&sub));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("detail-project-through").is_some(),
+        "through its parent"
+    );
+    assert!(
+        cx.debug_bounds("detail-project").is_none(),
+        "changed on the parent"
+    );
 }

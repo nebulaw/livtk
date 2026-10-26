@@ -163,6 +163,8 @@ risk or off track, what moved and what is next; an active project a week without
 livtk project new "Import the board" --body - --target 2026-12-01 --owner karl < outcome.md
 livtk project list                  # active first: state, done/total, health, what waits on you
 livtk project show PRJ-1            # its outcome, parts, waits and newest update
+livtk project add TAS-12 PRJ-1      # put a task in a project (out of the one it was in)
+livtk project remove TAS-12         # take it out
 livtk project update PRJ-1 --health at_risk "parsing is slow; next: batch it"
 livtk project set PRJ-1 --target "" # an empty value clears it
 ```

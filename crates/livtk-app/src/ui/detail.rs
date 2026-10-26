@@ -6,7 +6,11 @@ impl LivtkApp {
     /// The open node's title: double-click to edit.
     /// The Claude Code sessions that worked on a node, each a link: a click reads it in Agents,
     /// from the node's first event in it.
-    fn task_sessions(&self, uses: &[livtk_core::SessionUse], cx: &mut Context<Self>) -> Div {
+    pub(super) fn task_sessions(
+        &self,
+        uses: &[livtk_core::SessionUse],
+        cx: &mut Context<Self>,
+    ) -> Div {
         // One line a session: its actors together, from the first event of any of them.
         let mut by_session: Vec<(String, Vec<String>, String)> = Vec::new();
         for u in uses {
@@ -673,43 +677,7 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let n = &d.node;
-        let mut props = div().flex().flex_col().gap_2().child(prop_row(
-            "Status",
-            self.state_button(Menu::DetailState, n.id, n.kind, n.state, true, cx),
-        ));
-        if n.kind == Kind::Task {
-            props = props.child(prop_row(
-                "Priority",
-                self.priority_button(Menu::DetailPriority, n.id, n.priority, true, cx),
-            ));
-        } else {
-            props = props.child(prop_row("Kind", div().child(title_case(n.kind.as_str()))));
-        }
-        if n.props.get("scope").and_then(|v| v.as_str()) == Some("always") {
-            props = props.child(prop_row(
-                "Scope",
-                icon_tag(Icon::Standing, "Standing rule", DONE),
-            ));
-        }
-        if let Some((g, _, _)) = &d.project {
-            if let Some(o) = &g.owner {
-                props = props.child(prop_row("Owner", div().child(o.clone())));
-            }
-            if let Some(t) = &g.target {
-                props = props.child(prop_row("Target", div().child(t.clone())));
-            }
-        }
-        props = props.child(prop_row(
-            "Created",
-            div().child(format!("{} by {}", ago(&n.created), who(&n.created_by))),
-        ));
-        if n.kind == Kind::Task {
-            props = props.child(prop_row("Agent", self.agent_button(d, cx)));
-        }
-        if !d.sessions.is_empty() {
-            self.load_transcripts(cx);
-            props = props.child(prop_row("Sessions", self.task_sessions(&d.sessions, cx)));
-        }
+        let props = self.props(d, cx);
         let mut links = div()
             .debug_selector(|| "detail-links".into())
             .flex()

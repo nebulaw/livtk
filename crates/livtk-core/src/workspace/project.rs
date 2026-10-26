@@ -198,6 +198,63 @@ impl Workspace {
         Ok(events)
     }
 
+    /// Put task `key` in project `project`, or out of any (`None`): out of the project it is
+    /// directly part of, into the new one. A task in a project through its parent task is moved
+    /// on the parent (a task has one parent), so it is refused here, naming the parent. Checked
+    /// before anything is written; the events written.
+    pub fn set_project_of(
+        &mut self,
+        key: &str,
+        project: Option<&str>,
+        by: &crate::Actor,
+    ) -> Result<Vec<crate::Event>> {
+        use crate::workspace::Command;
+        let n = self.node(key)?;
+        if n.kind != Kind::Task {
+            return Err(Error::Invalid(format!(
+                "{} is a {}; a task is put in a project",
+                n.key, n.kind
+            )));
+        }
+        let (parents, _) = self.related(&n.key, crate::Rel::Parent)?;
+        let parent = parents.into_iter().next();
+        if let Some(p) = parent.as_ref().filter(|p| p.kind != Kind::Project) {
+            return Err(Error::Refused(format!(
+                "{} is part of {}: its project is {}'s, changed there",
+                n.key, p.key, p.key
+            )));
+        }
+        let to = project.map(|k| self.node(k)).transpose()?;
+        if let Some(t) = to.as_ref().filter(|t| t.kind != Kind::Project) {
+            return Err(Error::Invalid(format!("{} is not a project", t.key)));
+        }
+        if parent.as_ref().map(|p| &p.key) == to.as_ref().map(|t| &t.key) {
+            return Ok(Vec::new());
+        }
+        let mut events = Vec::new();
+        if let Some(old) = parent {
+            events.extend(self.execute(
+                Command::Unlink {
+                    src: n.key.clone(),
+                    rel: crate::Rel::Parent,
+                    dst: old.key,
+                },
+                by,
+            )?);
+        }
+        if let Some(t) = to {
+            events.extend(self.execute(
+                Command::Link {
+                    src: n.key.clone(),
+                    rel: crate::Rel::Parent,
+                    dst: t.key,
+                },
+                by,
+            )?);
+        }
+        Ok(events)
+    }
+
     /// What project `key` has come to: counted from its tasks, as of `now`.
     pub fn progress(&self, key: &str, now: Timestamp) -> Result<Progress> {
         let p = self.node(key)?;

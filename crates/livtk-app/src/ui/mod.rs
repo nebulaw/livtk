@@ -24,6 +24,7 @@ mod notices;
 mod overlays;
 mod panes;
 mod peek;
+mod props;
 mod runs;
 mod settings;
 mod sidebar;
@@ -1207,6 +1208,7 @@ impl LivtkApp {
             Menu::GridWhat => "grid-what",
             Menu::DetailMode => "detail-mode",
             Menu::DetailAgent => "detail-agent",
+            Menu::DetailProject => "detail-project",
             Menu::PartOf => "part-of",
         })
     }
@@ -3362,6 +3364,8 @@ enum Menu {
     DetailMode,
     /// The open task's agent, in the detail panel.
     DetailAgent,
+    /// The open task's project, in the detail panel.
+    DetailProject,
 }
 
 /// The selection's highlight gliding between two neighbouring lines, named as `spot` names them.

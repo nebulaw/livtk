@@ -499,6 +499,12 @@ pub struct Detail {
     pub sessions: Vec<livtk_core::SessionUse>,
     /// Its latest run of Claude, if it has had one.
     pub run: Option<livtk_core::run::Run>,
+    /// The project it is in, and the parent task it is in it through, if that is how.
+    pub in_project: Option<(Brief, Option<Brief>)>,
+    /// When it came into its state, as the log writes times.
+    pub entered: Option<String>,
+    /// Its sub-tasks: how many are done, of how many; none without any.
+    pub sub_tasks: Option<(usize, usize)>,
     /// A project's progress, its updates newest first, and its flow.
     pub project: Option<(
         livtk_core::Progress,
@@ -1692,6 +1698,24 @@ impl Model {
         );
     }
 
+    /// Put task `id` in project `project` (by key), or out of any (`None`). A refusal (a sub-task,
+    /// whose project is its parent's) becomes the notice.
+    pub fn set_project_of(&mut self, id: Uuid, project: Option<String>) {
+        let Some(p) = self.projects.get_mut(self.current) else {
+            return;
+        };
+        match p
+            .ws
+            .set_project_of(&id.to_string(), project.as_deref(), &Actor::Human)
+        {
+            Ok(_) => {
+                self.toasts.clear_errors();
+                self.reload();
+            }
+            Err(e) => self.warn(e.to_string()),
+        }
+    }
+
     /// Give task `id` to agent `name` (as a run takes it), or take it back (`None`).
     pub fn set_agent(&mut self, id: Uuid, name: Option<String>) {
         self.run(
@@ -2688,7 +2712,29 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         }))
         .filter(|g| !g.briefs.is_empty())
         .collect();
+    // Where it sits: its project, directly or through its parent task.
+    let in_project = match ws.project_of(&key)? {
+        Some(p) => {
+            let through = part_of.first().filter(|b| b.kind != Kind::Project).cloned();
+            let brief = Brief {
+                key: p.key,
+                title: p.title,
+                state: p.state,
+                kind: p.kind,
+            };
+            Some((brief, through))
+        }
+        None => None,
+    };
+    let tasks: Vec<&Brief> = parts.iter().filter(|b| b.kind == Kind::Task).collect();
+    let sub_tasks = (node.kind == Kind::Task && !tasks.is_empty()).then(|| {
+        let done = tasks.iter().filter(|b| b.state == State::Done).count();
+        (done, tasks.len())
+    });
     Ok(Detail {
+        in_project,
+        entered: ws.entered(&key)?,
+        sub_tasks,
         choices: choices_with(node.kind, node.state, ws.gates()),
         links,
         history: ws.history(Some(&key))?,

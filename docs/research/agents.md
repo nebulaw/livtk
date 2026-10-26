@@ -4,6 +4,43 @@ From TAS-65, 2026-10-21. The question: how should the app run Claude on tasks, s
 keeps a terminal open to watch for acks? They want to create a task in the app, give it to an agent (or take
 a suggested one), start it by hand or automatically, see the sessions that are running, and manage them.
 
+## As built (2026-10-26)
+
+Everything below this section is the plan as it was written and amended; this section is what
+shipped (TAS-66 to TAS-71, TAS-75, TAS-81, TAS-84) and how it differs.
+
+- **Runs are livtk's own** (`livtk_core::run`), not Claude Code's `--bg` supervisor: each turn is
+  a headless `claude -p` in its own process group, its stream in `.livtk/runs/`. One idempotent
+  `settle`, called by the app every 2 seconds and by the CLI, turns finished turns into notes and
+  starts the next turn once you answer. Runs outlive the app and the terminal.
+- **The conversation is notes on the task.** A run's notes carry its data (format 8): started,
+  asks (a question, or the exact commands it was refused), your Allow / Deny, ended (done,
+  failed, stopped, stopped by a quit). Needs-you tasks come first in the Inbox.
+- **In the app.** Agents (agent files: livtk's, the project's, yours; made and edited there) and
+  Sessions (every session of the project, readable) are two views. A task's panel has its Agent
+  (Default: livtk's own for the stage) and its run in the title bar: Start, Starting…, where it
+  stands, Stop. Rows say Writing… or Needs you. Quitting with runs going asks first.
+- **Starting on its own** (Settings › Runs, `[runs]`): off by default; acknowledged tasks with an
+  agent start building, `builds_at_once` at a time (2), the rest queued by priority; a task
+  entering review starts its review. A blocked task never starts building.
+- **Worktrees.** Each build works on `livtk/<key>` in `.livtk/runs/worktrees/<KEY>`; livtk inside
+  it writes to the main log; when you mark the task done, the branch fast-forwards into your
+  checkout, or a note says why not (uncommitted work, diverged), once.
+- **Runs find their tools** (TAS-84): a turn's PATH starts with the livtk beside its starter,
+  claude's folder and the usual install folders.
+- **CLI:** `livtk run KEY`, `livtk runs`, `livtk run stop|allow|deny|continue KEY`,
+  `livtk agent set|clear|show KEY`.
+
+## Still open
+
+- **The suggested agent** in the Agent field (TAS-79, backlog).
+- **Commands a run may always use**, per project and stage (for example `cargo *` for builds):
+  today every new command comes to you as Allow, exactly as written, which made the first real
+  build (TAS-85) stop four times.
+- **Merging with an AI run** when a fast-forward fails, and **the pipeline**: work, ready
+  (committed, checks green), release (a project command), merge, with git in the view (TAS-46).
+  To be planned as one design, per the vision of livtk as the layer a product is run from.
+
 ## What the spike settled (TAS-66, FND-1)
 
 Tried on this machine on 2026-10-21. **The runner is livtk's own, not Claude Code's `--bg`

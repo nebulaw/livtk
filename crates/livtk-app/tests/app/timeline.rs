@@ -74,9 +74,15 @@ impl Log {
     }
 
     fn run(&mut self, session: &str, mark: RunMark) -> &mut Log {
+        self.run_by("claude", session, mark)
+    }
+
+    /// A run's note written by `by`: the app writes a run started, answered or stopped from it
+    /// as the human.
+    fn run_by(&mut self, by: &str, session: &str, mark: RunMark) -> &mut Log {
         let node = self.1;
         self.push(
-            "claude",
+            by,
             Some(session),
             Op::NodeNote {
                 node,
@@ -258,4 +264,33 @@ fn the_states_ahead_follow_the_last_event() {
         [Item::Ahead(State::Review), Item::Ahead(State::Done)]
     );
     assert_eq!(t.now(), Some(0), "the rail has reached the last event");
+}
+
+#[test]
+fn a_runs_notes_stay_on_its_lane_whoever_wrote_them() {
+    let mut log = Log::new();
+    log.note("human", None)
+        // Started and answered from the app, as the human; its own words as Claude.
+        .run_by("human", "r", RunMark::Started)
+        .note("claude", Some("r"))
+        .run("r", RunMark::Asks { allow: vec![] })
+        .run_by("human", "r", RunMark::Allowed)
+        .note("human", None)
+        .run_by(
+            "human",
+            "r",
+            RunMark::Ended {
+                how: livtk_core::event::Ending::Stopped,
+            },
+        );
+    let t = timeline(&log.0, Kind::Task, State::Doing, |_| false);
+    assert_eq!(lanes_of(&t.items), [0, 1, 1, 1, 1, 0, 1]);
+    assert!(
+        matches!(t.items[1], Item::Event { opens: true, .. }),
+        "branches at its start"
+    );
+    assert!(
+        matches!(t.items[6], Item::Event { closes: true, .. }),
+        "merges at its end"
+    );
 }

@@ -118,19 +118,19 @@ impl Timeline {
     }
 }
 
-/// The session an event belongs to, for its lane: the one Claude wrote it from, or the run a
-/// run's note marks. The human's are on the rail itself.
+/// The session an event belongs to, for its lane: the run a run's note marks, whoever wrote it
+/// (a run started, answered or stopped from the app is written as the human); else the one
+/// Claude wrote it from. The human's own are on the rail itself.
 fn session_of(e: &Event) -> Option<&str> {
-    if e.by == "human" {
-        return None;
+    if let Op::NodeNote { data, .. } = &e.op
+        && let Some(run) = &data.run
+    {
+        return Some(run.session.as_str());
     }
-    match &e.op {
-        Op::NodeNote { data, .. } => data
-            .run
-            .as_ref()
-            .map(|r| r.session.as_str())
-            .or(e.session.as_deref()),
-        _ => e.session.as_deref(),
+    if e.by == "human" {
+        None
+    } else {
+        e.session.as_deref()
     }
 }
 

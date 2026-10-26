@@ -1734,6 +1734,24 @@ impl Model {
         );
     }
 
+    /// Whether task `id`'s builds work in their own worktree (`Some`), or as the project says.
+    pub fn set_worktree(&mut self, id: Uuid, worktree: Option<bool>) {
+        self.run(
+            Command::SetWorktree {
+                node: id.to_string(),
+                worktree,
+            },
+            None,
+        );
+    }
+
+    /// Whether the project's builds work in their own worktree, unless a task says otherwise.
+    pub fn project_worktree(&self) -> bool {
+        self.projects
+            .get(self.current)
+            .is_none_or(|p| p.ws.config().runs.worktree)
+    }
+
     /// Link node `id` and `other` by `choice`: from `id` when outgoing, else to it. A refusal
     /// (a cycle, say) becomes the notice.
     pub fn link(&mut self, id: Uuid, choice: LinkChoice, other: Uuid) {

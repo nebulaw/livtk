@@ -88,8 +88,13 @@ pub struct Runs {
     /// How many builds go at once when they start on their own; the rest wait their turn.
     pub builds_at_once: u8,
     /// Each build in its own git worktree, on its own branch, merged when the task is done;
-    /// else in the project's checkout.
+    /// else in the project's checkout. A task may say otherwise for itself.
     pub worktree: bool,
+    /// What runs of a stage may do without asking, beyond the defaults (`permits`): rules by
+    /// the stage's name (`build = ["Bash(npm test:*)"]`).
+    pub allow: std::collections::BTreeMap<String, Vec<String>>,
+    /// What runs are refused outright at every stage, beyond what is never allowed.
+    pub deny: Vec<String>,
 }
 
 impl Default for Runs {
@@ -98,6 +103,8 @@ impl Default for Runs {
             auto: false,
             builds_at_once: BUILDS_AT_ONCE,
             worktree: true,
+            allow: std::collections::BTreeMap::new(),
+            deny: Vec::new(),
         }
     }
 }
@@ -105,6 +112,14 @@ impl Default for Runs {
 impl Runs {
     fn is_default(&self) -> bool {
         *self == Runs::default()
+    }
+
+    /// What the project adds to and refuses of the runs' defaults.
+    pub fn rules(&self) -> crate::permits::Rules<'_> {
+        crate::permits::Rules {
+            allow: Some(&self.allow),
+            deny: &self.deny,
+        }
     }
 }
 
@@ -431,6 +446,12 @@ pub enum Command {
         node: String,
         agent: String,
     },
+    /// Whether a task's builds work in their own worktree (`Some`), or as the project says
+    /// (`None`).
+    SetWorktree {
+        node: String,
+        worktree: Option<bool>,
+    },
     /// Credit `events` on `node`, written before livtk recorded sessions, to `session`.
     ClaimSession {
         node: String,
@@ -496,6 +517,9 @@ pub struct Workspace {
     /// writes to the shared store, so "the store had to catch up" says nothing about whether this
     /// reader has seen them; this does.
     seen: Mark,
+    /// When the config file was last read: a newer one (written by another livtk) is read again
+    /// as the log is caught up.
+    config_read: Option<std::time::SystemTime>,
     /// The Claude Code session Claude's writes from here come from (`set_session`).
     session: Option<String>,
     /// The vectors search ranks meaning with, as of a store mark: a search per keystroke must
@@ -587,6 +611,7 @@ impl Workspace {
             model: None,
             embedded: 0,
             seen: Mark::default(),
+            config_read: config_mtime(dir),
             session: None,
             vectors: None,
         };
@@ -631,6 +656,7 @@ impl Workspace {
         fs::rename(&tmp, &path)?;
         self.gates = config.gates.parse().unwrap_or_default();
         self.config = config;
+        self.config_read = config_mtime(&self.dir);
         Ok(())
     }
 
@@ -702,8 +728,31 @@ impl Workspace {
         })
     }
 
+    /// Runs of `stage` may run what `asked` names (refused rules) from now on, each by its
+    /// command's kind: written into the project's `[runs.allow]`.
+    pub fn allow_always(&mut self, stage: crate::run::Stage, asked: &[String]) -> Result<()> {
+        let mut runs = self.config().runs.clone();
+        let own = runs.allow.entry(stage.as_str().to_owned()).or_default();
+        for rule in asked {
+            let r = crate::permits::always_rule(rule);
+            if !own.contains(&r) {
+                own.push(r);
+            }
+        }
+        self.set_runs(&runs)
+    }
+
     /// The project's `[runs]`, replaced by `runs`; the defaults leave the table out.
     pub fn set_runs(&mut self, runs: &Runs) -> Result<()> {
+        if let Some(stage) = runs
+            .allow
+            .keys()
+            .find(|k| k.parse::<crate::run::Stage>().is_err())
+        {
+            return Err(Error::Invalid(format!(
+                "`{stage}` is not a stage: plan, build, review or research"
+            )));
+        }
         if runs.builds_at_once == 0 || runs.builds_at_once > BUILDS_MAX {
             return Err(Error::Invalid(format!(
                 "builds at once is 1 to {BUILDS_MAX}"
@@ -730,6 +779,25 @@ impl Workspace {
                 toml_edit::value(runs.worktree),
                 runs.worktree == d.worktree,
             );
+            let strings = |v: &[String]| {
+                let mut a = toml_edit::Array::new();
+                for s in v {
+                    a.push(s.as_str());
+                }
+                toml_edit::value(a)
+            };
+            let mut allow = toml_edit::Table::new();
+            for (stage, rules) in &runs.allow {
+                if !rules.is_empty() {
+                    allow[stage.as_str()] = strings(rules);
+                }
+            }
+            set(
+                "allow",
+                toml_edit::Item::Table(allow),
+                runs.allow.values().all(Vec::is_empty),
+            );
+            set("deny", strings(&runs.deny), runs.deny.is_empty());
             if t.is_empty() {
                 doc.remove("runs");
             }
@@ -1059,8 +1127,19 @@ impl Workspace {
             self.catch_up()?;
         }
         let now = self.store.applied()?.mark;
-        let changed = now != self.seen;
+        let mut changed = now != self.seen;
         self.seen = now;
+        // The config written since it was read (by another livtk, or by hand): read again. One
+        // that no longer holds keeps the last good one, as a start would refuse it.
+        let stamp = config_mtime(&self.dir);
+        if stamp != self.config_read {
+            self.config_read = stamp;
+            if let Ok(config) = load_config(&self.dir) {
+                self.gates = config.gates.parse().unwrap_or_default();
+                changed |= config != self.config;
+                self.config = config;
+            }
+        }
         Ok(changed)
     }
 
@@ -1855,7 +1934,9 @@ impl Workspace {
             Command::RunNote { node, text, run } => {
                 use crate::event::RunMark;
                 let n = self.node(&node)?;
-                if matches!(run.mark, RunMark::Allowed | RunMark::Denied) && !by.is_human() {
+                // Letting a run do what it asks is the human's; refusing it lets nothing through,
+                // and livtk refuses what is never allowed on its own.
+                if matches!(run.mark, RunMark::Allowed) && !by.is_human() {
                     return Err(Error::Refused(
                         "letting a run do what it asks is the human's decision".into(),
                     ));
@@ -1985,6 +2066,28 @@ impl Workspace {
                 }
                 let mut props = serde_json::Map::new();
                 props.insert("agent".into(), value);
+                Ok(vec![Op::NodeSet {
+                    node: n.id,
+                    data: NodePatch {
+                        props: Some(props),
+                        ..NodePatch::default()
+                    },
+                }])
+            }
+            Command::SetWorktree { node, worktree } => {
+                let n = self.node(&node)?;
+                if n.kind != Kind::Task {
+                    return Err(Error::Invalid(format!(
+                        "{} is a {}; only a task's builds have a worktree",
+                        n.key, n.kind
+                    )));
+                }
+                let value = worktree.map_or(serde_json::Value::Null, serde_json::Value::Bool);
+                if n.props.get("worktree").unwrap_or(&serde_json::Value::Null) == &value {
+                    return Ok(Vec::new());
+                }
+                let mut props = serde_json::Map::new();
+                props.insert("worktree".into(), value);
                 Ok(vec![Op::NodeSet {
                     node: n.id,
                     data: NodePatch {
@@ -2150,6 +2253,13 @@ fn check_link(kind: Kind, rel: Rel, dst: &Node) -> Result<()> {
             dst.key, dst.kind
         )))
     }
+}
+
+/// When the config file in `dir` was last written, if it can be told.
+fn config_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(dir.join("config.toml"))
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 fn load_config(dir: &Path) -> Result<Config> {

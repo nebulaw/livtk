@@ -15,6 +15,7 @@ mod log;
 pub mod md;
 pub mod model;
 pub mod on;
+pub mod permits;
 pub mod registry;
 #[cfg(feature = "embed")]
 pub mod rows;

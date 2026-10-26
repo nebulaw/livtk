@@ -321,6 +321,8 @@ pub(super) enum Ask {
     Start,
     Stop,
     Allow,
+    /// Allow, and the project's runs of its stage from now on: never asked again.
+    AllowAlways,
     Deny,
 }
 
@@ -328,13 +330,83 @@ impl Ask {
     /// The icon its button leads with.
     const fn icon(self) -> Icon {
         match self {
-            Ask::Start | Ask::Allow => Icon::Start,
+            Ask::Start | Ask::Allow | Ask::AllowAlways => Icon::Start,
             Ask::Stop | Ask::Deny => Icon::Stop,
         }
     }
 }
 
 impl LivtkApp {
+    /// Where the task's builds work, picked: their own git worktree (a branch of their own,
+    /// merged when done), the project's checkout, or as the project says.
+    pub(super) fn worktree_button(&self, d: &Detail, cx: &mut Context<Self>) -> Div {
+        let n = &d.node;
+        let own = n.props.get("worktree").and_then(serde_json::Value::as_bool);
+        let project = self.model.project_worktree();
+        let said = |w: bool| {
+            if w {
+                "Its own worktree"
+            } else {
+                "The project's checkout"
+            }
+        };
+        let label = match own {
+            Some(w) => said(w).to_owned(),
+            None => format!("{} (project)", said(project)),
+        };
+        let open = self.menu == Some(Menu::DetailWorktree);
+        let button = div()
+            .id("detail-worktree")
+            .debug_selector(|| "detail-worktree".into())
+            .h(px(22.))
+            .px(px(4.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .rounded_lg()
+            .when(open, |b| b.bg(color(SELECTED)))
+            .when(!open, |b| b.hover(|h| h.bg(color(HOVER))))
+            .child(icon(Icon::Project, 14., TEXT_3))
+            .child(label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_menu(Menu::DetailWorktree, window, cx);
+                }),
+            );
+        let id = n.id;
+        div().relative().flex_none().child(button).when(open, |d| {
+            let mut panel = menu_panel(260.).debug_selector(|| "set-worktree-menu".into());
+            let choices = [
+                (
+                    None,
+                    format!("As the project: {}", said(project).to_lowercase()),
+                ),
+                (Some(true), said(true).to_owned()),
+                (Some(false), said(false).to_owned()),
+            ];
+            for (choice, label) in choices {
+                let row_id = format!(
+                    "set-worktree-{}",
+                    choice.map_or("default", |w| if w { "on" } else { "off" })
+                );
+                panel = panel.child(
+                    option_row(SharedString::from(row_id.clone()))
+                        .debug_selector(move || row_id.clone())
+                        .child(div().flex_1().truncate().child(label))
+                        .child(check(choice == own))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.model.set_worktree(id, choice);
+                            this.close_menu(window, cx);
+                        })),
+                );
+            }
+            d.child(self.popover(Menu::DetailWorktree, false, 26., panel, cx))
+        })
+    }
+
     /// The task's agent, picked from every agent there is; none, the Default: livtk's own for
     /// the stage.
     pub(super) fn agent_button(&self, d: &Detail, cx: &mut Context<Self>) -> Div {
@@ -503,7 +575,8 @@ impl LivtkApp {
         } else {
             for (ask, sel, label, main) in [
                 (Ask::Deny, "run-deny", "Deny", false),
-                (Ask::Allow, "run-allow", "Allow", true),
+                (Ask::Allow, "run-allow", "Allow once", false),
+                (Ask::AllowAlways, "run-allow-always", "Allow always", true),
             ] {
                 let key = d.node.key.clone();
                 block = block.child(
@@ -544,8 +617,9 @@ impl LivtkApp {
                     livtk_core::event::Ending::Stopped,
                     &human,
                 ),
-                Ask::Allow => r.answer(&mut ws, &job_key, true, &human),
-                Ask::Deny => r.answer(&mut ws, &job_key, false, &human),
+                Ask::Allow => r.answer(&mut ws, &job_key, true, false, &human),
+                Ask::AllowAlways => r.answer(&mut ws, &job_key, true, true, &human),
+                Ask::Deny => r.answer(&mut ws, &job_key, false, false, &human),
             }
             .map_err(|e| e.to_string())
         });

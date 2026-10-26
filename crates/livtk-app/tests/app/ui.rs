@@ -6202,3 +6202,76 @@ fn restart_to_update_is_offered_at_any_sidebar_width(cx: &mut TestAppContext) {
     redraw(cx);
     assert_eq!(app.read_with(cx, |a, _| a.restarts_asked()), 3);
 }
+
+/// Asked to run a command, a run can be allowed it always: the kind of command goes into the
+/// project's rules for its stage, shown and removable in Settings → Runs, and the run goes on. A
+/// task says where its builds work: its own worktree, or the checkout.
+#[gpui_kit::test]
+fn a_run_is_allowed_always_and_a_task_says_where_it_builds(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
+    claude_stub();
+    std::fs::write(root.join(".stub-turns"), "deny\nslow\n").unwrap();
+    Workspace::open(&root)
+        .unwrap()
+        .execute(
+            Command::Move {
+                node: "LIV-1".into(),
+                to: State::Acked,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, &root);
+    resize(cx, 1400., 1400.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    until_runs(&app, cx, |m| m.runs.claude);
+    // Where it builds: off its own worktree, as the task says.
+    click_on(cx, "detail-worktree");
+    redraw(cx);
+    click_on(cx, "set-worktree-off");
+    let node = Workspace::open(&root).unwrap().node("LIV-1").unwrap();
+    assert_eq!(node.props["worktree"], false);
+    // Started, it asks; allowed always.
+    click_on(cx, "run-start");
+    until_runs(&app, cx, |m| m.run_needs_you("LIV-1"));
+    settle(cx);
+    assert!(
+        cx.debug_bounds("run-allow").is_some(),
+        "once, still offered"
+    );
+    click_on(cx, "run-allow-always");
+    let ws = Workspace::open(&root).unwrap();
+    let own = ws
+        .config()
+        .runs
+        .allow
+        .get("build")
+        .cloned()
+        .unwrap_or_default();
+    assert!(own.contains(&"Bash(cargo test:*)".to_owned()), "{own:?}");
+    until_runs(&app, cx, |m| m.writing_on("LIV-1"));
+    // In Settings → Runs, the rule shows and goes.
+    click_on(cx, "run-stop");
+    until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
+    cx.simulate_keystrokes("secondary-,");
+    redraw(cx);
+    click_on(cx, "settings-runs");
+    redraw(cx);
+    click_on(cx, "settings-rule-build-Bash(cargo test:*)");
+    redraw(cx);
+    let own = Workspace::open(&root)
+        .unwrap()
+        .config()
+        .runs
+        .allow
+        .get("build")
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !own.contains(&"Bash(cargo test:*)".to_owned()),
+        "removed: {own:?}"
+    );
+}

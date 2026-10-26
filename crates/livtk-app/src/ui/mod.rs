@@ -909,6 +909,7 @@ impl LivtkApp {
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
             cx.subscribe_in(&reader.find, window, Self::on_find),
             cx.subscribe_in(&settings.gate, window, Self::on_gate_input),
+            cx.subscribe_in(&settings.rule, window, Self::on_rule_input),
             // Focus can end up nowhere: the focused input was in a panel that closed, or an
             // editor that was dropped. Keys would then reach none of the app's handlers, so it
             // goes back to where the human is working.
@@ -1246,6 +1247,7 @@ impl LivtkApp {
             Menu::GridWhat => "grid-what",
             Menu::DetailMode => "detail-mode",
             Menu::DetailAgent => "detail-agent",
+            Menu::DetailWorktree => "detail-worktree",
             Menu::DetailProject => "detail-project",
             Menu::PartOf => "part-of",
         })
@@ -3503,6 +3505,7 @@ enum Menu {
     DetailMode,
     /// The open task's agent, in the detail panel.
     DetailAgent,
+    DetailWorktree,
     /// The open task's project, in the detail panel.
     DetailProject,
 }

@@ -27,6 +27,7 @@ case "$what" in
   ask) echo '{"type":"result","subtype":"success","is_error":false,"result":"Which colour should it be?","permission_denials":[]}' ;;
   deny) echo '{"type":"result","subtype":"success","is_error":false,"result":"I need to run the tests.","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test && cargo clippy"}}]}' ;;
   done) echo '{"type":"result","subtype":"success","is_error":false,"result":"Built, and in review.","permission_denials":[]}' ;;
+  push) echo '{"type":"result","subtype":"success","is_error":false,"result":"Pushing it.","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push origin main"}}]}' ;;
   slow) trap 'echo "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"\"}"; exit 0' INT
         while :; do sleep 0.05; done ;;
   path) printf '%s' "$PATH" > "$here/.stub-path"
@@ -212,10 +213,12 @@ fn a_build_asks_is_allowed_asks_again_is_answered_and_ends_done() {
             .is_err()
     );
     assert!(
-        runner.answer(&mut ws, &key, true, &CLAUDE).is_err(),
+        runner.answer(&mut ws, &key, true, false, &CLAUDE).is_err(),
         "nor through the runner"
     );
-    runner.answer(&mut ws, &key, true, &Actor::Human).unwrap();
+    runner
+        .answer(&mut ws, &key, true, false, &Actor::Human)
+        .unwrap();
     let resumed = turn_args(&root(&ws), 2);
     assert!(
         resumed.contains("--resume") && resumed.contains("Bash(cargo test)"),
@@ -608,6 +611,7 @@ fn auto(ws: &mut Workspace, on: bool, at_once: u8) {
         auto: on,
         builds_at_once: at_once,
         worktree: true,
+        ..livtk_core::Runs::default()
     })
     .unwrap();
 }
@@ -850,4 +854,110 @@ fn a_worktree_that_cannot_be_made_ends_the_run() {
     );
     auto(&mut ws, true, 1);
     assert!(run::queue(&ws).unwrap().is_empty(), "not waiting its turn");
+}
+
+/// A run is refused what is never allowed outright: said on the task, answered at once, and it
+/// goes on without, never waiting for the human. Its turns are given the never-rules, and its
+/// stage's whole job to do without asking.
+#[test]
+fn what_is_never_allowed_is_refused_not_asked() {
+    let (_dir, mut ws, runner, key) = setup(&["push", "done"]);
+    let _kill = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    let first = turn_args(&root(&ws), 1);
+    assert!(
+        first.contains("--disallowedTools") && first.contains("Bash(git push:*)"),
+        "{first}"
+    );
+    assert!(
+        first.contains("Bash(cargo:*)") && first.contains("Bash(git commit:*)"),
+        "{first}"
+    );
+    // It goes on by itself to its next turn, which asks its own question: the refusal never
+    // waited for the human.
+    until(&mut ws, &runner, &key, "the next turn's question", |r| {
+        r.needs_you() && r.asks_to_run().is_empty()
+    });
+    let resumed = turn_args(&root(&ws), 2);
+    assert!(
+        resumed.contains("Not allowed: Bash(git push origin main)"),
+        "{resumed}"
+    );
+    let notes = ws.history(Some(&key)).unwrap();
+    assert!(
+        notes.iter().any(
+            |e| matches!(&e.op, livtk_core::event::Op::NodeNote { data, .. }
+            if data.text.contains("Not allowed, ever: Bash(git push origin main)"))
+        ),
+        "said on the task"
+    );
+}
+
+/// Allowed always: the kind of command is the project's runs of that stage's from now on, in
+/// its config, and the next run is given it.
+#[test]
+fn allowed_always_is_kept_for_the_stage() {
+    let (_dir, mut ws, runner, key) = setup(&["deny", "done"]);
+    let _kill = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    until(&mut ws, &runner, &key, "the ask", run::Run::needs_you);
+    runner
+        .answer(&mut ws, &key, true, true, &Actor::Human)
+        .unwrap();
+    let ws2 = Workspace::open(&root(&ws)).unwrap();
+    let own = ws2
+        .config()
+        .runs
+        .allow
+        .get("build")
+        .cloned()
+        .unwrap_or_default();
+    assert!(own.contains(&"Bash(cargo test:*)".to_owned()), "{own:?}");
+    assert!(own.contains(&"Bash(cargo clippy:*)".to_owned()), "{own:?}");
+    let perms = livtk_core::permits::permits(Stage::Build, &ws2.config().runs.rules());
+    assert!(perms.allow.contains(&"Bash(cargo test:*)".to_owned()));
+}
+
+/// A task says whether its builds work in their own worktree; else the project does.
+#[test]
+fn a_task_says_where_its_builds_work() {
+    let (_dir, mut ws, _runner, key) = setup(&["done"]);
+    assert!(run::wants_worktree(&ws, &key), "as the project: its own");
+    ws.execute(
+        Command::SetWorktree {
+            node: key.clone(),
+            worktree: Some(false),
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    assert!(
+        !run::wants_worktree(&ws, &key),
+        "in the checkout, as it says"
+    );
+    ws.execute(
+        Command::SetWorktree {
+            node: key.clone(),
+            worktree: None,
+        },
+        &Actor::Human,
+    )
+    .unwrap();
+    assert!(run::wants_worktree(&ws, &key), "back to the project's");
+}
+
+#[test]
+fn a_here_document_is_one_command() {
+    assert_eq!(
+        run::simple_commands("python3 - <<'EOF'\nimport json\nfor e in ev: print(e)\nEOF\nls"),
+        ["python3 - <<'EOF'", "ls"]
+    );
+    assert_eq!(
+        run::simple_commands("cat <<EOF | wc -l\na; b\nEOF"),
+        ["cat <<EOF", "wc -l"]
+    );
 }

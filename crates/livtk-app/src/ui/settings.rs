@@ -91,6 +91,57 @@ pub(super) struct Settings {
     pub done: Option<String>,
     pub gate: Entity<InputState>,
     pub docs: Entity<InputState>,
+    /// A rule for what runs may do, being typed, and whom it is for.
+    pub rule: Entity<InputState>,
+    pub rule_for: RuleFor,
+}
+
+/// Whom a rule typed in Settings is for: the runs of a stage, or none (refused at every stage).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RuleFor {
+    Stage(livtk_core::run::Stage),
+    Never,
+}
+
+impl RuleFor {
+    const ALL: [RuleFor; 5] = [
+        RuleFor::Stage(livtk_core::run::Stage::Plan),
+        RuleFor::Stage(livtk_core::run::Stage::Build),
+        RuleFor::Stage(livtk_core::run::Stage::Review),
+        RuleFor::Stage(livtk_core::run::Stage::Research),
+        RuleFor::Never,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            RuleFor::Stage(livtk_core::run::Stage::Plan) => "Plan",
+            RuleFor::Stage(livtk_core::run::Stage::Build) => "Build",
+            RuleFor::Stage(livtk_core::run::Stage::Review) => "Review",
+            RuleFor::Stage(livtk_core::run::Stage::Research) => "Research",
+            RuleFor::Never => "Never",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            RuleFor::Stage(s) => s.as_str(),
+            RuleFor::Never => "never",
+        }
+    }
+
+    /// `runs` with `rule` added for this, or taken away (`add` false).
+    fn edited(self, runs: &livtk_core::Runs, rule: &str, add: bool) -> livtk_core::Runs {
+        let mut next = runs.clone();
+        let list = match self {
+            RuleFor::Stage(s) => next.allow.entry(s.as_str().to_owned()).or_default(),
+            RuleFor::Never => &mut next.deny,
+        };
+        list.retain(|r| r != rule);
+        if add {
+            list.push(rule.to_owned());
+        }
+        next
+    }
 }
 
 impl Settings {
@@ -101,6 +152,8 @@ impl Settings {
             done: None,
             gate: cx.new(|cx| InputState::new(window, cx).placeholder("task: review -> done")),
             docs: cx.new(|cx| InputState::new(window, cx).placeholder("docs")),
+            rule: cx.new(|cx| InputState::new(window, cx).placeholder("Bash(npm test:*)")),
+            rule_for: RuleFor::Stage(livtk_core::run::Stage::Build),
         }
     }
 }
@@ -502,6 +555,7 @@ impl LivtkApp {
                 "How many build together when they start on their own; the rest wait their turn.",
                 at_once,
             ))
+            .child(self.run_rules(&runs, cx))
             .child(row(
                 "Each build in its own worktree",
                 "On its own branch, beside the checkout, merged when you mark the task done. \
@@ -688,32 +742,13 @@ impl LivtkApp {
                 .filter(|(j, _)| *j != i)
                 .map(|(_, g)| g.clone())
                 .collect();
-            list = list.child(
-                div()
-                    .h(px(36.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(color(BORDER))
-                    .child(div().flex_1().text_color(color(TEXT_2)).child(g.clone()))
-                    .child(
-                        div()
-                            .id(SharedString::from(id.clone()))
-                            .debug_selector(move || id.clone())
-                            .group("gate-remove")
-                            .size(px(24.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_lg()
-                            .hover(|h| h.bg(color(HOVER)))
-                            .child(icon_hover(Icon::Close, 13., TEXT_4, "gate-remove", TEXT))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.project_edit(|ws| ws.set_gates(&rest), cx);
-                            })),
-                    ),
-            );
+            list = list.child(removable(
+                id,
+                g.clone(),
+                Some(Box::new(cx.listener(move |this, _, _, cx| {
+                    this.project_edit(|ws| ws.set_gates(&rest), cx);
+                }))),
+            ));
         }
         list.child(
             div()
@@ -731,6 +766,105 @@ impl LivtkApp {
                         .on_click(cx.listener(|this, _, window, cx| this.add_gate(window, cx))),
                 ),
         )
+    }
+
+    /// What runs may do without asking, by stage: their own work (counted), and the project's
+    /// rules, each removable; what is never allowed; a field to add a rule for a stage, or to
+    /// refuse it at every stage.
+    fn run_rules(&self, runs: &livtk_core::Runs, cx: &mut Context<Self>) -> Div {
+        use livtk_core::permits;
+        let mut out = div().pt_4().flex().flex_col().child(sub(
+            "What runs do without asking: each stage's own work, and the rules added here. \
+             Allow always on a run's question adds one.",
+        ));
+        for target in RuleFor::ALL {
+            let (title, own, fixed): (String, Vec<String>, Vec<String>) = match target {
+                RuleFor::Stage(s) => (
+                    format!(
+                        "{}: its own work ({} rules) and",
+                        super::capitalized(s.as_str()),
+                        permits::defaults(s).len()
+                    ),
+                    runs.allow.get(s.as_str()).cloned().unwrap_or_default(),
+                    Vec::new(),
+                ),
+                RuleFor::Never => (
+                    "Never, at any stage (refused, not asked)".to_owned(),
+                    runs.deny.clone(),
+                    permits::NEVER.iter().map(|r| (*r).to_owned()).collect(),
+                ),
+            };
+            out = out.child(
+                div()
+                    .pt_3()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .child(title),
+            );
+            for r in fixed {
+                out = out.child(removable(format!("settings-rule-never-{r}"), r, None));
+            }
+            for r in own {
+                let id = format!("settings-rule-{}-{r}", target.name());
+                let next = target.edited(runs, &r, false);
+                out = out.child(removable(
+                    id,
+                    r,
+                    Some(Box::new(cx.listener(move |this, _, _, cx| {
+                        this.project_edit(|ws| ws.set_runs(&next), cx);
+                    }))),
+                ));
+            }
+        }
+        let mut whom = segmented();
+        for target in RuleFor::ALL {
+            whom = whom.child(
+                choice(
+                    format!("settings-rule-for-{}", target.name()),
+                    target.label(),
+                    self.settings.rule_for == target,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.rule_for = target;
+                    cx.notify();
+                })),
+            );
+        }
+        out.child(
+            div()
+                .pt_3()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(whom)
+                .child(
+                    div()
+                        .w(px(220.))
+                        .child(field(&self.settings.rule, "settings-rule-field")),
+                )
+                .child(
+                    button("settings-rule-add", "Add", false)
+                        .on_click(cx.listener(|this, _, window, cx| this.add_rule(window, cx))),
+                ),
+        )
+    }
+
+    /// The rule typed, added for whom it is for.
+    pub(super) fn add_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rule = self.settings.rule.read(cx).value().trim().to_owned();
+        let Some(runs) = self.model.config().map(|c| c.runs.clone()) else {
+            return;
+        };
+        if rule.is_empty() {
+            return;
+        }
+        let next = self.settings.rule_for.edited(&runs, &rule, true);
+        if self.project_edit(|ws| ws.set_runs(&next), cx) {
+            self.settings
+                .rule
+                .update(cx, |s, cx| s.set_value("", window, cx));
+        }
     }
 
     /// The gate typed, added to the project's, checked.
@@ -774,6 +908,18 @@ impl LivtkApp {
     ) {
         if let InputEvent::PressEnter { .. } = event {
             self.add_gate(window, cx);
+        }
+    }
+
+    pub(super) fn on_rule_input(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputEvent::PressEnter { .. } = event {
+            self.add_rule(window, cx);
         }
     }
 
@@ -857,3 +1003,38 @@ fn capital(s: &str) -> String {
 /// build at once.
 const COUNTS: [&str; 8] = ["1", "2", "3", "4", "5", "6", "7", "8"];
 const _: () = assert!(COUNTS.len() == livtk_core::BUILDS_MAX as usize);
+
+/// What a click on something in Settings does.
+type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+/// A row of a list in Settings: its text, and a × that takes it away when `remove` is given.
+fn removable(id: String, text: String, remove: Option<OnClick>) -> Div {
+    div()
+        .h(px(36.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .border_b_1()
+        .border_color(color(BORDER))
+        .child(
+            div()
+                .flex_1()
+                .truncate()
+                .text_color(color(TEXT_2))
+                .child(text),
+        )
+        .children(remove.map(|remove| {
+            div()
+                .id(SharedString::from(id.clone()))
+                .debug_selector(move || id.clone())
+                .group("row-remove")
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_lg()
+                .hover(|h| h.bg(color(HOVER)))
+                .child(icon_hover(Icon::Close, 13., TEXT_4, "row-remove", TEXT))
+                .on_click(move |e, w, cx| remove(e, w, cx))
+        }))
+}

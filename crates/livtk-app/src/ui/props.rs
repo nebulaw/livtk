@@ -7,7 +7,7 @@ use super::*;
 use livtk_core::format::duration;
 
 /// The props shown by their own rows; any other shows as itself.
-const KNOWN: [&str; 4] = ["agent", "scope", "owner", "target"];
+const KNOWN: [&str; 5] = ["agent", "worktree", "scope", "owner", "target"];
 
 /// A row of a node's properties.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +19,8 @@ pub(super) enum Row {
     Owner,
     Target,
     Agent,
+    /// Where its builds work: their own worktree, or the project's checkout.
+    Worktree,
     Project,
     Blocked,
     SubTasks,
@@ -38,7 +40,7 @@ pub(super) fn rows(d: &Detail) -> Vec<Row> {
     out.extend(project.and_then(|g| g.owner.as_ref()).map(|_| Row::Owner));
     out.extend(project.and_then(|g| g.target.as_ref()).map(|_| Row::Target));
     if task {
-        out.extend([Row::Agent, Row::Project]);
+        out.extend([Row::Agent, Row::Worktree, Row::Project]);
         // Waiting matters only while the task is open, as its row in the list says.
         out.extend((n.blocked && !n.kind.is_closed(n.state)).then_some(Row::Blocked));
         out.extend(d.sub_tasks.map(|_| Row::SubTasks));
@@ -112,6 +114,7 @@ impl LivtkApp {
                 text(project.and_then(|g| g.target.clone()).unwrap_or_default()),
             ),
             Row::Agent => ("Agent".into(), self.agent_button(d, cx)),
+            Row::Worktree => ("Builds in".into(), self.worktree_button(d, cx)),
             Row::Project => ("Project".into(), self.project_button(d, cx)),
             Row::Blocked => {
                 let open: Vec<&livtk_core::Brief> = d

@@ -84,18 +84,6 @@ impl Stage {
         }
     }
 
-    /// The tools a run of the stage uses without asking: reading, and livtk's own commands; a
-    /// build also edits files.
-    pub fn allowed(self) -> Vec<String> {
-        let mut out: Vec<String> = ["Read", "Grep", "Glob", "Bash(livtk *)"]
-            .map(str::to_owned)
-            .to_vec();
-        if self == Stage::Build {
-            out.extend(["Edit", "Write", "NotebookEdit", "TodoWrite"].map(str::to_owned));
-        }
-        out
-    }
-
     /// What the run is asked first, for task `key` titled `title`.
     pub fn prompt(self, key: &str, title: &str) -> String {
         match self {
@@ -435,7 +423,7 @@ impl Runner {
             agent: agent.clone(),
             stage,
             cwd: ws.root().to_path_buf(),
-            allowed: stage.allowed(),
+            allowed: crate::permits::permits(stage, &ws.config().runs.rules()).allow,
             read: 0,
             pid: None,
             stopping: None,
@@ -478,7 +466,9 @@ impl Runner {
         prompt: &str,
         resume: bool,
     ) -> Result<()> {
-        match self.turn(ws.dir(), live, prompt, resume) {
+        // Refused outright, as the project says now: never asked.
+        let deny = crate::permits::permits(live.stage, &ws.config().runs.rules()).deny;
+        match self.turn(ws.dir(), live, prompt, resume, &deny) {
             Ok(()) => Ok(()),
             Err(e) => {
                 end(
@@ -495,7 +485,14 @@ impl Runner {
     }
 
     /// Start a turn of `live`'s session with `prompt`: the first, or resumed.
-    fn turn(&self, livtk: &Path, live: &mut Live, prompt: &str, resume: bool) -> Result<()> {
+    fn turn(
+        &self,
+        livtk: &Path,
+        live: &mut Live,
+        prompt: &str,
+        resume: bool,
+        deny: &[String],
+    ) -> Result<()> {
         ensure_dir(livtk)?;
         let out = OpenOptions::new()
             .create(true)
@@ -522,6 +519,9 @@ impl Runner {
         }
         if !live.allowed.is_empty() {
             cmd.arg("--allowedTools").args(&live.allowed);
+        }
+        if !deny.is_empty() {
+            cmd.arg("--disallowedTools").args(deny);
         }
         {
             use std::os::unix::process::CommandExt;
@@ -596,7 +596,16 @@ impl Runner {
 
     /// Answer task `key`'s waiting run: let it run what it asked for, or not. A note of yours
     /// answers a question the same way, on its own.
-    pub fn answer(&self, ws: &mut Workspace, key: &str, allow: bool, by: &Actor) -> Result<()> {
+    /// `always`, with `allow`: the project's runs of this stage may run what it asked for from
+    /// now on (each command's kind, as `permits::always_rule` takes it), never asked again.
+    pub fn answer(
+        &self,
+        ws: &mut Workspace,
+        key: &str,
+        allow: bool,
+        always: bool,
+        by: &Actor,
+    ) -> Result<()> {
         if !by.is_human() {
             return Err(Error::Refused(
                 "letting a run do what it asks is the human's decision".into(),
@@ -620,7 +629,15 @@ impl Runner {
                 n.key
             )));
         }
-        let (mark, text) = if allow {
+        if allow && always {
+            ws.allow_always(run.stage, &asks)?;
+        }
+        let (mark, text) = if allow && always {
+            (
+                RunMark::Allowed,
+                format!("Allowed from now on: {}", asks.join(", ")),
+            )
+        } else if allow {
             (RunMark::Allowed, format!("Allowed: {}", asks.join(", ")))
         } else {
             (RunMark::Denied, format!("Denied: {}", asks.join(", ")))
@@ -645,7 +662,7 @@ impl Runner {
                 format!("You may now run: {}. Go on.", tools.join(", "))
             }
             Answer::Denied => format!(
-                "The human did not allow: {}. Go on without it, or say what you need.",
+                "Not allowed: {}. Go on without it, or say what you need.",
                 run.asks_to_run().join(", ")
             ),
             Answer::Note(text) => text.clone(),
@@ -722,7 +739,7 @@ fn gone(run: &Run, root: &Path) -> Live {
         agent: run.agent.clone(),
         stage: run.stage,
         cwd: root.to_path_buf(),
-        allowed: run.stage.allowed(),
+        allowed: crate::permits::defaults(run.stage),
         read: 0,
         pid: None,
         stopping: None,
@@ -891,6 +908,8 @@ pub fn simple_commands(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
+    // A here-document opened on this line, by a command already split off at a pipe.
+    let mut pending: Option<String> = None;
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
@@ -905,9 +924,31 @@ pub fn simple_commands(line: &str) -> Vec<String> {
             }
             (None, '&' | '|') if chars.peek() == Some(&c) => {
                 chars.next();
+                pending = pending.or_else(|| heredoc(&cur));
                 out.push(std::mem::take(&mut cur));
             }
-            (None, ';' | '|' | '\n') => out.push(std::mem::take(&mut cur)),
+            // A here-document's lines are its command's input, not commands: skipped to the
+            // line that ends it.
+            (None, '\n') if pending.is_some() || heredoc(&cur).is_some() => {
+                let end = pending.take().or_else(|| heredoc(&cur)).unwrap_or_default();
+                let mut line = String::new();
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        if line.trim() == end {
+                            break;
+                        }
+                        line.clear();
+                    } else {
+                        line.push(c);
+                    }
+                }
+                out.push(std::mem::take(&mut cur));
+            }
+            (None, ';' | '|') => {
+                pending = pending.or_else(|| heredoc(&cur));
+                out.push(std::mem::take(&mut cur));
+            }
+            (None, '\n') => out.push(std::mem::take(&mut cur)),
             (None, c) => cur.push(c),
         }
     }
@@ -916,6 +957,19 @@ pub fn simple_commands(line: &str) -> Vec<String> {
         .map(|c| c.trim().to_owned())
         .filter(|c| !c.is_empty())
         .collect()
+}
+
+/// The word that ends the here-document `cmd` opens (`<<EOF`, `<<'EOF'`, `<<-"EOF"`), if it
+/// opens one.
+fn heredoc(cmd: &str) -> Option<String> {
+    let at = cmd.find("<<")?;
+    let rest = cmd[at + 2..].trim_start_matches('-').trim_start();
+    let word: String = rest
+        .trim_start_matches(['\'', '"'])
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    (!word.is_empty()).then_some(word)
 }
 
 // ---- settling -------------------------------------------------------------------------------
@@ -985,21 +1039,43 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
         if let Some(how) = live.stopping {
             end(ws, &run, &mut live, how, stopped_text(how), &claude())?;
         } else if !turn.denied.is_empty() {
-            let text = format!(
-                "{}\n\nAsks to run: {}",
-                said(&turn.text),
-                turn.denied.join(", ")
-            );
+            // What it was refused outright (never allowed, or refused by the project) is said and
+            // answered at once; only the rest waits for the human.
+            let deny = crate::permits::permits(live.stage, &ws.config().runs.rules()).deny;
+            let (never, asks): (Vec<String>, Vec<String>) = turn
+                .denied
+                .iter()
+                .cloned()
+                .partition(|r| deny.iter().any(|d| crate::permits::covers(d, r)));
+            let (shown, asked) = if asks.is_empty() {
+                (&never, &never)
+            } else {
+                (&asks, &asks)
+            };
+            let mut text = format!("{}\n\nAsks to run: {}", said(&turn.text), shown.join(", "));
+            if !never.is_empty() && !asks.is_empty() {
+                text.push_str(&format!("\n\nNot allowed, ever: {}", never.join(", ")));
+            }
             note(
                 ws,
                 &run.key,
                 &live,
                 RunMark::Asks {
-                    allow: turn.denied.clone(),
+                    allow: asked.clone(),
                 },
                 &text,
                 &claude(),
             )?;
+            if asks.is_empty() {
+                note(
+                    ws,
+                    &run.key,
+                    &live,
+                    RunMark::Denied,
+                    &format!("Not allowed, ever: {}", never.join(", ")),
+                    &claude(),
+                )?;
+            }
             save(&livtk, &live)?;
         } else if turn.error {
             end(
@@ -1093,6 +1169,15 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Whether task `key`'s builds work in their own worktree: as it says for itself, else as the
+/// project does.
+pub fn wants_worktree(ws: &Workspace, key: &str) -> bool {
+    ws.node(key)
+        .ok()
+        .and_then(|n| n.props.get("worktree").and_then(Value::as_bool))
+        .unwrap_or(ws.config().runs.worktree)
+}
+
 /// Where a run of `stage` on task `key` works: a build in its own worktree (made on its first
 /// build, on its own branch from the checkout's HEAD) when the project says so and is a git
 /// repository; a review where the build was; else the project's folder.
@@ -1104,7 +1189,7 @@ fn workplace(ws: &Workspace, key: &str, stage: Stage) -> Result<PathBuf> {
         return Ok(tree);
     }
     let in_git = git(&root, &["rev-parse", "--is-inside-work-tree"]).is_ok();
-    if stage != Stage::Build || !ws.config().runs.worktree || !in_git {
+    if stage != Stage::Build || !wants_worktree(ws, key) || !in_git {
         return Ok(root);
     }
     ensure_dir(ws.dir())?;

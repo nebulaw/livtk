@@ -16,11 +16,23 @@ pub enum RunCmd {
     /// Stop KEY's run: its turn ends cleanly and the work so far is kept.
     Stop { key: String },
     /// Let KEY's run do what it asked to: the commands it was refused. Human only.
-    Allow { key: String },
+    Allow {
+        key: String,
+        /// And the project's runs of its stage from now on, never asked again.
+        #[arg(long)]
+        always: bool,
+    },
     /// Refuse what KEY's run asked to do; it goes on without. Human only.
     Deny { key: String },
     /// Continue KEY's stopped run where it left off.
     Continue { key: String },
+    /// Whether KEY's builds work in their own git worktree: on, off, or as the project says
+    /// (default).
+    Worktree {
+        key: String,
+        #[arg(value_parser = ["on", "off", "default"])]
+        choice: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -86,13 +98,37 @@ pub fn run(ws: &mut Workspace, cmd: RunCmd, by: &Actor, json: bool) -> Result<()
             r.stop(ws, &key, Ending::Stopped, by)?;
             (key, "stopping; the work so far is kept")
         }
-        RunCmd::Allow { key } => {
-            r.answer(ws, &key, true, by)?;
+        RunCmd::Allow { key, always } => {
+            r.answer(ws, &key, true, always, by)?;
             (key, "allowed; it goes on")
         }
         RunCmd::Deny { key } => {
-            r.answer(ws, &key, false, by)?;
+            r.answer(ws, &key, false, false, by)?;
             (key, "denied; it goes on without")
+        }
+        RunCmd::Worktree { key, choice } => {
+            let worktree = match choice.as_str() {
+                "on" => Some(true),
+                "off" => Some(false),
+                _ => None,
+            };
+            let events = ws.execute(
+                Command::SetWorktree {
+                    node: key.clone(),
+                    worktree,
+                },
+                by,
+            )?;
+            if json {
+                return print_json(&events);
+            }
+            let said = match worktree {
+                Some(true) => "its builds in their own worktree",
+                Some(false) => "its builds in the project's checkout",
+                None => "its builds where the project says",
+            };
+            println!("{}: {said}", ws.node(&key)?.key);
+            return Ok(());
         }
         RunCmd::Continue { key } => {
             r.resume_stopped(ws, &key, by)?;

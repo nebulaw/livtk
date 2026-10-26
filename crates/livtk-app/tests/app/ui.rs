@@ -4328,7 +4328,7 @@ fn sessions_and_agents_are_two_views(cx: &mut TestAppContext) {
     let _ = app;
 }
 
-/// Sessions: a task's properties name the sessions that worked on it; a click reads one in
+/// Sessions: a task's links name the sessions that worked on it, after its other links; a click reads one in
 /// Agents, at the task's first event in it; a call opens on a click; Esc gives the list back,
 /// where the session wears its transcript's title.
 #[gpui_kit::test]
@@ -4413,9 +4413,16 @@ fn a_task_names_its_sessions_and_one_reads_from_there(cx: &mut TestAppContext) {
     // Straight from a task, the Agents place never opened.
     open_detail(cx);
     redraw(cx);
+    let group = cx
+        .debug_bounds("detail-sessions")
+        .expect("a group of its links");
+    let row = cx
+        .debug_bounds("task-session-sess-x")
+        .expect("in its links");
+    assert!(group.contains(&row.center()), "in the Sessions group");
     assert!(
-        cx.debug_bounds("task-session-sess-x").is_some(),
-        "in its properties"
+        cx.debug_bounds("detail-prop-sessions").is_none(),
+        "no longer a property"
     );
     let named = app.read_with(cx, |a, _| {
         a.model()
@@ -5348,7 +5355,7 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
     settle(cx);
     for sel in [
         "detail-state-since",
-        "detail-updated",
+        "detail-meta",
         "detail-blocked",
         "detail-prop-estimate",
         "detail-project",
@@ -5443,5 +5450,51 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("detail-blocked").is_none(),
         "canceled: waits for nothing"
+    );
+}
+
+/// The title is edited where it reads: the same place and size, no background of its own;
+/// Enter saves, Esc keeps the old one. When it was made and changed is a quiet line under it.
+#[gpui_kit::test]
+fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    assert!(
+        cx.debug_bounds("detail-meta").is_some(),
+        "made and changed, under the title"
+    );
+    let reading = cx.debug_bounds("detail-title").expect("the title");
+    // One click selects; it does not edit.
+    click_on(cx, "detail-title");
+    assert!(
+        cx.debug_bounds("title-editor").is_none(),
+        "a double-click edits"
+    );
+    double_click_on(cx, "detail-title");
+    let editing = cx.debug_bounds("title-editor").expect("editing in place");
+    assert_eq!(editing.origin, reading.origin, "where it was");
+    assert_eq!(
+        editing.size.height, reading.size.height,
+        "as tall as it was"
+    );
+    // Esc keeps the old title.
+    let (key, title) = app.read_with(cx, |a, _| {
+        let d = a.model().detail.as_ref().unwrap();
+        (d.node.key.clone(), d.node.title.clone())
+    });
+    cx.simulate_input(" changed");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        Workspace::open(dir.path())
+            .unwrap()
+            .node(&key)
+            .unwrap()
+            .title,
+        title,
+        "Esc keeps it"
     );
 }

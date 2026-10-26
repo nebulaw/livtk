@@ -1,4 +1,5 @@
-//! A node's properties in its panel: one ordered list of rows, each knowing when it shows and
+//! A node's properties in its panel (what it is and where it stands; when it was made and changed
+//! is the meta line under its title, its sessions are among its links): one ordered list of rows, each knowing when it shows and
 //! drawn in one place. A new property is a row here; a prop the panel does not know by name
 //! still shows, by its name, so nothing set on a node is ever hidden.
 
@@ -21,14 +22,11 @@ pub(super) enum Row {
     Project,
     Blocked,
     SubTasks,
-    Created,
-    Updated,
-    Sessions,
     /// A prop the panel has no row of its own for, by its name.
     Other(String),
 }
 
-/// The rows `d` shows, in their order: what it is and where it stands, who and where, then when.
+/// The rows `d` shows, in their order: what it is and where it stands, then who and where.
 pub(super) fn rows(d: &Detail) -> Vec<Row> {
     let n = &d.node;
     let task = n.kind == Kind::Task;
@@ -45,8 +43,6 @@ pub(super) fn rows(d: &Detail) -> Vec<Row> {
         out.extend((n.blocked && !n.kind.is_closed(n.state)).then_some(Row::Blocked));
         out.extend(d.sub_tasks.map(|_| Row::SubTasks));
     }
-    out.extend([Row::Created, Row::Updated]);
-    out.extend((!d.sessions.is_empty()).then_some(Row::Sessions));
     let mut other: Vec<&String> = n
         .props
         .iter()
@@ -151,26 +147,6 @@ impl LivtkApp {
                     text(format!("{done} of {all} done"))
                         .debug_selector(|| "detail-sub-tasks".into()),
                 )
-            }
-            Row::Created => (
-                "Created".into(),
-                text(format!("{} by {}", ago(&n.created), who(&n.created_by))),
-            ),
-            Row::Updated => {
-                // Its last change, a link or a project move too: when and by whom, of one event.
-                let said = d
-                    .history
-                    .last()
-                    .map(|e| format!("{} by {}", ago(&e.at), who(&e.by)))
-                    .unwrap_or_else(|| ago(&n.updated));
-                (
-                    "Updated".into(),
-                    text(said).debug_selector(|| "detail-updated".into()),
-                )
-            }
-            Row::Sessions => {
-                self.load_transcripts(cx);
-                ("Sessions".into(), self.task_sessions(&d.sessions, cx))
             }
             Row::Other(name) => {
                 let value = match n.props.get(name) {

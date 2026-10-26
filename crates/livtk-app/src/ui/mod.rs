@@ -17,6 +17,7 @@ mod feed;
 mod form;
 mod graph;
 pub mod icons;
+mod inline_edit;
 mod list;
 pub mod menus;
 mod node_ref;
@@ -31,6 +32,7 @@ mod sidebar;
 pub mod state_flow;
 pub mod terminal;
 mod terminals;
+mod text_style;
 mod theme;
 
 use detail::*;

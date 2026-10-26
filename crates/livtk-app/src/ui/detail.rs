@@ -1,5 +1,7 @@
 //! The detail panel: a node's title, body, state, links and docs, and a project's own section.
 
+use super::inline_edit::{InlineEdit, Opens};
+use super::text_style::TextRole;
 use super::*;
 
 impl LivtkApp {
@@ -60,58 +62,34 @@ impl LivtkApp {
         list
     }
 
+    /// The open node's title: read, or edited in place on a double-click.
     pub(super) fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
-        if let Some(Editing {
-            node,
-            field: Field::Title(state),
-            ..
-        }) = &self.editing
-            && *node == n.id
-        {
-            // The same box as the title it replaces, so the text does not move: the input's own
-            // padding is dropped and its line height matches.
-            return div()
-                .debug_selector(|| "title-editor".into())
-                .mx(px(-8.))
-                .px(px(8.))
-                .py(px(2.))
-                .rounded_xl()
-                .bg(color(HOVER))
-                .on_action(
-                    cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
-                )
-                .child(flush_input(
-                    Input::new(state)
-                        .line_height(px(TITLE_LINE))
-                        .text_xl()
-                        .font_weight(FontWeight::SEMIBOLD),
-                    TITLE_LINE,
-                ))
-                .into_any_element();
+        let title = InlineEdit::new(TextRole::Title, "detail-title", "title-editor");
+        match &self.editing {
+            Some(Editing {
+                node,
+                field: Field::Title(state),
+                ..
+            }) if *node == n.id => title.editing_line(state, cx),
+            _ => title.reading(
+                n.title.clone(),
+                |this, w, cx| this.start_edit(false, w, cx),
+                cx,
+            ),
         }
-        div()
-            .id("detail-title")
-            .debug_selector(|| "detail-title".into())
-            .mx(px(-8.))
-            .px(px(8.))
-            .py(px(2.))
-            .rounded_xl()
-            .hover(|s| s.bg(color(HOVER)))
-            .line_height(px(TITLE_LINE))
-            .text_xl()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(color(TEXT))
-            .child(n.title.clone())
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                if e.click_count() >= 2 {
-                    this.start_edit(false, window, cx);
-                }
-            }))
-            .into_any_element()
     }
 
-    /// The open node's body as markdown: double-click to edit; when empty, one click.
+    /// The open node's body as markdown: read, or edited in place on a double-click (one click
+    /// when there is none yet).
     pub(super) fn detail_body(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
+        let empty = n.body.trim().is_empty();
+        // A body to read opens on a double-click; none yet, on one click, as there is nothing
+        // to read first.
+        let body = InlineEdit::new(TextRole::Body, "detail-body", "body-editor").opens(if empty {
+            Opens::Click
+        } else {
+            Opens::DoubleClick
+        });
         if let Some(Editing {
             node,
             field: Field::Body(state),
@@ -119,53 +97,21 @@ impl LivtkApp {
         }) = &self.editing
             && *node == n.id
         {
-            return div()
-                .debug_selector(|| "body-editor".into())
-                .key_context(FORM)
-                .mx(px(-8.))
-                // The view's 8 px all round, less the textarea's own padding (4 px across at
-                // this size, none down), so the text stays where it was.
-                .px(px(8.) - TEXTAREA_PX)
-                .py(px(8.))
-                .rounded_xl()
-                .bg(color(HOVER))
-                .on_action(
-                    cx.listener(|this, _: &Submit, window, cx| this.save_edit(true, window, cx)),
-                )
-                .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel_edit(window, cx)))
-                .on_action(
-                    cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
-                )
-                .child(indented(
-                    div().child(Textarea::new(state).appearance(false).xsmall().text_sm()),
-                    state,
-                ))
-                .into_any_element();
+            return body.editing_area(state, cx);
         }
-        let empty = n.body.trim().is_empty();
-        div()
-            .id("detail-body")
-            .debug_selector(|| "detail-body".into())
-            .mx(px(-8.))
-            .p(px(8.))
-            .rounded_xl()
-            .hover(|s| s.bg(color(HOVER)))
-            .text_color(color(TEXT_2))
-            .when(empty, |d| {
-                d.text_color(color(TEXT_4)).child("Add a description…")
-            })
-            .when(!empty, |d| {
-                d.child(TextView::markdown(
-                    SharedString::from(format!("body-{}", n.key)),
-                    n.body.clone(),
-                ))
-            })
-            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                if empty || e.click_count() >= 2 {
-                    this.start_edit(true, window, cx);
-                }
-            }))
+        let content = if empty {
+            div()
+                .text_color(color(TEXT_4))
+                .child("Add a description…")
+                .into_any_element()
+        } else {
+            TextView::markdown(
+                SharedString::from(format!("body-{}", n.key)),
+                n.body.clone(),
+            )
             .into_any_element()
+        };
+        body.reading(content, |this, w, cx| this.start_edit(true, w, cx), cx)
     }
 
     /// A node's state mark, with its `name` in the panel, that opens the states of its kind, as
@@ -424,13 +370,7 @@ impl LivtkApp {
 
     /// One group of the open node's links: a click on one goes to it, its × removes the link.
     pub(super) fn link_group(&self, g: &LinkGroup, cx: &mut Context<Self>) -> Div {
-        let mut out = div().flex().flex_col().gap_1().child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(color(TEXT_4))
-                .child(g.label),
-        );
+        let mut out = div().flex().flex_col().gap_1().child(group_label(g.label));
         let (rel, outgoing) = (g.rel, g.outgoing);
         let group = g.label.to_lowercase().replace(' ', "-");
         for b in &g.briefs {
@@ -467,13 +407,7 @@ impl LivtkApp {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(color(TEXT_4))
-                    .child("Docs"),
-            );
+            .child(group_label("Docs"));
         for (path, title) in docs {
             let gone = title.is_none();
             let (open, unlink_path, node) = (path.clone(), path.clone(), key.to_owned());
@@ -670,14 +604,9 @@ impl LivtkApp {
         )
     }
 
-    pub(super) fn detail_panel(
-        &mut self,
-        d: &Detail,
-        width: f32,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    /// The Links section: each group of links, the docs, then the sessions that worked on it.
+    fn links_section(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {
         let n = &d.node;
-        let props = self.props(d, cx);
         let mut links = div()
             .debug_selector(|| "detail-links".into())
             .flex()
@@ -703,6 +632,31 @@ impl LivtkApp {
         if !d.docs.is_empty() {
             links = links.child(self.doc_group(&n.key, &d.docs, cx));
         }
+        // The sessions that worked on it, after its other links.
+        if !d.sessions.is_empty() {
+            self.load_transcripts(cx);
+            links = links.child(
+                div()
+                    .debug_selector(|| "detail-sessions".into())
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(group_label("Sessions"))
+                    .child(self.task_sessions(&d.sessions, cx)),
+            );
+        }
+        links
+    }
+
+    pub(super) fn detail_panel(
+        &mut self,
+        d: &Detail,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let n = &d.node;
+        let props = self.props(d, cx);
+        let links = self.links_section(d, cx);
         // The panel's content: its width less its padding either side.
         let flow = self.state_flow(n.id, n.kind, n.state, width - 40., cx);
 
@@ -779,7 +733,14 @@ impl LivtkApp {
                     .flex()
                     .flex_col()
                     .gap_5()
-                    .child(title)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(title)
+                            .child(meta_line(d)),
+                    )
                     .when(has_flow(n.kind) && !self.model.prefs.hide_state_flow, |d| {
                         d.child(flow)
                     })
@@ -1093,3 +1054,30 @@ const PROP_LINE: f32 = 26.;
 const SEND: f32 = 24.;
 const SEND_PRESSED: f32 = 21.;
 const SEND_EASE: u64 = 160;
+
+/// A group's name in a node's links: its relation, its docs, its sessions.
+fn group_label(label: &str) -> Div {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color(TEXT_4))
+        .child(label.to_owned())
+}
+
+/// The quiet line under a node's title: when it was made and by whom, and when it last changed
+/// and by whom (its last change of any kind: a move, a link, a note).
+fn meta_line(d: &Detail) -> Div {
+    let n = &d.node;
+    let made = format!("Created {} by {}", ago(&n.created), who(&n.created_by));
+    let changed = d
+        .history
+        .last()
+        .filter(|e| e.at != n.created)
+        .map(|e| format!(" · updated {} by {}", ago(&e.at), who(&e.by)))
+        .unwrap_or_default();
+    super::text_style::TextRole::Meta
+        .style()
+        .frame(div())
+        .debug_selector(|| "detail-meta".into())
+        .child(format!("{made}{changed}"))
+}

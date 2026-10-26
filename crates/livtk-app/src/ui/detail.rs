@@ -56,11 +56,14 @@ impl LivtkApp {
     /// The open node's title: read, or edited in place on a double-click.
     pub(super) fn detail_title(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
         if let Some(field) = self.editing_of(n, Part::Title) {
-            return Part::Title.edit(&self.model.prefs).editing(field, cx);
+            return Part::Title
+                .edit(&self.model.prefs)
+                .editing(field, &self.read_heights, cx);
         }
-        Part::Title.edit(&self.model.prefs).reading(
+        Part::Title.edit(&self.model.prefs).reading_text(
             n.title.clone(),
-            |this, w, cx| this.start_edit(Part::Title, w, cx),
+            |this, at, w, cx| this.start_edit(Part::Title, at, w, cx),
+            &self.read_heights,
             cx,
         )
     }
@@ -69,7 +72,7 @@ impl LivtkApp {
     pub(super) fn detail_body(&self, n: &livtk_core::Node, cx: &mut Context<Self>) -> AnyElement {
         let edit = Part::Body.edit(&self.model.prefs);
         if let Some(field) = self.editing_of(n, Part::Body) {
-            return edit.editing(field, cx);
+            return edit.editing(field, &self.read_heights, cx);
         }
         let content = if n.body.trim().is_empty() {
             div()
@@ -85,7 +88,8 @@ impl LivtkApp {
         };
         edit.reading(
             content,
-            |this, w, cx| this.start_edit(Part::Body, w, cx),
+            |this, at, w, cx| this.start_edit(Part::Body, at, w, cx),
+            &self.read_heights,
             cx,
         )
     }

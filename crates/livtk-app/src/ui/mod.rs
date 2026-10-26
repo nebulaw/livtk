@@ -828,6 +828,8 @@ pub struct LivtkApp {
     /// What the menu bar and the Dock menu were last made from.
     menu_state: Option<menus::MenuState>,
     editing: Option<Editing>,
+    /// How tall each in-place text last read, so its editor opens no shorter.
+    read_heights: inline_edit::ReadHeights,
     /// The detail panel's last frame while open, kept to animate it out after it closes.
     last_detail: Option<Detail>,
     /// The panel closing, drawn until its animation ends.
@@ -1056,6 +1058,7 @@ impl LivtkApp {
             agent_form,
             menu_state: None,
             editing: None,
+            read_heights: inline_edit::ReadHeights::default(),
             last_detail: None,
             detail_leaving: None,
             detail_epoch: 0,
@@ -1422,6 +1425,7 @@ impl LivtkApp {
                     } else {
                         Part::Title
                     },
+                    None,
                     window,
                     cx,
                 );
@@ -1817,7 +1821,14 @@ impl LivtkApp {
 
     /// Edit the open node's title or body in place, as its `InlineEdit` says: Enter (⌘Enter
     /// for the body) or clicking away saves, Esc cancels.
-    fn start_edit(&mut self, part: Part, window: &mut Window, cx: &mut Context<Self>) {
+    /// `at`: where in the text the caret starts (a byte offset), the end when not known.
+    fn start_edit(
+        &mut self,
+        part: Part,
+        at: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(node) = self.model.detail.as_ref().map(|d| d.node.clone()) else {
             return;
         };
@@ -1826,7 +1837,7 @@ impl LivtkApp {
             Part::Title => node.title.clone(),
             Part::Body => node.body.clone(),
         };
-        let field = edit.field(value, window, cx);
+        let field = edit.field(value, at, window, cx);
         let subscription = cx.subscribe_in(
             &field,
             window,

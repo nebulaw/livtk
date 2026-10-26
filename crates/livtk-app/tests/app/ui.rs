@@ -5531,4 +5531,86 @@ fn the_title_is_edited_where_it_reads(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(node_of(dir.path(), "LIV-1").title, long, "Esc keeps it");
     app.read_with(cx, |a, _| assert_eq!(a.editing(), None));
+    // The caret starts where the click fell: in the middle, not at the start or the end.
+    click_on(cx, "detail-title");
+    cx.simulate_input("§");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let saved = node_of(dir.path(), "LIV-1").title;
+    let at = saved.find('§').expect("typed");
+    assert!(
+        at > 10 && at < long.len() - 10,
+        "typed where it was clicked, at {at} of {}: {saved}",
+        long.len()
+    );
+}
+
+/// Editing a long body down the panel: the panel keeps its scroll, the editor starts where the
+/// body read; a click anywhere outside it (not only on something that takes the keys) saves it
+/// and leaves editing.
+#[gpui_kit::test]
+fn a_body_edited_down_the_panel_keeps_its_place_and_a_click_outside_saves(cx: &mut TestAppContext) {
+    let dir = project();
+    let body: String = (1..=60)
+        .map(|i| format!("Line {i} of a long body.\n\n"))
+        .collect();
+    Workspace::open(dir.path())
+        .unwrap()
+        .execute(
+            Command::Edit {
+                node: "LIV-1".into(),
+                title: None,
+                body: Some(body.trim_end().into()),
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    let at = cx.debug_bounds("detail-title").unwrap().center();
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-600.),
+        )),
+        modifiers: gpui_kit::Modifiers::default(),
+        ..Default::default()
+    });
+    redraw(cx);
+    let reading = cx.debug_bounds("detail-body").expect("the body");
+    assert!(
+        reading.origin.y < gpui_kit::px(0.),
+        "scrolled down to it: {reading:?}"
+    );
+    let click = gpui_kit::point(reading.center().x, gpui_kit::px(400.));
+    cx.simulate_click(click, gpui_kit::Modifiers::default());
+    redraw(cx);
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), Some("body")));
+    let editing = cx.debug_bounds("body-editor").expect("editing in place");
+    assert_eq!(editing.origin, reading.origin, "the panel kept its scroll");
+    // A click on the panel's plain space outside it saves and leaves.
+    cx.simulate_keystrokes("secondary-down");
+    cx.simulate_input("\n\nMore.");
+    // Back up to the top, where the line under the title is plain space.
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: click,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(5000.),
+        )),
+        modifiers: gpui_kit::Modifiers::default(),
+        ..Default::default()
+    });
+    redraw(cx);
+    click_on(cx, "detail-meta");
+    redraw(cx);
+    app.read_with(cx, |a, _| assert_eq!(a.editing(), None, "left editing"));
+    assert!(
+        node_of(dir.path(), "LIV-1").body.ends_with("More."),
+        "saved"
+    );
 }

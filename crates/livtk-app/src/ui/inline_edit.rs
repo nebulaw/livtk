@@ -6,6 +6,8 @@
 
 use super::text_style::TextRole;
 use super::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// What opens a piece of text for editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +48,18 @@ pub(super) enum Fit {
 
 /// Rows enough that a growing editor never scrolls.
 const GROW_ROWS: usize = 100_000;
+
+/// How tall each piece of text last read, by its reading selector: its editor is at least as
+/// tall on its first frame, before the field has laid out its rows, so nothing under it moves
+/// and a scrolled panel keeps its place.
+#[derive(Clone, Default)]
+pub(super) struct ReadHeights(Rc<RefCell<HashMap<&'static str, Pixels>>>);
+
+impl ReadHeights {
+    fn get(&self, id: &'static str) -> Option<Pixels> {
+        self.0.borrow().get(id).copied()
+    }
+}
 
 /// A piece of text, read or edited in place.
 #[derive(Clone, Copy, Debug)]
@@ -95,23 +109,28 @@ impl InlineEdit {
         self
     }
 
-    /// The field that edits `value`, made to its settings.
+    /// The field that edits `value`, made to its settings, its caret at `at` (a byte offset
+    /// in `value`), or at the end when where is not known.
     pub(super) fn field(
         self,
         value: String,
+        at: Option<usize>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TextareaState> {
+        let at = at.unwrap_or(value.len()).min(value.len());
         let rows = match self.fit {
             Fit::Grow => GROW_ROWS,
             Fit::Scroll { rows } => rows,
         };
         cx.new(|cx| {
-            TextareaState::new(window, cx)
+            let mut field = TextareaState::new(window, cx)
                 .placeholder(self.placeholder)
                 .auto_grow(1, rows)
                 .submit_on_enter(self.lines == Lines::One)
-                .default_value(value)
+                .default_value(value);
+            field.set_selected_range(at..at, cx);
+            field
         })
     }
 
@@ -133,25 +152,70 @@ impl InlineEdit {
         }
     }
 
-    /// Reading: `content` in its style; `open` runs on the click or double-click that opens it,
-    /// as `opens` says.
+    /// Reading plain `text`: as `reading`, `open` told where in the text the click fell, so the
+    /// caret starts there.
+    pub(super) fn reading_text(
+        self,
+        text: impl Into<SharedString>,
+        open: impl Fn(&mut LivtkApp, Option<usize>, &mut Window, &mut Context<LivtkApp>) + 'static,
+        heights: &ReadHeights,
+        cx: &mut Context<LivtkApp>,
+    ) -> AnyElement {
+        let text = StyledText::new(text.into());
+        let layout = text.layout().clone();
+        self.read_frame(text, heights, cx, move |this, at, window, cx| {
+            // Past a line's end, the nearest place in it.
+            let index = layout
+                .index_for_position(at)
+                .unwrap_or_else(|nearest| nearest);
+            open(this, Some(index), window, cx);
+        })
+    }
+
+    /// Reading `content` (rich, so where a click falls in its source is not known): in its
+    /// style; `open` runs on the click or double-click that opens it, as `opens` says.
     pub(super) fn reading(
         self,
         content: impl IntoElement,
-        open: impl Fn(&mut LivtkApp, &mut Window, &mut Context<LivtkApp>) + 'static,
+        open: impl Fn(&mut LivtkApp, Option<usize>, &mut Window, &mut Context<LivtkApp>) + 'static,
+        heights: &ReadHeights,
         cx: &mut Context<LivtkApp>,
+    ) -> AnyElement {
+        self.read_frame(content, heights, cx, move |this, _, window, cx| {
+            open(this, None, window, cx);
+        })
+    }
+
+    fn read_frame(
+        self,
+        content: impl IntoElement,
+        heights: &ReadHeights,
+        cx: &mut Context<LivtkApp>,
+        open: impl Fn(&mut LivtkApp, Point<Pixels>, &mut Window, &mut Context<LivtkApp>) + 'static,
     ) -> AnyElement {
         let clicks = self.opens.clicks();
         let id = self.read_id;
+        let store = heights.0.clone();
         self.role
             .style()
             .frame(div())
             .id(id)
             .debug_selector(move || id.into())
+            .relative()
             .child(content)
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        store.borrow_mut().insert(id, bounds.size.height);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 if e.click_count() >= clicks {
-                    open(this, window, cx);
+                    open(this, e.position(), window, cx);
                 }
             }))
             .into_any_element()
@@ -163,6 +227,7 @@ impl InlineEdit {
     pub(super) fn editing(
         self,
         field: &Entity<TextareaState>,
+        heights: &ReadHeights,
         cx: &mut Context<LivtkApp>,
     ) -> AnyElement {
         let style = self.role.style();
@@ -170,6 +235,9 @@ impl InlineEdit {
         style
             .frame(div())
             .debug_selector(move || id.into())
+            .when_some(heights.get(self.read_id), |d, h| d.min_h(h))
+            // A click anywhere else saves: not only on something that takes the keys.
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| this.save_edit(false, window, cx)))
             .px(style.pad_x - TEXTAREA_PX)
             .key_context(FORM)
             .on_action(cx.listener(|this, _: &Submit, window, cx| this.save_edit(true, window, cx)))

@@ -307,10 +307,17 @@ impl Model {
             d.states
                 .sort_by_key(|st| super::state_order(view.kind(), *st));
             d.states.dedup();
-            if let Some(g) = GROUPINGS.iter().find(|g| g.1 == s.grouping) {
+            // Only what the view offers: one saved before it stopped offering it falls back.
+            if let Some(g) = GROUPINGS
+                .iter()
+                .find(|g| g.1 == s.grouping && view.offers_grouping(g.0))
+            {
                 d.grouping = g.0;
             }
-            if let Some(o) = ORDERINGS.iter().find(|o| o.1 == s.ordering) {
+            if let Some(o) = ORDERINGS
+                .iter()
+                .find(|o| o.1 == s.ordering && view.offers_ordering(o.0))
+            {
                 d.ordering = o.0;
             }
             d.show_empty = s.show_empty && view.kind().is_some();

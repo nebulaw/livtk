@@ -17,22 +17,6 @@ impl Making {
     /// Every kind the form makes, in the order they are offered.
     pub const ALL: [Making; 2] = [Making::Task, Making::Project];
 
-    /// The kind the form makes from `view`: the one it lists, when the form makes that kind;
-    /// else a task, as everywhere.
-    pub fn for_view(view: View) -> Making {
-        Making::ALL
-            .into_iter()
-            .find(|m| view.kind() == Some(m.spec().kind))
-            .unwrap_or(Making::Task)
-    }
-
-    /// Whether `view` lists what the form makes.
-    pub fn lists(view: View) -> bool {
-        Making::ALL
-            .iter()
-            .any(|m| view.kind() == Some(m.spec().kind))
-    }
-
     /// Everything about making it, in one row.
     pub const fn spec(self) -> &'static Spec {
         match self {

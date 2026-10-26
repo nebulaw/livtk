@@ -17,6 +17,7 @@ mod flow;
 mod graph;
 pub mod grid;
 pub mod keys;
+pub mod listing;
 pub mod making;
 mod palette;
 pub mod prefs;
@@ -33,6 +34,7 @@ pub use graph::{
     CARD_H, CARD_W, Camera, DOTS_BELOW, FIT_BELOW, Graph, GraphEdge, GraphNode, MAX_ZOOM, MIN_ZOOM,
     link_curve, visible_runs,
 };
+pub use listing::ListSpec;
 pub use palette::{Action, Ask, DocItem, DocPick, Found, Item, LinkPick, Palette, Run, fuzzy};
 pub use saved::{Saved, SavedView, SavedWindow};
 pub use toasts::{Act, Button, Level, Mark, Toast, Toasts};
@@ -118,9 +120,9 @@ impl View {
         })
     }
 
-    /// Whether the view lays its nodes out as a board too: the tasks, and a declared kind.
-    pub const fn has_board(self) -> bool {
-        matches!(self, View::Tasks | View::Of(_))
+    /// Whether the view lays its nodes out as a board too, as its kind's list says.
+    pub fn has_board(self) -> bool {
+        self.listing_spec().is_some_and(|s| s.board)
     }
 
     /// Whether the view can show dismissed work: the lists of one kind, and the graph.
@@ -326,7 +328,12 @@ impl Display {
             } else {
                 Grouping::State
             },
-            ordering: Ordering::Priority,
+            // By priority where the nodes have one; else the latest first.
+            ordering: if view.offers_ordering(Ordering::Priority) {
+                Ordering::Priority
+            } else {
+                Ordering::Updated
+            },
             show_empty: false,
             show_dismissed: false,
             nest: true,
@@ -2203,13 +2210,19 @@ impl Model {
     }
 
     pub fn set_grouping(&mut self, grouping: Grouping) {
-        if self.pane().layout == Layout::Board && grouping == Grouping::None {
+        // What the view does not offer is not taken, whoever asks: the palette, a saved view.
+        if (self.pane().layout == Layout::Board && grouping == Grouping::None)
+            || !self.pane().view.offers_grouping(grouping)
+        {
             return;
         }
         self.edit_display(|d| d.grouping = grouping);
     }
 
     pub fn set_ordering(&mut self, ordering: Ordering) {
+        if !self.pane().view.offers_ordering(ordering) {
+            return;
+        }
         self.edit_display(|d| d.ordering = ordering);
     }
 
@@ -2442,13 +2455,15 @@ impl Model {
             // while shown. The filter says what the board is about: no column for a state it
             // leaves out.
             let kind = self.pane().view.kind().unwrap_or(Kind::Task);
-            kind.states()
+            let mut states: Vec<State> = kind
+                .states()
                 .iter()
                 .copied()
                 .filter(|&s| d.show_dismissed || !kind.is_dismissed(s))
                 .filter(|s| d.states.is_empty() || d.states.contains(s))
-                .map(GroupKey::State)
-                .collect()
+                .collect();
+            states.sort_by_key(|s| state_order(Some(kind), *s));
+            states.into_iter().map(GroupKey::State).collect()
         };
         keys.into_iter()
             .map(|key| {

@@ -63,9 +63,9 @@ use crate::model::docs::DocRow;
 use crate::model::keys;
 use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, DocPick, FeedRow, GroupKey,
-    Grouping, Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, Look, Mark, Model,
-    Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with, created_as,
-    describe, drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with,
+    Grouping, Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, ListSpec, Look, Mark,
+    Model, Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with,
+    created_as, describe, drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with,
     visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
@@ -2428,19 +2428,24 @@ impl LivtkApp {
         if self.model.view() == View::Docs {
             return panel;
         }
-        let mut panel = panel.child(menu_divider()).child(menu_heading("Priority"));
-        for p in 1..=4u8 {
-            let on = d.priorities.contains(&p);
-            panel = panel.child(
-                option_row(SharedString::from(format!("filter-priority-{p}")))
-                    .child(checkbox(on))
-                    .child(priority_mark(p))
-                    .child(PRIORITY_NAMES[usize::from(p - 1)])
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.toggle_priority(p);
-                        cx.notify();
-                    })),
-            );
+        // Priorities where the view's nodes have them; the inbox mixes kinds and keeps them.
+        let mut panel = panel;
+        if self.model.view().has_priority() {
+            panel = panel.child(menu_divider()).child(menu_heading("Priority"));
+            for p in 1..=4u8 {
+                let on = d.priorities.contains(&p);
+                panel = panel.child(
+                    option_row(SharedString::from(format!("filter-priority-{p}")))
+                        .debug_selector(move || format!("filter-priority-{p}"))
+                        .child(checkbox(on))
+                        .child(priority_mark(p))
+                        .child(PRIORITY_NAMES[usize::from(p - 1)])
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.model.toggle_priority(p);
+                            cx.notify();
+                        })),
+                );
+            }
         }
         // The states of the view's kind, in its own order, as its groups are; the inbox mixes
         // kinds and has none. Dismissed states only while dismissed work is shown.
@@ -2763,18 +2768,21 @@ impl LivtkApp {
             // Drawn in the list's place, outside its keys: `terminal_view`.
             (View::Terminal, _) => div().into_any_element(),
             // No column to draw: nothing matches, or every column is empty and hidden.
-            (View::Tasks, Layout::Board) if self.model.columns().is_empty() => empty(
-                view_icon(View::Tasks),
-                "No tasks here",
-                &format!(
-                    "Clear the filter, press {} for every column, or N for a new task.",
-                    keys::EMPTY_GROUPS
-                ),
-            )
-            .debug_selector(|| "board-empty".into())
-            .children(self.empty_list_action(cx))
-            .into_any_element(),
-            (View::Tasks, Layout::Board) => self.board(cx).into_any_element(),
+            (view, Layout::Board) if view.has_board() && self.model.columns().is_empty() => {
+                let text = view
+                    .listing_spec()
+                    .map(|s| s.empty_board_text())
+                    .unwrap_or_default();
+                empty(
+                    view_icon(view),
+                    &format!("No {} here", view.title().to_lowercase()),
+                    &text,
+                )
+                .debug_selector(|| "board-empty".into())
+                .children(self.empty_list_action(cx))
+                .into_any_element()
+            }
+            (view, Layout::Board) if view.has_board() => self.board(cx).into_any_element(),
             _ => self.list(window, cx).into_any_element(),
         }
     }
@@ -3820,7 +3828,7 @@ fn option_row(id: SharedString) -> Stateful<Div> {
 /// A row of the View options menu: its box, its label and its key, `act` on a click.
 fn view_option(
     id: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     key: Option<&'static str>,
     on: bool,
     act: fn(&mut Model),
@@ -3829,7 +3837,7 @@ fn view_option(
     option_row(id.into())
         .debug_selector(move || id.into())
         .child(checkbox(on))
-        .child(label)
+        .child(label.into())
         .when_some(key.and_then(|k| hint(k, cx)), |row, k| {
             row.child(div().ml_auto().child(k))
         })

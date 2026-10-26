@@ -662,8 +662,8 @@ impl Model {
             ("Group by project", Grouping::Project),
             ("No grouping", Grouping::None),
         ] {
-            let tasks_only = g == Grouping::Project && self.pane().view != View::Tasks;
-            if d.grouping != g && !(board && g == Grouping::None) && !tasks_only {
+            let offered = self.pane().view.offers_grouping(g);
+            if d.grouping != g && !(board && g == Grouping::None) && offered {
                 out.push(plain(label, None, Run::Group(g)));
             }
         }
@@ -672,7 +672,7 @@ impl Model {
             ("Order by last updated", Ordering::Updated),
             ("Order by creation", Ordering::Created),
         ] {
-            if d.ordering != o {
+            if d.ordering != o && self.pane().view.offers_ordering(o) {
                 out.push(plain(label, None, Run::Order(o)));
             }
         }

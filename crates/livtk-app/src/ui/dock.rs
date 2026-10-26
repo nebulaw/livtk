@@ -16,18 +16,12 @@ impl LivtkApp {
         }
         let view = self.model.view();
         let wide = self.content_width(window) >= DOCK_WIDE;
-        let lists = matches!(
-            view,
-            View::Tasks
-                | View::Projects
-                | View::Lessons
-                | View::Decisions
-                | View::Findings
-                | View::Of(_)
-        );
+        // What a list of one kind offers, as its kind says.
+        let spec = view.listing_spec();
+        let lists = spec.is_some();
         let mut groups: Vec<Vec<AnyElement>> = Vec::new();
-        if view == View::Tasks {
-            groups.push(vec![self.dock_new_task(wide, cx)]);
+        if let Some(making) = spec.and_then(|s| s.making) {
+            groups.push(vec![self.dock_new(making, wide, cx)]);
         }
         if view == View::Graph {
             groups.push(self.dock_zoom(cx));
@@ -121,9 +115,14 @@ impl LivtkApp {
             })
     }
 
-    /// The dock's main button: make what the view lists (a project in Projects), else a task.
-    pub(super) fn dock_new_task(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
-        let making = Making::for_view(self.model.view());
+    /// The dock's main button: make what the view lists (a task in Tasks, a project in
+    /// Projects). One selector whatever it makes, as it is the one main button.
+    pub(super) fn dock_new(
+        &self,
+        making: Making,
+        wide: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .id("dock-new-task")
             .debug_selector(|| "dock-new-task".into())
@@ -314,10 +313,9 @@ impl LivtkApp {
         // A board needs columns: as in Linear, it is never ungrouped.
         let board = self.model.view().has_board() && self.model.layout() == Layout::Board;
         let mut panel = menu_panel(180.).debug_selector(|| "grouping-menu".into());
-        // By project: tasks only.
-        let tasks = self.model.view() == View::Tasks;
+        let view = self.model.view();
         for &(id, label, g) in GROUPINGS {
-            if (board && g == Grouping::None) || (!tasks && g == Grouping::Project) {
+            if (board && g == Grouping::None) || !view.offers_grouping(g) {
                 continue;
             }
             panel = panel.child(
@@ -384,22 +382,29 @@ impl LivtkApp {
                 Model::toggle_dismissed,
                 cx,
             ))
-            .when(self.model.view() == View::Tasks, |menu| {
-                menu.child(view_option(
-                    "view-nest",
-                    "Nest sub-tasks",
-                    None,
-                    d.nest,
-                    Model::toggle_nest,
-                    cx,
-                ))
-            })
+            .when_some(
+                self.model.view().listing_spec().filter(|s| s.nests),
+                |menu, spec| {
+                    menu.child(view_option(
+                        "view-nest",
+                        spec.nest_label(),
+                        None,
+                        d.nest,
+                        Model::toggle_nest,
+                        cx,
+                    ))
+                },
+            )
     }
 
     pub(super) fn ordering_menu(&self, cx: &mut Context<Self>) -> Div {
         let current = self.model.display().ordering;
+        let view = self.model.view();
         let mut panel = menu_panel(180.).debug_selector(|| "ordering-menu".into());
         for &(id, label, o) in ORDERINGS {
+            if !view.offers_ordering(o) {
+                continue;
+            }
             panel = panel.child(
                 option_row(id.into())
                     .debug_selector(move || id.into())

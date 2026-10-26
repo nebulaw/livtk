@@ -4195,6 +4195,119 @@ fn projects_show_their_progress_in_rows_and_panel(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("flow-strip").is_some());
 }
 
+/// Projects get what Tasks has wherever it applies: the dock's New project, a board of the
+/// projects' states with their progress on the cards, and no priority to group or order by.
+#[gpui_kit::test]
+fn the_projects_view_has_a_new_button_a_board_and_no_priority(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let _ws = crate::projects::setup(dir.path());
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("g p");
+    redraw(cx);
+    // The dock's main button, labelled where the dock is wide; it opens the New project form.
+    let new = cx
+        .debug_bounds("dock-new-task")
+        .expect("New project in the dock");
+    assert!(
+        new.size.width > gpui_kit::px(60.),
+        "with its label: {new:?}"
+    );
+    click_on(cx, "dock-new-task");
+    settle(cx);
+    assert!(cx.debug_bounds("new-project-card").is_some(), "New project");
+    assert!(cx.debug_bounds("new-task-card").is_none());
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+
+    // No priority to group or order by, and no grouping by project.
+    click_on(cx, "dock-grouping");
+    redraw(cx);
+    assert!(cx.debug_bounds("group-state").is_some());
+    for gone in ["group-priority", "group-project"] {
+        assert!(cx.debug_bounds(gone).is_none(), "{gone}");
+    }
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "dock-ordering");
+    redraw(cx);
+    assert!(cx.debug_bounds("order-updated").is_some());
+    assert!(cx.debug_bounds("order-priority").is_none());
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "filter-button");
+    redraw(cx);
+    assert!(cx.debug_bounds("filter-state-active").is_some());
+    assert!(cx.debug_bounds("filter-priority-1").is_none());
+    cx.simulate_keystrokes("escape");
+
+    // List or board, and sub-projects nest.
+    click_on(cx, "dock-view");
+    redraw(cx);
+    assert!(cx.debug_bounds("view-nest").is_some());
+    click_on(cx, "view-layout-board");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().layout(), livtk_app::model::Layout::Board)
+    });
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    for s in ["active", "proposed"] {
+        assert!(
+            cx.debug_bounds(named(format!("column-{s}"))).is_some(),
+            "{s}"
+        );
+    }
+    assert!(cx.debug_bounds("card-PRJ-1").is_some());
+    assert!(
+        cx.debug_bounds("project-progress-PRJ-1").is_some(),
+        "its progress on its card"
+    );
+    let prj = app.read_with(cx, |a, _| {
+        a.model()
+            .rows()
+            .iter()
+            .find(|r| r.key == "PRJ-1")
+            .unwrap()
+            .id
+    });
+    assert!(
+        cx.debug_bounds(named(format!("priority-of-{prj}")))
+            .is_none(),
+        "no priority on a project's card"
+    );
+
+    // Tasks keep theirs.
+    cx.simulate_keystrokes("g t");
+    redraw(cx);
+    click_on(cx, "dock-grouping");
+    redraw(cx);
+    for kept in ["group-priority", "group-project"] {
+        assert!(cx.debug_bounds(kept).is_some(), "{kept}");
+    }
+    cx.simulate_keystrokes("escape");
+    click_on(cx, "dock-ordering");
+    redraw(cx);
+    assert!(cx.debug_bounds("order-priority").is_some());
+}
+
+/// An empty Projects view offers a new project, never a task.
+#[gpui_kit::test]
+fn an_empty_projects_view_offers_a_new_project(cx: &mut TestAppContext) {
+    let dir = project();
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.simulate_keystrokes("g p");
+    redraw(cx);
+    assert!(cx.debug_bounds("list-empty").is_some());
+    assert!(cx.debug_bounds("empty-new-project").is_some());
+    assert!(cx.debug_bounds("empty-new-task").is_none());
+    cx.simulate_keystrokes("g l");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("dock-new-task").is_none(),
+        "lessons make none"
+    );
+}
+
 /// One stub `claude` and Claude home for the whole test binary (livtk is pointed at them once):
 /// `claude agents` answers with `.stub-agents.json` in the folder it runs in (the project),
 /// `claude stop` writes `.stub-stopped` there, and `claude -p` (a run's turn) answers as the next

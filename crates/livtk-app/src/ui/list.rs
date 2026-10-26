@@ -63,15 +63,12 @@ impl LivtkApp {
             ));
         }
         // A view of what the form makes offers to make one: Tasks a task, Projects a project.
-        let view = self.model.view();
-        Making::lists(view).then(|| {
-            let making = Making::for_view(view);
-            empty_action(
-                making.spec().empty_id,
-                making.spec().title,
-                cx.listener(move |this, _, window, cx| this.open_form(making, window, cx)),
-            )
-        })
+        let making = self.model.view().listing_spec()?.making?;
+        Some(empty_action(
+            making.spec().empty_id,
+            making.spec().title,
+            cx.listener(move |this, _, window, cx| this.open_form(making, window, cx)),
+        ))
     }
 
     /// Tasks, lessons, decisions or findings: a virtualised list in solid group bands.
@@ -81,16 +78,18 @@ impl LivtkApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if self.model.rows().is_empty() && self.model.groups().is_empty() {
-            let what = self.model.view().title().to_lowercase();
+            let view = self.model.view();
+            let what = view.title().to_lowercase();
+            let text = view
+                .listing_spec()
+                .map(|s| s.empty_list_text())
+                .unwrap_or_default();
             return div()
                 .size_full()
                 .child(
-                    empty(
-                        view_icon(self.model.view()),
-                        &format!("No {what} here"),
-                        "Clear the filter, press S D to show dismissed work, or N for a new task.",
-                    )
-                    .children(self.empty_list_action(cx)),
+                    empty(view_icon(view), &format!("No {what} here"), &text)
+                        .debug_selector(|| "list-empty".into())
+                        .children(self.empty_list_action(cx)),
                 )
                 .into_any_element();
         }
@@ -342,8 +341,8 @@ impl LivtkApp {
             .text_color(color(if blocked { TEXT_3 } else { TEXT_2 }))
             .children(moving.map(|(from, to, epoch)| glide_highlight(from, to, epoch)));
         // Every row leads with the same slot, so keys, states and titles line up whatever the
-        // kind: a task's priority, else the kind's icon.
-        row = if r.kind == Kind::Task {
+        // kind: its priority where its kind has one, else the kind's icon.
+        row = if ListSpec::of(r.kind).priority {
             row.child(self.priority_button(Menu::RowPriority(id), id, r.priority, false, cx))
         } else {
             row.child(kind_slot(r.kind))
@@ -455,8 +454,9 @@ impl LivtkApp {
             .flex()
             .gap(px(6.))
             .p_2();
+        let kind = self.model.view().kind().unwrap_or(Kind::Task);
         for (key, rows) in self.model.columns() {
-            let (mark, label) = group_label(key, Kind::Task, self.model.project_names());
+            let (mark, label) = group_label(key, kind, self.model.project_names());
             let mut col = div()
                 .id(SharedString::from(format!("col-{key:?}")))
                 .debug_selector(move || match key {
@@ -546,17 +546,20 @@ impl LivtkApp {
                             .gap_1()
                             .text_xs()
                             .text_color(color(TEXT_4))
-                            .child(self.priority_button(
-                                Menu::RowPriority(id),
-                                id,
-                                r.priority,
-                                false,
-                                cx,
-                            ))
+                            // A priority where the card's kind has one; its own kind's states.
+                            .when(ListSpec::of(r.kind).priority, |d| {
+                                d.child(self.priority_button(
+                                    Menu::RowPriority(id),
+                                    id,
+                                    r.priority,
+                                    false,
+                                    cx,
+                                ))
+                            })
                             .child(self.state_button(
                                 Menu::RowState(id),
                                 id,
-                                Kind::Task,
+                                r.kind,
                                 r.state,
                                 false,
                                 cx,
@@ -576,6 +579,8 @@ impl LivtkApp {
                             .text_color(color(if blocked { TEXT_3 } else { TEXT }))
                             .child(r.title.clone()),
                     )
+                    // A project's progress and health, under its title, as its row shows them.
+                    .children(self.project_parts(r).map(|p| div().px_1().child(p)))
                     .on_drag(Dragged::of(r), |d, _, _, cx| cx.new(|_| d.clone()))
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                         this.model.select(id);

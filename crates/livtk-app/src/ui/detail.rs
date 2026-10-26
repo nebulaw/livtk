@@ -746,12 +746,29 @@ impl LivtkApp {
             .when(!ready, |d| d.child(icon(Icon::Send, 14., TEXT_4)))
             .tooltip(|window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new("Send · Enter").build(window, cx)
-            })
-            .with_animation(
-                SharedString::from(format!("note-send-{ready}")),
-                Animation::new(Duration::from_millis(SEND_EASE)).with_easing(ease_out_quint()),
-                move |el, t| el.bg(blend(from, to, t)),
-            );
+            });
+        // Eased only just after the note came to have something to send, or stopped having it:
+        // drawn anew (stuck at the foot, back in line), it shows as it stands.
+        let (was, since) = self.note_ready.get();
+        let since = if was == ready {
+            since
+        } else {
+            let now = Instant::now();
+            self.note_ready.set((ready, Some(now)));
+            Some(now)
+        };
+        let easing = since.is_some_and(|t| t.elapsed() < Duration::from_millis(SEND_EASE));
+        let button = if easing {
+            button
+                .with_animation(
+                    SharedString::from(format!("note-send-{ready}")),
+                    Animation::new(Duration::from_millis(SEND_EASE)).with_easing(ease_out_quint()),
+                    move |el, t| el.bg(blend(from, to, t)),
+                )
+                .into_any_element()
+        } else {
+            button.bg(color(to)).into_any_element()
+        };
         let send = div()
             .flex_none()
             .self_end()

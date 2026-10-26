@@ -742,6 +742,9 @@ pub struct LivtkApp {
     /// Whether the note field has the keys, as it last said: the panel is drawn without the
     /// window to ask.
     note_focused: bool,
+    /// Whether the note had something to send when last drawn, and since when: its send
+    /// button eases only as that changes, never as the composer is drawn somewhere new.
+    note_ready: std::cell::Cell<(bool, Option<Instant>)>,
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
     palette_scroll: ScrollHandle,
@@ -1067,6 +1070,7 @@ impl LivtkApp {
             note_for: None,
             note_drafts: HashMap::new(),
             note_focused: false,
+            note_ready: std::cell::Cell::new((false, None)),
             form: None,
             help: false,
             about: false,

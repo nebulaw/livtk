@@ -1832,6 +1832,13 @@ impl LivtkApp {
         }
     }
 
+    /// Where the caret of the field being edited is drawn, and its line's height, for tests:
+    /// where its lines fall.
+    #[doc(hidden)]
+    pub fn editing_caret(&self, cx: &App) -> Option<(Bounds<Pixels>, Pixels)> {
+        self.editing.as_ref()?.field.read(cx).cursor_layout()
+    }
+
     /// What the field being edited holds, for tests.
     #[doc(hidden)]
     pub fn editing_text(&self, cx: &App) -> Option<String> {

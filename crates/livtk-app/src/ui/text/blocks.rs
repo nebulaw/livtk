@@ -15,7 +15,7 @@ use livtk_core::md::{self, Block, BlockKind};
 use super::super::*;
 use super::inline_edit::{InlineEdit, Lines, ReadHeights};
 use super::markdown::{body_style, markdown, task_lists};
-use super::style::{BLOCK_GAP, TextRole};
+use super::style::{BLOCK_GAP, ITEM_GAP, TextRole};
 
 /// The block being edited, as it was when it opened: where it is among the blocks, its bytes
 /// in the source, and its kind. A new block (in an empty source, or after the last) has an
@@ -41,7 +41,7 @@ impl BlockAt {
 
     /// `source`'s last block, if it has any.
     pub(in crate::ui) fn last(source: &str) -> Option<Self> {
-        let blocks = md::blocks(source);
+        let blocks = md::places(source);
         let i = blocks.len().checked_sub(1)?;
         Some(BlockAt::of(source, i, &blocks[i]))
     }
@@ -49,7 +49,7 @@ impl BlockAt {
     /// A new block, after `source`'s last.
     pub(in crate::ui) fn new_after(source: &str) -> Self {
         BlockAt {
-            index: md::blocks(source).len(),
+            index: md::places(source).len(),
             range: source.len()..source.len(),
             kind: BlockKind::Paragraph,
             text: String::new(),
@@ -60,7 +60,7 @@ impl BlockAt {
     /// its own edit): the last that ends before it starts, or the first that starts after its
     /// `len` bytes. `None` past the first or last.
     pub(in crate::ui) fn beside(&self, source: &str, len: usize, edge: Edge) -> Option<Self> {
-        let blocks = md::blocks(source);
+        let blocks = md::places(source);
         let found = match edge {
             Edge::Above => blocks
                 .iter()
@@ -85,12 +85,13 @@ impl BlockAt {
             return source.to_owned();
         }
         if source.get(self.range.clone()) == Some(self.text.as_str()) {
-            return md::splice(source, self.range.clone(), text);
+            return md::write(source, &self.block(), text);
         }
         // The source moved under the edit (written elsewhere meanwhile): the block where it is
         // now, if it is still there; kept after the last otherwise, never lost.
-        match self.nearest_in(source, &md::blocks(source)) {
-            Some(i) => md::splice(source, md::blocks(source)[i].range.clone(), text),
+        let places = md::places(source);
+        match self.nearest_in(source, &places) {
+            Some(i) => md::write(source, &places[i], text),
             None => md::append(source, text),
         }
     }
@@ -110,6 +111,26 @@ impl BlockAt {
         self.range.is_empty() && self.text.is_empty()
     }
 
+    fn block(&self) -> Block {
+        Block {
+            kind: self.kind,
+            range: self.range.clone(),
+        }
+    }
+
+    /// The gap after it, its own: a list's items stand close (a loose list's apart), every
+    /// other block a block's gap from the next.
+    pub(in crate::ui) fn gap(&self) -> Pixels {
+        match self.kind {
+            BlockKind::Item {
+                last: false,
+                spaced: false,
+                ..
+            } => ITEM_GAP,
+            _ => BLOCK_GAP,
+        }
+    }
+
     /// The look a block of this kind reads and edits in.
     pub(in crate::ui) fn role(&self) -> TextRole {
         match self.kind {
@@ -122,6 +143,14 @@ impl BlockAt {
 
 pub(in crate::ui) use super::inline_edit::Edge;
 
+/// The number the ordered list holding place `i` (its item `index`) counts from: its first
+/// item's.
+fn list_start(source: &str, places: &[Block], i: usize, index: usize) -> u64 {
+    places
+        .get(i - index)
+        .map_or(1, |first| md::start_of(&source[first.range.clone()]))
+}
+
 /// A block's text as drawn alone: with the body's link definitions after it, when it is a kind
 /// that may hold a link (a code block's text is its own; an unclosed fence would take them in).
 fn with_context(text: &str, kind: BlockKind, context: &str) -> String {
@@ -130,6 +159,7 @@ fn with_context(text: &str, kind: BlockKind, context: &str) -> String {
         BlockKind::Paragraph
             | BlockKind::Heading { .. }
             | BlockKind::List { .. }
+            | BlockKind::Item { .. }
             | BlockKind::Quote
             | BlockKind::Table
             | BlockKind::Footnote
@@ -181,7 +211,7 @@ impl Blocks {
         )
         .lines(Lines::Many)
         .walks(true)
-        .below(BLOCK_GAP)
+        .below(at.gap())
         .placeholder(self.placeholder)
     }
 
@@ -203,7 +233,7 @@ impl Blocks {
         cx: &mut Context<LivtkApp>,
     ) -> Div {
         let open = Rc::new(open);
-        let blocks = md::blocks(source);
+        let blocks = md::places(source);
         let context = md::context(source, &blocks);
         let prefix = self.prefix;
         let mut out = div()
@@ -225,9 +255,18 @@ impl Blocks {
                 out = out.child(self.edit(edited).editing(field, heights, cx));
                 continue;
             }
-            // Drawn alone, with the link definitions any block may name.
+            // Drawn alone, with the link definitions any block may name; an ordered item with
+            // the number its list gives it (`shift`: how much longer its marker is drawn).
             let text = &source[block.range.clone()];
-            let shown = with_context(text, block.kind, &context);
+            let (numbered, shift) = match block.kind {
+                BlockKind::Item {
+                    ordered: true,
+                    index,
+                    ..
+                } => md::renumbered(text, list_start(source, &blocks, i, index) + index as u64),
+                _ => (text.to_owned(), 0),
+            };
+            let shown = with_context(&numbered, block.kind, &context);
             let key = self.read_id(i);
             let state = views.state(&key, &shown, cx);
             let (len, located, open) = (text.len(), state.clone(), open.clone());
@@ -244,7 +283,9 @@ impl Blocks {
                     // it: past any markup around it.
                     move |cx| {
                         let range = located.read(cx).selected_source_range()?;
-                        (range.end <= len).then_some(range)
+                        let back = |at: usize| at.saturating_add_signed(-shift).min(len);
+                        (range.end <= len.saturating_add_signed(shift))
+                            .then(|| back(range.start)..back(range.end))
                     },
                     move |this, caret, window, cx| open(this, at.clone(), caret, window, cx),
                     heights,

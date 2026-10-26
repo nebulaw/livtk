@@ -960,4 +960,31 @@ fn a_here_document_is_one_command() {
         run::simple_commands("cat <<EOF | wc -l\na; b\nEOF"),
         ["cat <<EOF", "wc -l"]
     );
+    // A `<<` in quotes or arithmetic opens nothing: the next line is a command.
+    assert_eq!(
+        run::simple_commands("echo \"a <<b\"\ngit push"),
+        ["echo \"a <<b\"", "git push"]
+    );
+    assert_eq!(
+        run::simple_commands("echo $((1<<2))\ngit push"),
+        ["echo $((1<<2))", "git push"]
+    );
+    // An ending word with a dash, quoted, or after a backslash; two on one line, in turn.
+    assert_eq!(
+        run::simple_commands("cat <<\"END-X\"\nEND\nmore\nEND-X\nls"),
+        ["cat <<\"END-X\"", "ls"]
+    );
+    assert_eq!(
+        run::simple_commands("cat <<\\EOF\nrm -rf x\nEOF\nls"),
+        ["cat <<\\EOF", "ls"]
+    );
+    assert_eq!(
+        run::simple_commands("cat <<A && cat <<B\none\nA\ntwo\nB\ngit push"),
+        ["cat <<A", "cat <<B", "git push"]
+    );
+    // A here-string is no here-document.
+    assert_eq!(
+        run::simple_commands("grep x <<< \"y\"\nls"),
+        ["grep x <<< \"y\"", "ls"]
+    );
 }

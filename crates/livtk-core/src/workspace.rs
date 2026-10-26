@@ -731,7 +731,8 @@ impl Workspace {
     /// Runs of `stage` may run what `asked` names (refused rules) from now on, each by its
     /// command's kind: written into the project's `[runs.allow]`.
     pub fn allow_always(&mut self, stage: crate::run::Stage, asked: &[String]) -> Result<()> {
-        let mut runs = self.config().runs.clone();
+        // As the file says now: another livtk may have changed `[runs]` since it was read.
+        let mut runs = load_config(&self.dir)?.runs;
         let own = runs.allow.entry(stage.as_str().to_owned()).or_default();
         for rule in asked {
             let r = crate::permits::always_rule(rule);
@@ -1134,10 +1135,15 @@ impl Workspace {
         let stamp = config_mtime(&self.dir);
         if stamp != self.config_read {
             self.config_read = stamp;
-            if let Ok(config) = load_config(&self.dir) {
-                self.gates = config.gates.parse().unwrap_or_default();
-                changed |= config != self.config;
-                self.config = config;
+            match load_config(&self.dir) {
+                Ok(config) => {
+                    self.gates = config.gates.parse().unwrap_or_default();
+                    changed |= config != self.config;
+                    self.config = config;
+                }
+                Err(e) => self.warnings.push(format!(
+                    "config.toml no longer reads, so the last good one stands: {e}"
+                )),
             }
         }
         Ok(changed)

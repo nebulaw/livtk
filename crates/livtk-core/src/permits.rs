@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 
 use crate::run::Stage;
 
-/// Reading the project, at every stage.
+/// Reading the project, at every stage: commands that cannot write with any flag (`find`,
+/// `sed`, `sort` and `git branch` can, so they are asked; the Read, Grep and Glob tools read
+/// without them).
 const READ: &[&str] = &[
     "Read",
     "Grep",
@@ -19,20 +21,18 @@ const READ: &[&str] = &[
     "Bash(head:*)",
     "Bash(tail:*)",
     "Bash(wc:*)",
-    "Bash(find:*)",
     "Bash(grep:*)",
     "Bash(rg:*)",
-    "Bash(sed -n:*)",
     "Bash(diff:*)",
     "Bash(pwd:*)",
     "Bash(which:*)",
-    "Bash(sort:*)",
     "Bash(uniq:*)",
     "Bash(git status:*)",
     "Bash(git log:*)",
     "Bash(git show:*)",
     "Bash(git diff:*)",
-    "Bash(git branch:*)",
+    "Bash(git branch --show-current:*)",
+    "Bash(git branch --list:*)",
     "Bash(cargo metadata:*)",
     "Bash(cargo tree:*)",
 ];
@@ -47,15 +47,15 @@ const CHECK: &[&str] = &[
     "Bash(./scripts/check:*)",
 ];
 
-/// Building: editing files, the project's tools and scripts, and committing on its own branch.
+/// Building: editing files, cargo, and committing on its own branch. A project's own scripts are
+/// named one by one (`[runs.allow]`, or Allow always): a rule's prefix matches whole words only,
+/// so `scripts/` does not cover `scripts/x`. Removing files is asked (`rm` can remove anything).
 const BUILD: &[&str] = &[
     "Edit",
     "Write",
     "NotebookEdit",
     "TodoWrite",
     "Bash(cargo:*)",
-    "Bash(scripts/:*)",
-    "Bash(./scripts/:*)",
     "Bash(git add:*)",
     "Bash(git commit:*)",
     "Bash(git restore:*)",
@@ -68,7 +68,6 @@ const BUILD: &[&str] = &[
     "Bash(mkdir:*)",
     "Bash(mv:*)",
     "Bash(cp:*)",
-    "Bash(rm:*)",
     "Bash(touch:*)",
 ];
 
@@ -77,10 +76,67 @@ pub const NEVER: &[&str] = &[
     "Bash(git push:*)",
     "Bash(git reset --hard:*)",
     "Bash(sudo:*)",
+    "Bash(rm -rf /:*)",
+    "Bash(rm -rf ~:*)",
+    "Bash(rm -rf ..:*)",
     "Bash(cargo install:*)",
-    "Bash(brew install:*)",
+    "Bash(brew:*)",
     "Bash(npm install -g:*)",
+    "Bash(npm i -g:*)",
+    "Bash(npm install --global:*)",
+    "Bash(pnpm add -g:*)",
     "Bash(pip install:*)",
+    "Bash(pip3 install:*)",
+];
+
+/// Commands that run other commands (shells, interpreters, wrappers), or that remove: a rule
+/// for their kind would let anything through, so allowing one always allows only that exact
+/// command line.
+const EXACT_ONLY: &[&str] = &[
+    "bash",
+    "sh",
+    "zsh",
+    "fish",
+    "dash",
+    "env",
+    "xargs",
+    "exec",
+    "eval",
+    "nohup",
+    "nice",
+    "time",
+    "timeout",
+    "command",
+    "builtin",
+    "sudo",
+    "doas",
+    "su",
+    "ssh",
+    "python",
+    "python3",
+    "node",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+    "php",
+    "npx",
+    "pnpx",
+    "bunx",
+    "uvx",
+    "osascript",
+    "open",
+    "curl",
+    "wget",
+    "rm",
+    "dd",
+    "chmod",
+    "chown",
+    "kill",
+    "pkill",
+    "cd",
+    "source",
+    ".",
 ];
 
 /// What a project adds and refuses, from its `[runs]`: its own rules for a stage (by the
@@ -138,10 +194,10 @@ pub fn covers(pattern: &str, rule: &str) -> bool {
         (Some(p), Some(r)) => match p.strip_suffix(":*") {
             Some(prefix) => {
                 let prefix = prefix.trim_end();
+                // As Claude Code matches: the prefix, then the end or a space.
                 r == prefix
-                    || r.strip_prefix(prefix).is_some_and(|rest| {
-                        rest.starts_with(' ') || prefix.ends_with('/') || prefix.ends_with(' ')
-                    })
+                    || r.strip_prefix(prefix)
+                        .is_some_and(|rest| rest.starts_with(' '))
             }
             None => p == r,
         },
@@ -155,19 +211,42 @@ fn bash(rule: &str) -> Option<&str> {
     rule.strip_prefix("Bash(")?.strip_suffix(')').map(str::trim)
 }
 
-/// The rule to allow from now on for a refused one: its command's first word, or its first two
-/// for a tool with subcommands (`cargo`, `git`, `npm`, …), as a prefix rule; a tool as itself.
+/// The rule to allow from now on for a refused one: its kind of command as a prefix rule (its
+/// first word, or two for a tool with subcommands: `cargo test`, `git log`, `npm run`), so the
+/// same kind is never asked again. Only that exact command line when a kind would be too much:
+/// a command that runs others or removes (`EXACT_ONLY`), one led by a flag or a variable
+/// (`git -C x`, `FOO=1 make`), or a kind that would cover something never allowed. A tool as
+/// itself.
 pub fn always_rule(rule: &str) -> String {
     let Some(cmd) = bash(rule) else {
         return rule.to_owned();
     };
     let words: Vec<&str> = cmd.split_whitespace().collect();
-    let take = match words.first().copied() {
-        Some("cargo" | "git" | "npm" | "pnpm" | "yarn" | "go" | "docker" | "make" | "uv") => 2,
-        _ => 1,
+    let exact = format!("Bash({cmd})");
+    let Some(first) = words.first().copied() else {
+        return exact;
     };
-    let head = words[..take.min(words.len())].join(" ");
-    format!("Bash({head}:*)")
+    let bin = first.rsplit('/').next().unwrap_or(first);
+    if EXACT_ONLY.contains(&bin) || first.contains('=') {
+        return exact;
+    }
+    let sub = matches!(
+        bin,
+        "cargo" | "git" | "npm" | "pnpm" | "yarn" | "go" | "docker" | "make" | "uv" | "just"
+    );
+    let take = if sub { 2 } else { 1 };
+    if words.len() < take || words[..take].iter().any(|w| w.starts_with('-')) {
+        return exact;
+    }
+    let kind = format!("Bash({}:*)", words[..take].join(" "));
+    // A kind that would let through something never allowed is too much.
+    let never_covered = NEVER.iter().any(|n| {
+        bash(n).is_some_and(|nc| covers(&kind, &format!("Bash({})", nc.trim_end_matches(":*"))))
+    });
+    if never_covered {
+        return exact;
+    }
+    kind
 }
 
 #[cfg(test)]
@@ -186,7 +265,7 @@ mod tests {
         for r in [
             "Edit",
             "Bash(cargo:*)",
-            "Bash(scripts/:*)",
+            "Bash(scripts/check:*)",
             "Bash(git commit:*)",
         ] {
             assert!(build.iter().any(|b| b == r), "{r}");
@@ -235,7 +314,10 @@ mod tests {
         assert!(covers("Bash(git push:*)", "Bash(git push)"));
         assert!(!covers("Bash(git push:*)", "Bash(git pushy)"));
         assert!(!covers("Bash(git push:*)", "Bash(git status)"));
-        assert!(covers("Bash(scripts/:*)", "Bash(scripts/check)"));
+        assert!(
+            !covers("Bash(scripts/:*)", "Bash(scripts/check)"),
+            "as Claude Code: words"
+        );
         assert!(covers("Bash(cargo test)", "Bash(cargo test)"));
         assert!(!covers("Bash(cargo test)", "Bash(cargo test --all)"));
         assert!(covers("WebFetch", "WebFetch"));
@@ -246,7 +328,22 @@ mod tests {
     fn allowing_always_takes_the_kind_of_command() {
         assert_eq!(always_rule("Bash(npm test -- --watch)"), "Bash(npm test:*)");
         assert_eq!(always_rule("Bash(jq .name package.json)"), "Bash(jq:*)");
-        assert_eq!(always_rule("Bash(make)"), "Bash(make:*)");
+        assert_eq!(always_rule("Bash(make build)"), "Bash(make build:*)");
+        // Only the exact line: what runs others, removes, or is led by a flag or a variable.
+        assert_eq!(
+            always_rule("Bash(git -C sub status)"),
+            "Bash(git -C sub status)"
+        );
+        assert_eq!(always_rule("Bash(bash -c ls)"), "Bash(bash -c ls)");
+        assert_eq!(always_rule("Bash(python3 x.py)"), "Bash(python3 x.py)");
+        assert_eq!(
+            always_rule("Bash(/usr/bin/env FOO=1 x)"),
+            "Bash(/usr/bin/env FOO=1 x)"
+        );
+        assert_eq!(always_rule("Bash(rm -rf target)"), "Bash(rm -rf target)");
+        assert_eq!(always_rule("Bash(FOO=1 make)"), "Bash(FOO=1 make)");
+        // A kind covering something never allowed: the exact line.
+        assert_eq!(always_rule("Bash(brew list)"), "Bash(brew list)");
         assert_eq!(always_rule("WebFetch"), "WebFetch");
     }
 }

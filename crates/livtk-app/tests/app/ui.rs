@@ -4212,6 +4212,7 @@ case "$what" in
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
   deny) echo '{"type":"result","subtype":"success","is_error":false,"result":"I need the tests.","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}}]}' ;;
+  push) echo '{"type":"result","subtype":"success","is_error":false,"result":"Pushing it.","permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"git push origin main"}}]}' ;;
   *) echo '{"type":"result","subtype":"success","is_error":false,"result":"Which colour?","permission_denials":[]}' ;;
 esac
 "#;
@@ -6274,4 +6275,89 @@ fn a_run_is_allowed_always_and_a_task_says_where_it_builds(cx: &mut TestAppConte
         !own.contains(&"Bash(cargo test:*)".to_owned()),
         "removed: {own:?}"
     );
+}
+
+/// A build runs with its whole job allowed (cargo, the checks, commits, edits) and what is never
+/// allowed refused: a push it tries is refused and said on the task, and it goes on without a
+/// Needs you. Where it works is chosen beside Start.
+#[gpui_kit::test]
+fn a_build_does_its_job_and_a_push_is_refused_without_asking(cx: &mut TestAppContext) {
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let _runs = KillRuns(root.clone());
+    claude_stub();
+    std::fs::write(root.join(".stub-turns"), "push\nslow\n").unwrap();
+    Workspace::open(&root)
+        .unwrap()
+        .execute(
+            Command::Move {
+                node: "LIV-1".into(),
+                to: State::Acked,
+            },
+            &Actor::Human,
+        )
+        .unwrap();
+    let (app, cx) = open_app(cx, &root);
+    resize(cx, 1400., 1400.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    until_runs(&app, cx, |m| m.runs.claude);
+    // Beside Start: where it builds, switched for this task.
+    click_on(cx, "run-worktree");
+    redraw(cx);
+    let node = Workspace::open(&root).unwrap().node("LIV-1").unwrap();
+    assert_eq!(node.props["worktree"], false, "switched to the checkout");
+    click_on(cx, "run-start");
+    let args = |n: usize| {
+        let start = Instant::now();
+        loop {
+            let a = std::fs::read_to_string(root.join(".stub-args")).unwrap_or_default();
+            if let Some(l) = a.lines().nth(n - 1) {
+                return l.to_owned();
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let first = args(1);
+    for rule in [
+        "Bash(cargo:*)",
+        "Bash(scripts/check:*)",
+        "Bash(git commit:*)",
+        "Edit",
+    ] {
+        assert!(first.contains(rule), "{rule} allowed: {first}");
+    }
+    assert!(
+        first.contains("--disallowedTools") && first.contains("Bash(git push:*)"),
+        "{first}"
+    );
+    // The push refused: said on the task, and the run goes on to its next turn by itself.
+    until_runs(&app, cx, |_| {
+        std::fs::read_to_string(root.join(".stub-args"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+            >= 2
+    });
+    let second = args(2);
+    assert!(
+        second.contains("Not allowed: Bash(git push origin main)"),
+        "{second}"
+    );
+    until_runs(&app, cx, |m| m.writing_on("LIV-1"));
+    assert!(
+        !app.read_with(cx, |a, _| a.model().run_needs_you("LIV-1")),
+        "never asked"
+    );
+    let said = Workspace::open(&root)
+        .unwrap()
+        .history(Some("LIV-1"))
+        .unwrap();
+    assert!(said.iter().any(
+        |e| matches!(&e.op, livtk_core::event::Op::NodeNote { data, .. }
+        if data.text.contains("Not allowed, ever"))
+    ));
+    click_on(cx, "run-stop");
+    until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
 }

@@ -904,14 +904,21 @@ fn denials(v: &Value) -> Vec<String> {
 }
 
 /// A shell line's simple commands: split at `&&`, `||`, `;`, `|` and newlines, outside quotes.
+/// A here-document (`<<EOF`, `<<'EOF'`, `<<-"END-X"`, `<<\EOF`; not `<<<` or a shift in
+/// `$((…))`) is its command's input: its lines, to the line that ends it, are no commands, and
+/// several on one line are skipped in turn.
 pub fn simple_commands(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
-    // A here-document opened on this line, by a command already split off at a pipe.
-    let mut pending: Option<String> = None;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
+    // Here-documents opened on this line, by their ending words, in order.
+    let mut docs: Vec<String> = Vec::new();
+    // How deep in `$((`…`))` it is: a `<<` there shifts.
+    let mut arith = 0usize;
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
         match (quote, c) {
             (Some(q), c) if c == q => {
                 quote = None;
@@ -922,35 +929,55 @@ pub fn simple_commands(line: &str) -> Vec<String> {
                 quote = Some(c);
                 cur.push(c);
             }
-            (None, '&' | '|') if chars.peek() == Some(&c) => {
-                chars.next();
-                pending = pending.or_else(|| heredoc(&cur));
+            (None, '$') if chars.get(i + 1) == Some(&'(') && chars.get(i + 2) == Some(&'(') => {
+                arith += 1;
+                cur.push_str("$((");
+                i += 2;
+            }
+            (None, ')') if arith > 0 && chars.get(i + 1) == Some(&')') => {
+                arith -= 1;
+                cur.push_str("))");
+                i += 1;
+            }
+            (None, '<')
+                if arith == 0
+                    && chars.get(i + 1) == Some(&'<')
+                    && chars.get(i + 2) != Some(&'<')
+                    && (i == 0 || chars[i - 1] != '<') =>
+            {
+                let (word, used) = doc_word(&chars[i + 2..]);
+                cur.extend(&chars[i..i + 2 + used]);
+                i += 1 + used;
+                if let Some(w) = word {
+                    docs.push(w);
+                }
+            }
+            (None, '&' | '|') if chars.get(i + 1) == Some(&c) => {
+                i += 1;
                 out.push(std::mem::take(&mut cur));
             }
-            // A here-document's lines are its command's input, not commands: skipped to the
-            // line that ends it.
-            (None, '\n') if pending.is_some() || heredoc(&cur).is_some() => {
-                let end = pending.take().or_else(|| heredoc(&cur)).unwrap_or_default();
-                let mut line = String::new();
-                for c in chars.by_ref() {
-                    if c == '\n' {
-                        if line.trim() == end {
+            (None, ';' | '|') => out.push(std::mem::take(&mut cur)),
+            (None, '\n') => {
+                out.push(std::mem::take(&mut cur));
+                // Each here-document's lines, to its ending word, in turn.
+                for end in std::mem::take(&mut docs) {
+                    loop {
+                        let start = i + 1;
+                        let stop = chars
+                            .get(start..)
+                            .and_then(|rest| rest.iter().position(|c| *c == '\n'))
+                            .map_or(chars.len(), |n| start + n);
+                        let text: String = chars.get(start..stop).unwrap_or(&[]).iter().collect();
+                        i = stop;
+                        if text.trim() == end || stop >= chars.len() {
                             break;
                         }
-                        line.clear();
-                    } else {
-                        line.push(c);
                     }
                 }
-                out.push(std::mem::take(&mut cur));
             }
-            (None, ';' | '|') => {
-                pending = pending.or_else(|| heredoc(&cur));
-                out.push(std::mem::take(&mut cur));
-            }
-            (None, '\n') => out.push(std::mem::take(&mut cur)),
             (None, c) => cur.push(c),
         }
+        i += 1;
     }
     out.push(cur);
     out.into_iter()
@@ -959,17 +986,44 @@ pub fn simple_commands(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The word that ends the here-document `cmd` opens (`<<EOF`, `<<'EOF'`, `<<-"EOF"`), if it
-/// opens one.
-fn heredoc(cmd: &str) -> Option<String> {
-    let at = cmd.find("<<")?;
-    let rest = cmd[at + 2..].trim_start_matches('-').trim_start();
-    let word: String = rest
-        .trim_start_matches(['\'', '"'])
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    (!word.is_empty()).then_some(word)
+/// The ending word of a here-document whose `<<` came just before `rest`, and how many of
+/// `rest`'s chars it took: `-`, spaces, then the word, bare, quoted or after a backslash.
+fn doc_word(rest: &[char]) -> (Option<String>, usize) {
+    let mut n = 0;
+    if rest.first() == Some(&'-') {
+        n += 1;
+    }
+    while rest.get(n).is_some_and(|c| *c == ' ' || *c == '\t') {
+        n += 1;
+    }
+    let mut word = String::new();
+    match rest.get(n).copied() {
+        Some(q @ ('\'' | '"')) => {
+            n += 1;
+            while let Some(&c) = rest.get(n) {
+                n += 1;
+                if c == q {
+                    break;
+                }
+                word.push(c);
+            }
+        }
+        _ => {
+            if rest.get(n) == Some(&'\\') {
+                n += 1;
+            }
+            while let Some(&c) = rest.get(n) {
+                if c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')') {
+                    break;
+                }
+                word.push(c);
+                n += 1;
+            }
+        }
+    }
+    // A number after `<<` is no word a here-document ends at (`1<<2` outside `$((`)).
+    let word = (!word.is_empty() && !word.chars().all(|c| c.is_ascii_digit())).then_some(word);
+    (word, n)
 }
 
 // ---- settling -------------------------------------------------------------------------------

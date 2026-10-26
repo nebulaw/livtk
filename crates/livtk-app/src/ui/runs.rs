@@ -531,6 +531,47 @@ impl LivtkApp {
                     .text_color(color(TEXT_2))
                     .child(status),
             );
+        // A build about to start says where it will work; a click switches it, for this task.
+        let builds = going.is_none() && stage == Some(livtk_core::run::Stage::Build);
+        if builds && matches!(ask, Some((Ask::Start, _))) {
+            let own = n
+                .props
+                .get("worktree")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or_else(|| self.model.project_worktree());
+            let id = n.id;
+            row = row.child(
+                div()
+                    .id("run-worktree")
+                    .debug_selector(|| "run-worktree".into())
+                    .flex_none()
+                    .h(px(22.))
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded_lg()
+                    .text_xs()
+                    .text_color(color(TEXT_3))
+                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT_2)))
+                    .child(icon(Icon::Project, 12., TEXT_4))
+                    .child(if own {
+                        "In its own worktree"
+                    } else {
+                        "In the checkout"
+                    })
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(
+                            "Where this build works; click to switch",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.set_worktree(id, Some(!own));
+                        cx.notify();
+                    })),
+            );
+        }
         if let Some((ask, label)) = ask {
             let sel: &'static str = match ask {
                 Ask::Start => "run-start",

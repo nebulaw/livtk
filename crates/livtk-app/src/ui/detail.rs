@@ -684,6 +684,7 @@ impl LivtkApp {
                             .id("detail-scroll")
                             .size_full()
                             .overflow_y_scroll()
+                            .track_scroll(&self.detail_scroll)
                             .p_5()
                             .flex()
                             .flex_col()

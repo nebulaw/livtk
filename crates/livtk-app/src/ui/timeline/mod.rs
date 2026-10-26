@@ -32,6 +32,15 @@ const MERGE_DROP: f32 = 16.;
 const BEND: f32 = 8.;
 /// A stuck row's height: one line beside its mark, and room under it.
 const STUCK_H: f32 = MARK + 12.;
+/// Where an event's content is drawn: in its place on the rail, or stuck to the panel's edge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    /// In place: all of it, what was said in its card, a run's question with its answers.
+    InPlace,
+    /// Stuck: a reminder of where you are, one line beside its mark.
+    Stuck,
+}
+
 /// The rail's dashes, ahead: dash and gap.
 const DASH: f32 = 4.;
 const GAP: f32 = 5.;
@@ -167,7 +176,7 @@ impl LivtkApp {
                             open[*lane - 1] = None;
                         }
                     }
-                    let content = self.event_content(d, e, *mark, cx);
+                    let content = self.event_content(d, e, *mark, Shown::InPlace, cx);
                     self.rail_row(
                         order,
                         Spot::on(*lane, Part::Past),
@@ -333,38 +342,58 @@ impl LivtkApp {
         };
         let unfolded = &self.unfolded;
         let t = timeline(&d.history, n.kind, n.state, |k| unfolded.contains(&k));
-        let stuck_row = |order: usize, this: &mut Self, cx: &mut Context<Self>| -> Option<Div> {
-            let (mark, content) = if Some(order) == composer {
-                (
-                    this.composer_mark(),
-                    this.note_composer(cx).into_any_element(),
-                )
-            } else {
-                let &(_, k) = items.iter().find(|(o, _)| *o == order)?;
-                let Item::Event { at, mark, .. } = &t.items[k] else {
-                    return None;
+        let stuck_row =
+            |order: usize, this: &mut Self, cx: &mut Context<Self>| -> Option<Stateful<Div>> {
+                let (mark, content) = if Some(order) == composer {
+                    (
+                        this.composer_mark(),
+                        this.note_composer(cx).into_any_element(),
+                    )
+                } else {
+                    let &(_, k) = items.iter().find(|(o, _)| *o == order)?;
+                    let Item::Event { at, mark, .. } = &t.items[k] else {
+                        return None;
+                    };
+                    let e = &d.history[*at];
+                    (
+                        mark_view(*mark, n.kind, false),
+                        this.event_content(d, e, *mark, Shown::Stuck, cx),
+                    )
                 };
-                let e = &d.history[*at];
-                (
-                    mark_view(*mark, n.kind, false),
-                    this.event_content(d, e, *mark, cx),
+                let to_place = this.rail.clone();
+                Some(
+                    div()
+                        .id(("timeline-stuck", order))
+                        .debug_selector(move || format!("timeline-stuck-{order}"))
+                        .occlude()
+                        .cursor_pointer()
+                        // Back to its place: its row at the panel's top, under nothing stuck.
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let row = to_place
+                                .borrow()
+                                .rows
+                                .iter()
+                                .find(|(o, _)| *o == order)
+                                .map(|(_, b)| *b);
+                            if let Some(row) = row {
+                                let scroll = &this.detail_scroll;
+                                let mut at = scroll.offset();
+                                at.y += scroll.bounds().top() - row.top();
+                                scroll.set_offset(at);
+                                cx.notify();
+                            }
+                        }))
+                        .flex()
+                        .items_start()
+                        .gap(px(TEXT_GAP))
+                        .py(px(6.))
+                        .bg(color(WINDOW))
+                        .child(div().flex_none().ml(px(RAIL_X - MARK / 2.)).child(mark))
+                        .child(div().flex_1().min_w_0().child(content)),
                 )
             };
-            Some(
-                div()
-                    .debug_selector(move || format!("timeline-stuck-{order}"))
-                    .occlude()
-                    .flex()
-                    .items_start()
-                    .gap(px(TEXT_GAP))
-                    .py(px(6.))
-                    .bg(color(WINDOW))
-                    .child(div().flex_none().ml(px(RAIL_X - MARK / 2.)).child(mark))
-                    .child(div().flex_1().min_w_0().child(content)),
-            )
-        };
-        let tops: Vec<Div> = top.iter().filter_map(|&o| stuck_row(o, self, cx)).collect();
-        let bottoms: Vec<Div> = bottom
+        let tops: Vec<Stateful<Div>> = top.iter().filter_map(|&o| stuck_row(o, self, cx)).collect();
+        let bottoms: Vec<Stateful<Div>> = bottom
             .iter()
             .filter_map(|&o| stuck_row(o, self, cx))
             .collect();
@@ -529,9 +558,11 @@ impl LivtkApp {
         d: &Detail,
         e: &Event,
         mark: Mark,
+        shown: Shown,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let said = is_said(mark);
+        // Stuck, what was said keeps to its first line too: a card would cover the panel.
+        let said = is_said(mark) && shown == Shown::InPlace;
         let what = line(e, &d.node.key);
         let head = div()
             .h(px(MARK))
@@ -589,7 +620,9 @@ impl LivtkApp {
                         )),
                 )
             })
-            .children(self.needs_you(d, e, cx))
+            .when(shown == Shown::InPlace, |c| {
+                c.children(self.needs_you(d, e, cx))
+            })
             .into_any_element()
     }
 

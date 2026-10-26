@@ -750,6 +750,8 @@ pub struct LivtkApp {
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
+    /// The task panel's scroll: a stuck row of its timeline scrolls back to its place.
+    detail_scroll: ScrollHandle,
     /// How often a restart to update was asked for, for tests.
     restarts_asked: u32,
     /// A newer build, staged and verified, waiting for "Restart to Update".
@@ -1030,6 +1032,7 @@ impl LivtkApp {
             palette_input,
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
             restarts_asked: 0,
             column_scrolls: Default::default(),
             grid_state,

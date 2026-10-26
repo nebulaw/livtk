@@ -6439,3 +6439,74 @@ fn a_runs_long_last_note_never_spills_over_the_rows_below(cx: &mut TestAppContex
         "the row below starts under the card: {card:?} {below:?}"
     );
 }
+
+/// A lane that starts with a long note sticks as one line, never its card: the rows under it stay
+/// in view; clicking it scrolls back to its place.
+#[gpui_kit::test]
+fn a_stuck_long_note_keeps_to_one_line_and_leads_back_to_its_place(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.set_session(Some("sess-long".into()));
+        let long: String = (0..40)
+            .map(|i| format!("- point {i} of a long plan\n"))
+            .collect();
+        let texts = std::iter::once(long).chain((0..30).map(|i| format!("step {i} of a long run")));
+        for text in texts {
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text,
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (_app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    redraw(cx);
+    redraw(cx);
+    // Down the timeline until the session's first row (the third: after made and moved) sticks.
+    let at = cx.debug_bounds("detail-title").unwrap().center();
+    let mut stuck = None;
+    for _ in 0..20 {
+        cx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at,
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(-150.),
+            )),
+            modifiers: gpui_kit::Modifiers::default(),
+            ..Default::default()
+        });
+        redraw(cx);
+        redraw(cx);
+        stuck = cx.debug_bounds("timeline-stuck-2");
+        if stuck.is_some() {
+            break;
+        }
+    }
+    let stuck = stuck.expect("the long note's row sticks while its lane runs on");
+    assert!(
+        stuck.size.height <= gpui_kit::px(34.),
+        "stuck, a long note is one line, not its card: {stuck:?}"
+    );
+    // Clicked, it scrolls back to its place: its row at the panel's top, stuck no more.
+    click_on(cx, "timeline-stuck-2");
+    redraw(cx);
+    redraw(cx);
+    let row = cx.debug_bounds("timeline-row-2").expect("its row");
+    let scroll = cx.debug_bounds("detail-body-panel").unwrap();
+    assert!(
+        row.top() >= scroll.top() - gpui_kit::px(1.)
+            && row.top() < scroll.top() + gpui_kit::px(120.),
+        "its row in view at the top: {row:?} in {scroll:?}"
+    );
+    assert!(
+        cx.debug_bounds("timeline-stuck-2").is_none(),
+        "back in line"
+    );
+}

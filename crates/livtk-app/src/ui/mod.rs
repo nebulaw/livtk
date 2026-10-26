@@ -1703,7 +1703,7 @@ impl LivtkApp {
             return;
         }
         self.close_overlays(window, cx);
-        let (title_hint, body_hint) = making.placeholders();
+        let (title_hint, body_hint) = (making.spec().title_hint, making.spec().body_hint);
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(title_hint));
         let body = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -2532,12 +2532,8 @@ impl LivtkApp {
             _ => None,
         };
         let mut panel = menu_panel(280.).debug_selector(|| "part-of-menu".into());
-        let choices = std::iter::once(None).chain(
-            self.model
-                .project_names()
-                .iter()
-                .map(|(_, b)| Some((b.key.clone(), b.title.clone()))),
-        );
+        let choices =
+            std::iter::once(None).chain(self.model.project_choices().into_iter().map(Some));
         for choice in choices {
             let key = choice.as_ref().map(|(k, _)| k.clone());
             let id = format!("part-of-{}", key.as_deref().unwrap_or("none"));

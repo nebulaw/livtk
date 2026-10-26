@@ -604,7 +604,11 @@ impl Model {
             run,
         };
         for m in super::making::Making::ALL {
-            out.push(plain(m.title(), Some(m.key()), Run::Ask(Ask::New(m))));
+            out.push(plain(
+                m.spec().title,
+                Some(m.spec().key),
+                Run::Ask(Ask::New(m)),
+            ));
         }
         // Every view with its go-to key, as the views say them.
         for v in View::ALL {

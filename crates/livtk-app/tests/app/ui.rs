@@ -5164,12 +5164,35 @@ fn key_hints_are_a_setting(cx: &mut TestAppContext) {
     assert!(app.read_with(cx, |a, _| a.help_open()), "the shortcuts");
 }
 
-/// P makes a project from anywhere, through the same form as a task: a bad target is refused
-/// and nothing made; filled right, it is made active with its done-when ending its body, and
-/// shown in Projects. N still makes a task.
+/// P makes a project from anywhere, through the same form as a task: a bad target, or Claude as
+/// owner, is refused and nothing made; filled right (owner, part of a project with nothing in it
+/// yet), it is made active with its done-when ending its body, and shown in Projects with its
+/// panel open. Switched off, the next starts proposed. N still makes a task.
 #[gpui_kit::test]
 fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     let dir = project();
+    // A project with nothing in it yet, to make the new one part of.
+    let outer = Workspace::open(dir.path())
+        .unwrap()
+        .new_project(
+            &livtk_core::NewProject {
+                title: "The bigger outcome".into(),
+                done_when: "it is done".into(),
+                commit: true,
+                ..Default::default()
+            },
+            &Actor::Human,
+        )
+        .unwrap()[0]
+        .op
+        .subjects()
+        .0
+        .to_string();
+    let outer = Workspace::open(dir.path())
+        .unwrap()
+        .node(&outer)
+        .unwrap()
+        .key;
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
@@ -5184,23 +5207,45 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     click_on(cx, "create-project");
     redraw(cx);
     let projects = |dir: &std::path::Path| Workspace::open(dir).unwrap().projects().unwrap();
-    assert!(projects(dir.path()).is_empty(), "refused: nothing made");
+    assert_eq!(projects(dir.path()).len(), 1, "refused: nothing made");
     assert!(
         cx.debug_bounds("new-project-card").is_some(),
         "the form stays"
     );
+    // Claude never owns it, whatever the case.
+    click_on(cx, "new-project-owner");
+    cx.simulate_input("Claude:implementer");
     // Put right.
     click_on(cx, "new-project-target");
     cx.simulate_keystrokes("secondary-a backspace");
     cx.simulate_input("2026-12-01");
     click_on(cx, "create-project");
+    redraw(cx);
+    assert!(projects(dir.path()).len() == 1, "refused: Claude as owner");
+    click_on(cx, "new-project-owner");
+    cx.simulate_keystrokes("secondary-a backspace");
+    cx.simulate_input("Karl");
+    // Part of the project with nothing in it yet: offered all the same.
+    click_on(cx, "part-of-select");
+    redraw(cx);
+    click_on(cx, named(format!("part-of-{outer}")));
+    click_on(cx, "create-project");
     settle(cx);
-    let made = projects(dir.path());
+    let made: Vec<_> = projects(dir.path())
+        .into_iter()
+        .filter(|p| p.key != outer)
+        .collect();
     assert_eq!(made.len(), 1);
     let n = Workspace::open(dir.path())
         .unwrap()
         .node(&made[0].key)
         .unwrap();
+    assert_eq!(n.props["owner"], "Karl");
+    let (part_of, _) = Workspace::open(dir.path())
+        .unwrap()
+        .related(&n.key, livtk_core::Rel::Parent)
+        .unwrap();
+    assert_eq!(part_of[0].key, outer, "part of it");
     assert_eq!(n.title, "Ship the importer");
     assert_eq!(n.state, State::Active, "committed to, made by you");
     assert!(
@@ -5212,7 +5257,28 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().view(), View::Projects, "shown where projects are");
         assert!(!a.form_open());
+        assert_eq!(
+            a.model().detail.as_ref().map(|d| d.node.key.clone()),
+            Some(n.key.clone()),
+            "selected, its panel open"
+        );
     });
+    // Not committed to: proposed.
+    cx.simulate_keystrokes("escape");
+    redraw(cx);
+    cx.simulate_keystrokes("p");
+    settle(cx);
+    cx.simulate_input("A maybe");
+    click_on(cx, "new-project-done");
+    cx.simulate_input("we know");
+    click_on(cx, "new-project-commit-on");
+    click_on(cx, "create-project");
+    settle(cx);
+    let maybe = projects(dir.path())
+        .into_iter()
+        .find(|p| p.title == "A maybe")
+        .expect("made");
+    assert_eq!(maybe.state, State::Proposed);
     // N is still a task.
     cx.simulate_keystrokes("n");
     settle(cx);

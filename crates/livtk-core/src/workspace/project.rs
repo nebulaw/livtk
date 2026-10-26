@@ -35,7 +35,8 @@ pub fn check_target(target: &str) -> Result<&str> {
 /// An owner as a project takes it: empty, or a person; never Claude.
 pub fn check_owner(owner: &str) -> Result<&str> {
     let o = owner.trim();
-    if o.eq_ignore_ascii_case("claude") || o.starts_with("claude:") {
+    let lower = o.to_lowercase();
+    if lower == "claude" || lower.starts_with("claude:") {
         return Err(Error::Refused(
             "Claude never owns an outcome; name the person who does".into(),
         ));
@@ -50,8 +51,8 @@ pub struct NewProject {
     pub title: String,
     /// What it is for and how it gets there.
     pub body: String,
-    /// What done means, in a line: the body's last line, `Done when: …`. Empty when the body
-    /// says it already.
+    /// What done means, in a line: the body's last line, `Done when: …`, in place of any the
+    /// body has. Empty: the body says it, or nothing does.
     pub done_when: String,
     pub target: Option<String>,
     pub owner: Option<String>,
@@ -62,19 +63,32 @@ pub struct NewProject {
 }
 
 impl NewProject {
-    /// Its body as stored: the body, then its `Done when:` line unless the body has one.
+    /// Its body as stored: the body, then its `Done when:` line. A done-when given apart takes
+    /// the place of any line the body has for it, so it is never lost and never said twice.
     pub fn full_body(&self) -> String {
-        let body = self.body.trim();
         let done = self.done_when.trim();
-        let has = body
-            .lines()
-            .any(|l| l.trim().to_lowercase().starts_with("done when"));
-        match (done.is_empty() || has, body.is_empty()) {
-            (true, _) => body.to_owned(),
-            (false, true) => format!("Done when: {done}"),
-            (false, false) => format!("{body}\n\nDone when: {done}"),
+        if done.is_empty() {
+            return self.body.trim().to_owned();
+        }
+        let body: Vec<&str> = self.body.lines().filter(|l| !is_done_line(l)).collect();
+        let body = body.join("\n");
+        let body = body.trim();
+        if body.is_empty() {
+            format!("Done when: {done}")
+        } else {
+            format!("{body}\n\nDone when: {done}")
         }
     }
+
+    /// Whether it says what done means: a done-when given, or a line of its body.
+    pub fn says_done(&self) -> bool {
+        !self.done_when.trim().is_empty() || self.body.lines().any(is_done_line)
+    }
+}
+
+/// A body's line saying what done means.
+fn is_done_line(line: &str) -> bool {
+    line.trim().to_lowercase().starts_with("done when")
 }
 
 /// An active project with no update for this long reads "update missing".

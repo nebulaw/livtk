@@ -67,8 +67,8 @@ impl LivtkApp {
         Making::lists(view).then(|| {
             let making = Making::for_view(view);
             empty_action(
-                making.ids().2,
-                making.title(),
+                making.spec().empty_id,
+                making.spec().title,
                 cx.listener(move |this, _, window, cx| this.open_form(making, window, cx)),
             )
         })

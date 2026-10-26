@@ -142,13 +142,13 @@ impl LivtkApp {
             .hover(|s| s.bg(color(ACCENT_HOVER)))
             .child(icon(making_icon(making), 16., TEXT))
             .when(wide, |b| {
-                b.child(div().whitespace_nowrap().child(making.title()))
+                b.child(div().whitespace_nowrap().child(making.spec().title))
             })
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(format!(
                     "{} · {}",
-                    making.title(),
-                    making.key()
+                    making.spec().title,
+                    making.spec().key
                 ))
                 .build(window, cx)
             })

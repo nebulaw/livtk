@@ -1429,6 +1429,15 @@ fn a_project_is_made_whole_or_not_at_all() {
         ..Default::default()
     };
     assert!(ws.new_project(&claude_owns, &human).is_err());
+    let claude_owns_by_name = livtk_core::NewProject {
+        title: "Ship the importer".into(),
+        owner: Some("Claude:implementer".into()),
+        ..Default::default()
+    };
+    assert!(
+        ws.new_project(&claude_owns_by_name, &human).is_err(),
+        "whatever its case"
+    );
     assert!(ws.projects().unwrap().is_empty(), "nothing written");
     let claude = Actor::Claude { agent: None };
     let committed_by_claude = livtk_core::NewProject {
@@ -1469,4 +1478,23 @@ fn a_project_is_made_whole_or_not_at_all() {
     assert_eq!(inner.state, State::Proposed);
     let (part_of, _) = ws.related(&inner.key, Rel::Parent).unwrap();
     assert_eq!(part_of[0].key, n.key);
+}
+
+/// A done-when given apart takes the place of the body's own: never lost, never said twice.
+#[test]
+fn a_projects_done_when_is_said_once() {
+    let p = livtk_core::NewProject {
+        title: "t".into(),
+        body: "Why.\nDone when: the old line".into(),
+        done_when: "the new line".into(),
+        ..Default::default()
+    };
+    assert_eq!(p.full_body(), "Why.\n\nDone when: the new line");
+    assert!(p.says_done());
+    let none = livtk_core::NewProject {
+        title: "t".into(),
+        body: "Why.".into(),
+        ..Default::default()
+    };
+    assert!(!none.says_done());
 }

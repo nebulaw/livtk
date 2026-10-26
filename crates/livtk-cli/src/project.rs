@@ -30,6 +30,9 @@ pub enum ProjectCmd {
         /// The project this one is part of.
         #[arg(long = "part-of")]
         part_of: Option<String>,
+        /// What done means, in a line: it ends the body as its "Done when:" line.
+        #[arg(long)]
+        done_when: Option<String>,
     },
     /// The projects, active ones first, with their progress; dropped and done ones with --all.
     #[command(visible_alias = "ls")]
@@ -66,6 +69,7 @@ pub fn run(ws: &mut Workspace, cmd: ProjectCmd, by: &Actor, json: bool) -> Resul
             target,
             owner,
             part_of,
+            done_when,
         } => {
             let body = crate::read_body(body)?.unwrap_or_default();
             let events = ws.new_project(
@@ -75,6 +79,7 @@ pub fn run(ws: &mut Workspace, cmd: ProjectCmd, by: &Actor, json: bool) -> Resul
                     target,
                     owner,
                     part_of,
+                    done_when: done_when.unwrap_or_default(),
                     ..Default::default()
                 },
                 by,

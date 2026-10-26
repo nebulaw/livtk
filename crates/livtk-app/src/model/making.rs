@@ -22,76 +22,72 @@ impl Making {
     pub fn for_view(view: View) -> Making {
         Making::ALL
             .into_iter()
-            .find(|m| view.kind() == Some(m.kind()))
+            .find(|m| view.kind() == Some(m.spec().kind))
             .unwrap_or(Making::Task)
     }
 
     /// Whether `view` lists what the form makes.
     pub fn lists(view: View) -> bool {
-        Making::ALL.iter().any(|m| view.kind() == Some(m.kind()))
+        Making::ALL
+            .iter()
+            .any(|m| view.kind() == Some(m.spec().kind))
     }
 
-    pub const fn kind(self) -> Kind {
+    /// Everything about making it, in one row.
+    pub const fn spec(self) -> &'static Spec {
         match self {
-            Making::Task => Kind::Task,
-            Making::Project => Kind::Project,
-        }
-    }
-
-    /// What the form and the palette call making one.
-    pub const fn title(self) -> &'static str {
-        match self {
-            Making::Task => "New task",
-            Making::Project => "New project",
-        }
-    }
-
-    /// The key that opens the form for it, from anywhere.
-    pub const fn key(self) -> &'static str {
-        match self {
-            Making::Task => "N",
-            Making::Project => "P",
-        }
-    }
-
-    /// The form's button.
-    pub const fn create(self) -> &'static str {
-        match self {
-            Making::Task => "Create task",
-            Making::Project => "Create project",
-        }
-    }
-
-    /// What its title asks for, and its body.
-    pub const fn placeholders(self) -> (&'static str, &'static str) {
-        match self {
-            Making::Task => (
-                "Task title",
-                "Add a plan: goal, approach, acceptance check…",
-            ),
-            Making::Project => (
-                "The outcome, in a line",
-                "Why it matters and how it gets there…",
-            ),
-        }
-    }
-
-    /// Where a new one starts, said beside the form's title.
-    pub const fn starts(self) -> &'static str {
-        match self {
-            Making::Task => "starts in Backlog",
-            Making::Project => "active, unless you say otherwise",
-        }
-    }
-
-    /// Its selectors: the form's card and button, and an empty list's offer to make one.
-    pub const fn ids(self) -> (&'static str, &'static str, &'static str) {
-        match self {
-            Making::Task => ("new-task-card", "create-task", "empty-new-task"),
-            Making::Project => ("new-project-card", "create-project", "empty-new-project"),
+            Making::Task => &TASK,
+            Making::Project => &PROJECT,
         }
     }
 }
+
+/// How a kind the form makes is named, offered and found: one row each.
+#[derive(Debug)]
+pub struct Spec {
+    pub kind: Kind,
+    /// What the form and the palette call making one.
+    pub title: &'static str,
+    /// The key that opens the form for it, from anywhere.
+    pub key: &'static str,
+    /// The form's button.
+    pub create: &'static str,
+    /// What its title and its body ask for.
+    pub title_hint: &'static str,
+    pub body_hint: &'static str,
+    /// Where a new one starts, said beside the form's title.
+    pub starts: &'static str,
+    /// Its selectors: the form's card and button, and an empty list's offer to make one.
+    pub card_id: &'static str,
+    pub create_id: &'static str,
+    pub empty_id: &'static str,
+}
+
+const TASK: Spec = Spec {
+    kind: Kind::Task,
+    title: "New task",
+    key: "N",
+    create: "Create task",
+    title_hint: "Task title",
+    body_hint: "Add a plan: goal, approach, acceptance check…",
+    starts: "starts in Backlog",
+    card_id: "new-task-card",
+    create_id: "create-task",
+    empty_id: "empty-new-task",
+};
+
+const PROJECT: Spec = Spec {
+    kind: Kind::Project,
+    title: "New project",
+    key: "P",
+    create: "Create project",
+    title_hint: "The outcome, in a line",
+    body_hint: "Why it matters and how it gets there…",
+    starts: "active, unless you say otherwise",
+    card_id: "new-project-card",
+    create_id: "create-project",
+    empty_id: "empty-new-project",
+};
 
 /// A filled form: what to make.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +101,22 @@ pub enum New {
 }
 
 impl Model {
+    /// The projects a new one may be part of: every one not done or dropped, by key and title.
+    pub fn project_choices(&self) -> Vec<(String, String)> {
+        self.project()
+            .and_then(|p| p.ws.projects().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| {
+                !matches!(
+                    s.state,
+                    livtk_core::State::Done | livtk_core::State::Dropped
+                )
+            })
+            .map(|s| (s.key, s.title))
+            .collect()
+    }
+
     /// Make `new` as the human, in the open project: then show it, selected, in its own view.
     /// Whether it was made; why not is the notice.
     pub fn create(&mut self, new: New) -> bool {
@@ -131,7 +143,8 @@ impl Model {
                 ),
             ),
             New::Project(p) => {
-                if p.done_when.trim().is_empty() {
+                // The form asks what done means; the CLI leaves it to the body.
+                if !p.says_done() {
                     self.warn("Say what done means: a project needs its Done when.");
                     return false;
                 }
@@ -150,6 +163,7 @@ impl Model {
                 self.reload();
                 if let Some(id) = created {
                     self.select(id);
+                    self.open_detail();
                 }
                 true
             }

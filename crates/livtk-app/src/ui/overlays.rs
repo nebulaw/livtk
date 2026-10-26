@@ -68,7 +68,7 @@ impl LivtkApp {
     pub(super) fn form_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.as_ref()?;
         let making = form.making;
-        let (card_id, create_id, _) = making.ids();
+        let (card_id, create_id) = (making.spec().card_id, making.spec().create_id);
         // What the kind adds: a task its priority beside the button; a project its fields
         // under the body.
         let (beside, fields): (Option<Div>, Option<Div>) =
@@ -180,7 +180,7 @@ impl LivtkApp {
             .text_color(color(TEXT))
             .font_weight(FontWeight::MEDIUM)
             .hover(|s| s.bg(color(ACCENT_HOVER)))
-            .child(making.create())
+            .child(making.spec().create)
             .child(
                 div()
                     .text_xs()
@@ -209,11 +209,11 @@ impl LivtkApp {
                             .unwrap_or_default(),
                     )
                     .child("›")
-                    .child(making.title())
+                    .child(making.spec().title)
                     .child(
                         div()
                             .text_color(color(TEXT_4))
-                            .child(format!("· {}", making.starts())),
+                            .child(format!("· {}", making.spec().starts)),
                     ),
             )
             // Flush with the card's edge, as the breadcrumb above them is.

@@ -611,11 +611,12 @@ impl LivtkApp {
                 // On to the note being written, in the accent; then what is ahead, dashed.
                 let next = points.iter().position(|p| p.spot.part == Part::Next);
                 if let Some(next) = next {
-                    let from = point(points[last_past].x, points[last_past].y);
-                    let to = point(points[next].x, points[next].y);
+                    // Down its lane and round onto the composer's, as every bend turns: never
+                    // straight across what lies between.
+                    let to_next = path_through(&points[last_past..=next]);
                     stroke(
                         window,
-                        &[from, to],
+                        &to_next,
                         with_alpha(ACCENT, if writing { 0.9 } else { 0.4 }),
                     );
                     dashed(

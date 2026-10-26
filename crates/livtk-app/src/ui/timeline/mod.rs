@@ -26,6 +26,8 @@ const LANE: f32 = 18.;
 const TRAVEL: Duration = Duration::from_millis(900);
 /// The room between a mark and its row's text.
 const TEXT_GAP: f32 = 8.;
+/// How far above a mark a lane coming back turns onto its lane.
+const MERGE_DROP: f32 = 16.;
 /// How round the rail's bends are.
 const BEND: f32 = 8.;
 /// A stuck row's height: one line beside its mark, and room under it.
@@ -675,9 +677,9 @@ impl LivtkApp {
 
 /// The rail's polyline through `points`, straight down a lane, never over what sits between:
 /// branching out to a lane further in, down the one it leaves to the next mark's height, then
-/// across into it; coming back to one further out, across from the mark it leaves onto that
-/// lane, then down it into the next mark, as the rail always enters its marks (each corner
-/// rounded when drawn).
+/// across into it; coming back to one further out, down the lane it leaves to just above the
+/// next mark, across onto that mark's lane, then a short way down into it, as the rail always
+/// enters its marks from above (each corner rounded when drawn).
 fn path_through(points: &[RailPoint]) -> Vec<Point<Pixels>> {
     let mut out: Vec<Point<Pixels>> = Vec::new();
     for (i, p) in points.iter().enumerate() {
@@ -686,7 +688,9 @@ fn path_through(points: &[RailPoint]) -> Vec<Point<Pixels>> {
             if p.x > a.x {
                 out.push(point(a.x, p.y));
             } else if p.x < a.x {
-                out.push(point(p.x, a.y));
+                let above = p.y - px(MERGE_DROP).min((p.y - a.y) / 2.);
+                out.push(point(a.x, above));
+                out.push(point(p.x, above));
             }
         }
         out.push(point(p.x, p.y));

@@ -70,6 +70,14 @@ pub(in crate::ui) fn mark_view(mark: Mark, kind: Kind, ahead: bool) -> Div {
     }
 }
 
+/// A text as one line: its first line that says anything, so a row never shows an empty line
+/// nor runs onto the rows below.
+pub(in crate::ui) fn first_line(text: &str) -> &str {
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default()
+}
+
 /// What `e` did, as a line after who did it, on the node keyed `key` now.
 pub(in crate::ui) fn line(e: &Event, key: &str) -> String {
     match &e.op {

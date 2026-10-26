@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::*;
 use crate::model::timeline::{Item, Mark, timeline};
 pub(super) use kinds::line;
-use kinds::{COMPOSER, LANE_START, MARK, Stick, is_said, mark_view};
+use kinds::{COMPOSER, LANE_START, MARK, Stick, first_line, is_said, mark_view};
 
 /// Where lane 0 runs in the gutter, and how far each lane sits from the one before.
 const RAIL_X: f32 = 10.;
@@ -547,14 +547,16 @@ impl LivtkApp {
                     .child(who(&e.by).to_owned()),
             )
             .when(!said, |h| {
+                let id = e.id;
                 h.child(
                     div()
+                        .debug_selector(move || format!("timeline-line-{id}"))
                         .min_w_0()
                         .truncate()
                         .text_color(color(TEXT_3))
                         // A line keeps to one: never a text's line breaks, which would leave
                         // its row.
-                        .child(what.lines().next().unwrap_or_default().to_owned()),
+                        .child(first_line(&what).to_owned()),
                 )
             })
             .child(
@@ -570,8 +572,10 @@ impl LivtkApp {
             .gap_2()
             .child(head)
             .when(said, |c| {
+                let id = e.id;
                 c.child(
                     div()
+                        .debug_selector(move || format!("timeline-card-{id}"))
                         .p_3()
                         .rounded_lg()
                         .bg(color(CONTENT))

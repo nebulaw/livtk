@@ -6362,28 +6362,30 @@ fn a_build_does_its_job_and_a_push_is_refused_without_asking(cx: &mut TestAppCon
     until_runs(&app, cx, |m| !m.writing_on("LIV-1"));
 }
 
-/// A run's last word, several lines of markdown, reads as a card on the rail: every row of the
-/// timeline below the one above, nothing drawn over another.
+/// A run's last word, several lines of markdown, reads as a card on the rail that holds its
+/// lines, the next row starting under it; a run's line with line breaks keeps to one row.
 #[gpui_kit::test]
 fn a_runs_long_last_note_never_spills_over_the_rows_below(cx: &mut TestAppContext) {
+    use livtk_core::event::{Ending, RunData, RunMark};
     let dir = project();
-    {
+    let ids: Vec<_> = {
         let mut ws = Workspace::open(dir.path()).unwrap();
-        let run = |mark| livtk_core::event::RunData {
+        let run = |mark| RunData {
             session: "sess-long".into(),
             agent: None,
             stage: livtk_core::run::Stage::Plan,
             mark,
         };
-        for (mark, text) in [
-            (livtk_core::event::RunMark::Started, "Started to plan it."),
+        [
+            // A line whose text breaks over lines, after a blank one.
+            (RunMark::Started, "\nStarted to plan it.\nsecond line\nthird line"),
             (
-                livtk_core::event::RunMark::Ended {
-                    how: livtk_core::event::Ending::Done,
-                },
+                RunMark::Ended { how: Ending::Done },
                 "LIV-1 now has a plan and is in **planned**.\n\n**The plan**\n- one\n- two\n- three",
             ),
-        ] {
+        ]
+        .into_iter()
+        .map(|(mark, text)| {
             ws.execute(
                 Command::RunNote {
                     node: "LIV-1".into(),
@@ -6392,27 +6394,48 @@ fn a_runs_long_last_note_never_spills_over_the_rows_below(cx: &mut TestAppContex
                 },
                 &CLAUDE,
             )
-            .unwrap();
-        }
-    }
+            .unwrap()[0]
+                .id
+        })
+        .collect()
+    };
+    let (started, ended) = (ids[0], ids[1]);
     let (_app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 1400.);
     open_detail(cx);
     redraw(cx);
+    let mut at = |name: String| cx.debug_bounds(Box::leak(name.into_boxed_str()));
     let rows: Vec<_> = (0..40)
-        .filter_map(|i| cx.debug_bounds(Box::leak(format!("timeline-row-{i}").into_boxed_str())))
+        .filter_map(|i| at(format!("timeline-row-{i}")))
         .collect();
-    assert!(rows.len() >= 4, "{rows:?}");
-    for pair in rows.windows(2) {
-        assert!(
-            pair[1].top() >= pair[0].bottom(),
-            "a row starts below the one above: {pair:?}"
-        );
-    }
-    // The last word is a card, tall enough for its lines.
+    // The run's start reads as a line: one row tall, no card.
+    let line = at(format!("timeline-line-{started}")).expect("the start reads as a line");
+    assert!(line.size.height <= gpui_kit::px(24.), "{line:?}");
+    assert!(at(format!("timeline-card-{started}")).is_none());
+    let started_row = rows
+        .iter()
+        .find(|r| r.top() <= line.center().y && line.center().y <= r.bottom())
+        .unwrap_or_else(|| panic!("the line's row: {line:?} {rows:?}"));
     assert!(
-        rows.iter().any(|r| r.size.height > gpui_kit::px(80.)),
-        "the note's card holds its lines"
+        started_row.size.height <= gpui_kit::px(40.),
+        "a line's breaks never make its row taller: {started_row:?}"
+    );
+    // The run's end reads as said: a card holding its six lines of markdown, not a line.
+    assert!(at(format!("timeline-line-{ended}")).is_none());
+    let card = at(format!("timeline-card-{ended}")).expect("the end reads as a card");
+    assert!(
+        card.size.height > gpui_kit::px(90.),
+        "the card holds its lines: {card:?}"
+    );
+    // Its row holds the card, and the row below starts under it.
+    let i = rows
+        .iter()
+        .position(|r| r.top() <= card.top() && card.bottom() <= r.bottom())
+        .expect("the card's row holds it");
+    let below = rows.get(i + 1).expect("a row below the card");
+    assert!(
+        below.top() >= card.bottom(),
+        "the row below starts under the card: {card:?} {below:?}"
     );
 }

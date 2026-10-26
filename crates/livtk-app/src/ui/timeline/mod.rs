@@ -17,13 +17,19 @@ use uuid::Uuid;
 use super::*;
 use crate::model::timeline::{Item, Mark, timeline};
 pub(super) use kinds::line;
-use kinds::{MARK, is_said, mark_view};
+use kinds::{COMPOSER, LANE_START, MARK, Stick, is_said, mark_view};
 
 /// Where lane 0 runs in the gutter, and how far each lane sits from the one before.
 const RAIL_X: f32 = 10.;
 const LANE: f32 = 18.;
 /// How long the dot takes to travel to a new event, at most.
 const TRAVEL: Duration = Duration::from_millis(900);
+/// The room between a mark and its row's text.
+const TEXT_GAP: f32 = 8.;
+/// How round the rail's bends are.
+const BEND: f32 = 8.;
+/// A stuck row's height: one line beside its mark, and room under it.
+const STUCK_H: f32 = MARK + 12.;
 /// The rail's dashes, ahead: dash and gap.
 const DASH: f32 = 4.;
 const GAP: f32 = 5.;
@@ -72,6 +78,20 @@ enum Part {
 #[derive(Default)]
 pub(super) struct Rail {
     points: Vec<(usize, RailPoint)>,
+    /// Each row's bounds this frame, by its place on the rail.
+    rows: Vec<(usize, Bounds<Pixels>)>,
+    /// Each lane's span on the rail: its first row (where it branches off) and its last.
+    spans: Vec<(usize, usize)>,
+    /// The composer's row, and its height as it last showed in place.
+    composer: Option<usize>,
+    composer_h: Pixels,
+    /// What sticks now: the lanes' first rows stuck at the top, in order; the composer at the
+    /// bottom. Worked out from the last frame's rows and the panel's view.
+    stuck_top: Vec<usize>,
+    stuck_bottom: Vec<usize>,
+    composer_stuck: bool,
+    /// Which item of the timeline each row is, by its place on the rail.
+    items: Vec<(usize, usize)>,
     /// The node shown, and its latest event: a new one sends the dot on.
     node: Option<Uuid>,
     latest: Option<Uuid>,
@@ -111,12 +131,17 @@ impl LivtkApp {
                 rail.since.is_some()
             }
         };
-        let gutter = RAIL_X * 2. + LANE * (t.lanes.saturating_sub(1)) as f32;
+        // Each lane's first and last row, and the composer's: what may stick.
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        let mut open: Vec<Option<usize>> = Vec::new();
+        let mut composer_at = None;
         let mut rows = div().relative().flex().flex_col().gap_3();
         // The rail, drawn first, under the marks; it reads the points the rows lay out.
         rows = rows.child(self.rail_canvas(cx));
         let mut order = 0;
+        let mut items = Vec::new();
         for (k, item) in t.items.iter().enumerate() {
+            items.push((order, k));
             let row = match item {
                 Item::Event {
                     at,
@@ -127,6 +152,25 @@ impl LivtkApp {
                 } => {
                     let e = &d.history[*at];
                     let new = travels && Some(e.id) == latest;
+                    if *lane > 0 {
+                        if open.len() < *lane {
+                            open.resize(*lane, None);
+                        }
+                        if *opens || open[*lane - 1].is_none() {
+                            open[*lane - 1] = Some(order);
+                            spans.push((order, order));
+                        }
+                        if let Some(span) = spans
+                            .iter_mut()
+                            .rev()
+                            .find(|s| Some(s.0) == open[*lane - 1])
+                        {
+                            span.1 = order;
+                        }
+                        if *closes {
+                            open[*lane - 1] = None;
+                        }
+                    }
                     let content = self.event_content(d, e, *mark, cx);
                     self.rail_row(
                         order,
@@ -136,7 +180,6 @@ impl LivtkApp {
                             opens: *opens,
                             closes: *closes,
                         },
-                        gutter,
                         mark_view(*mark, n.kind, false),
                         new,
                         content,
@@ -166,7 +209,6 @@ impl LivtkApp {
                     self.rail_row(
                         order,
                         Spot::on(*lane, Part::Past),
-                        gutter,
                         dot,
                         false,
                         label.into_any_element(),
@@ -183,7 +225,6 @@ impl LivtkApp {
                     self.rail_row(
                         order,
                         Spot::on(0, Part::Ahead),
-                        gutter,
                         mark_view(Mark::Moved(*s), n.kind, true),
                         false,
                         label,
@@ -194,30 +235,178 @@ impl LivtkApp {
             if Some(k) == now {
                 rows = rows.child(row);
                 order += 1;
-                rows = rows.child(self.composer_row(order, gutter, cx));
+                composer_at = Some(order);
+                rows = rows.child(self.composer_row(order, cx));
             } else {
                 rows = rows.child(row);
             }
             order += 1;
         }
         if now.is_none() {
-            rows = rows.child(self.composer_row(order, gutter, cx));
+            composer_at = Some(order);
+            rows = rows.child(self.composer_row(order, cx));
+        }
+        {
+            let mut rail = self.rail.borrow_mut();
+            rail.spans = spans;
+            rail.composer = composer_at;
+            rail.items = items;
         }
         rows.debug_selector(|| "timeline".into())
+    }
+
+    /// What sticks, worked out from where the rows fell in the panel's `view` this frame: a
+    /// lane's first row while its lane runs on in view, the composer while its place is below
+    /// it, each at the edge `kinds` says, stacked. A change draws the panel again.
+    pub(super) fn timeline_probe(&self) -> impl IntoElement {
+        let rail = self.rail.clone();
+        canvas(
+            move |view, window, _| {
+                let mut r = rail.borrow_mut();
+                let row = |o: usize| r.rows.iter().find(|(k, _)| *k == o).map(|(_, b)| *b);
+                // What may stick: its row, the span of rows it heads, and where it sticks.
+                let mut candidates: Vec<(usize, usize, usize, Stick)> = r
+                    .spans
+                    .iter()
+                    .map(|&(o, c)| (o, o, c, LANE_START))
+                    .collect();
+                if let Some(c) = r.composer {
+                    candidates.push((c, 0, c, COMPOSER));
+                }
+                let h = px(STUCK_H);
+                let (mut top, mut bottom) = (Vec::new(), Vec::new());
+                let mut edge = view.top();
+                for &(at, _, to, stick) in &candidates {
+                    let (Some(b), Some(t)) = (row(at), row(to)) else {
+                        continue;
+                    };
+                    match stick {
+                        // Scrolled up past, what it heads still in view under the stack.
+                        Stick::Top if b.top() < edge && t.bottom() > edge + h => {
+                            top.push(at);
+                            edge += h;
+                        }
+                        _ => {}
+                    }
+                }
+                let mut edge = view.bottom();
+                for &(at, from, _, stick) in candidates.iter().rev() {
+                    let (Some(b), Some(f)) = (row(at), row(from)) else {
+                        continue;
+                    };
+                    // Below the view while what it follows has begun in it, as a sticky
+                    // element in its container.
+                    if stick == Stick::Bottom && b.bottom() > edge && f.top() < edge {
+                        bottom.push(at);
+                        edge -= b.size.height.max(h);
+                    }
+                }
+                bottom.reverse();
+                let composer_stuck = r
+                    .composer
+                    .is_some_and(|c| top.contains(&c) || bottom.contains(&c));
+                // The composer's height in place, kept while it is stuck.
+                if !r.composer_stuck
+                    && let Some(b) = r.composer.and_then(row)
+                {
+                    r.composer_h = b.size.height;
+                }
+                if top != r.stuck_top
+                    || bottom != r.stuck_bottom
+                    || composer_stuck != r.composer_stuck
+                {
+                    r.stuck_top = top;
+                    r.stuck_bottom = bottom;
+                    r.composer_stuck = composer_stuck;
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// The rows stuck to the panel's edges, over its content: at the top, the lanes whose work
+    /// is in view; at the bottom, the composer while its place is below.
+    pub(super) fn timeline_stuck(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {
+        let n = &d.node;
+        let (top, bottom, items, composer) = {
+            let r = self.rail.borrow();
+            (
+                r.stuck_top.clone(),
+                r.stuck_bottom.clone(),
+                r.items.clone(),
+                r.composer,
+            )
+        };
+        let unfolded = &self.unfolded;
+        let t = timeline(&d.history, n.kind, n.state, |k| unfolded.contains(&k));
+        let stuck_row = |order: usize, this: &mut Self, cx: &mut Context<Self>| -> Option<Div> {
+            let (mark, content) = if Some(order) == composer {
+                (
+                    this.composer_mark(),
+                    this.note_composer(cx).into_any_element(),
+                )
+            } else {
+                let &(_, k) = items.iter().find(|(o, _)| *o == order)?;
+                let Item::Event { at, mark, .. } = &t.items[k] else {
+                    return None;
+                };
+                let e = &d.history[*at];
+                (
+                    mark_view(*mark, n.kind, false),
+                    this.event_content(d, e, *mark, cx),
+                )
+            };
+            Some(
+                div()
+                    .debug_selector(move || format!("timeline-stuck-{order}"))
+                    .occlude()
+                    .flex()
+                    .items_start()
+                    .gap(px(TEXT_GAP))
+                    .py(px(6.))
+                    .bg(color(WINDOW))
+                    .child(div().flex_none().ml(px(RAIL_X - MARK / 2.)).child(mark))
+                    .child(div().flex_1().min_w_0().child(content)),
+            )
+        };
+        let tops: Vec<Div> = top.iter().filter_map(|&o| stuck_row(o, self, cx)).collect();
+        let bottoms: Vec<Div> = bottom
+            .iter()
+            .filter_map(|&o| stuck_row(o, self, cx))
+            .collect();
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .flex_col()
+            .justify_between()
+            .child(
+                div()
+                    .px_5()
+                    .bg(color(WINDOW))
+                    .when(!tops.is_empty(), |d| {
+                        d.border_b_1().border_color(color(BORDER))
+                    })
+                    .children(tops),
+            )
+            .child(
+                div()
+                    .px_5()
+                    .bg(color(WINDOW))
+                    .when(!bottoms.is_empty(), |d| {
+                        d.pb_2().border_t_1().border_color(color(BORDER))
+                    })
+                    .children(bottoms),
+            )
     }
 
     /// One row of the timeline: its mark on its lane in the gutter, its content beside it. The
     /// mark's centre is recorded as the row is laid out, for the rail to pass through.
     #[allow(clippy::too_many_arguments)]
-    fn rail_row(
-        &self,
-        order: usize,
-        spot: Spot,
-        gutter: f32,
-        mark: Div,
-        new: bool,
-        content: AnyElement,
-    ) -> Div {
+    fn rail_row(&self, order: usize, spot: Spot, mark: Div, new: bool, content: AnyElement) -> Div {
         let x = RAIL_X + LANE * spot.lane as f32;
         let rail = self.rail.clone();
         let mark = div()
@@ -241,15 +430,26 @@ impl LivtkApp {
         } else {
             mark.into_any_element()
         };
+        let geom = self.rail.clone();
         div()
             .debug_selector(move || format!("timeline-row-{order}"))
+            .relative()
             .flex()
             .items_start()
+            .child(
+                canvas(
+                    move |bounds, _, _| geom.borrow_mut().rows.push((order, bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 div()
                     .relative()
                     .flex_none()
-                    .w(px(gutter))
+                    // Its text starts just past its own mark, on whatever lane.
+                    .w(px(x + MARK / 2. + TEXT_GAP))
                     .h(px(MARK))
                     .child(
                         canvas(
@@ -275,8 +475,27 @@ impl LivtkApp {
 
     /// The note composer as the rail's next point: your avatar waiting, hollow, the composer
     /// beside it.
-    fn composer_row(&self, order: usize, gutter: f32, cx: &mut Context<Self>) -> Div {
-        let mark = div()
+    fn composer_row(&self, order: usize, cx: &mut Context<Self>) -> Div {
+        let mark = self.composer_mark();
+        // Stuck at the panel's foot, it leaves its height here, so nothing below moves.
+        let (stuck, h) = {
+            let rail = self.rail.borrow();
+            (
+                rail.composer_stuck && COMPOSER == Stick::Bottom,
+                rail.composer_h,
+            )
+        };
+        let content = if stuck {
+            div().h(h).into_any_element()
+        } else {
+            self.note_composer(cx).into_any_element()
+        };
+        self.rail_row(order, Spot::on(0, Part::Next), mark, false, content)
+    }
+
+    /// The composer's mark: your avatar waiting, hollow, lit while you write.
+    fn composer_mark(&self) -> Div {
+        div()
             .size(px(MARK))
             .rounded_full()
             .border_1()
@@ -293,15 +512,7 @@ impl LivtkApp {
                 Icon::You,
                 12.,
                 if self.note_focused { TEXT } else { TEXT_4 },
-            ));
-        self.rail_row(
-            order,
-            Spot::on(0, Part::Next),
-            gutter,
-            mark,
-            false,
-            self.note_composer(cx).into_any_element(),
-        )
+            ))
     }
 
     /// What an event says beside its mark: who, what, when; what was said in its card; a run
@@ -378,7 +589,11 @@ impl LivtkApp {
         let writing = self.note_focused;
         canvas(
             // Laid out first of the timeline's children: this frame's points start here.
-            move |_, _, _| start.borrow_mut().points.clear(),
+            move |_, _, _| {
+                let mut rail = start.borrow_mut();
+                rail.points.clear();
+                rail.rows.clear();
+            },
             move |_, _, window, _| {
                 let mut rail = end.borrow_mut();
                 let mut points = rail.points.clone();
@@ -516,6 +731,16 @@ fn path_through(points: &[RailPoint]) -> Vec<Point<Pixels>> {
     out
 }
 
+/// The point `r` from `c` toward `to`.
+fn toward(c: Point<Pixels>, to: Point<Pixels>, r: Pixels) -> Point<Pixels> {
+    let d = distance(c, to);
+    if d == px(0.) {
+        return c;
+    }
+    let t = r / d;
+    point(c.x + (to.x - c.x) * t, c.y + (to.y - c.y) * t)
+}
+
 fn length(path: &[Point<Pixels>]) -> Pixels {
     path.windows(2)
         .map(|w| distance(w[0], w[1]))
@@ -544,15 +769,21 @@ fn point_along(path: &[Point<Pixels>], along: Pixels) -> Point<Pixels> {
     path.last().copied().unwrap_or_default()
 }
 
+/// `path` stroked, each bend rounded.
 fn stroke(window: &mut Window, path: &[Point<Pixels>], colour: Hsla) {
     if path.len() < 2 {
         return;
     }
     let mut b = PathBuilder::stroke(px(1.5));
     b.move_to(path[0]);
-    for &p in &path[1..] {
-        b.line_to(p);
+    for i in 1..path.len() - 1 {
+        // Into the bend and out of it along each leg, as far as half the shorter leg.
+        let (a, c, z) = (path[i - 1], path[i], path[i + 1]);
+        let r = px(BEND).min(distance(a, c) / 2.).min(distance(c, z) / 2.);
+        b.line_to(toward(c, a, r));
+        b.curve_to(toward(c, z, r), c);
     }
+    b.line_to(path[path.len() - 1]);
     if let Ok(p) = b.build() {
         window.paint_path(p, colour);
     }

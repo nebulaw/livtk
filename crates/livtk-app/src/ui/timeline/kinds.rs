@@ -112,3 +112,22 @@ pub(in crate::ui) fn line(e: &Event, key: &str) -> String {
 pub(in crate::ui) fn is_said(mark: Mark) -> bool {
     matches!(mark, Mark::Note { .. } | Mark::Run(RunStep::Asks))
 }
+
+/// Where a line of the timeline sticks while the panel is scrolled past it: to the panel's top,
+/// its bottom, or nowhere. Rows stuck at one edge stack, in the timeline's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui) enum Stick {
+    #[allow(
+        dead_code,
+        reason = "a kind that never sticks; every stickable one sticks for now"
+    )]
+    None,
+    Top,
+    Bottom,
+}
+
+/// A session's lane's first mark (where it branches off): stuck while its lane runs on in view,
+/// so whose work is below stays said.
+pub(in crate::ui) const LANE_START: Stick = Stick::Top;
+/// The note being written: stuck while its place on the rail is out of view, always in reach.
+pub(in crate::ui) const COMPOSER: Stick = Stick::Bottom;

@@ -616,6 +616,7 @@ impl LivtkApp {
         let title = self.detail_title(n, cx);
         let body = self.detail_body(n, cx);
         let timeline = self.timeline_view(d, cx);
+        let stuck = self.timeline_stuck(d, cx);
         div()
             .id(SharedString::from(format!("detail-{}", n.key)))
             .debug_selector(|| "detail-body-panel".into())
@@ -672,33 +673,42 @@ impl LivtkApp {
                             })),
                     ),
             )
+            // The scrolling content, the timeline's stuck rows over its edges.
             .child(
                 div()
-                    .id("detail-scroll")
+                    .relative()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
+                    .min_h_0()
                     .child(
                         div()
+                            .id("detail-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .p_5()
                             .flex()
                             .flex_col()
-                            .gap_1()
-                            .child(title)
-                            .child(meta_line(d, cx)),
+                            .gap_5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(title)
+                                    .child(meta_line(d, cx)),
+                            )
+                            .when(has_flow(n.kind) && !self.model.prefs.hide_state_flow, |d| {
+                                d.child(flow)
+                            })
+                            .child(props)
+                            .children(project_section(d))
+                            // What it waits for and what it blocks come before what it says.
+                            .child(links)
+                            .child(body)
+                            .child(section_label("Activity"))
+                            .child(timeline),
                     )
-                    .when(has_flow(n.kind) && !self.model.prefs.hide_state_flow, |d| {
-                        d.child(flow)
-                    })
-                    .child(props)
-                    .children(project_section(d))
-                    // What it waits for and what it blocks come before what it says.
-                    .child(links)
-                    .child(body)
-                    .child(section_label("Activity"))
-                    .child(timeline),
+                    .child(self.timeline_probe())
+                    .child(stuck),
             )
     }
 

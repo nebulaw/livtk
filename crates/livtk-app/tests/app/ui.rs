@@ -6075,3 +6075,86 @@ fn a_tasks_activity_is_one_rail(cx: &mut TestAppContext) {
     );
     app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), ""));
 }
+
+/// On a long timeline, what heads the rows in view sticks to the panel's edges: the composer at
+/// the foot while its place on the rail is below the view, a Claude session's first row at the
+/// top while its lane runs on in view; scrolled to its place, each goes back in line.
+#[gpui_kit::test]
+fn the_timeline_sticks_what_heads_the_view(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.set_session(Some("sess-long".into()));
+        for i in 0..30 {
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text: format!("step {i} of a long run"),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    redraw(cx);
+    redraw(cx);
+    let stuck = |cx: &mut gpui_kit::VisualTestContext| {
+        (0..80)
+            .filter(|i| {
+                cx.debug_bounds(Box::leak(format!("timeline-stuck-{i}").into_boxed_str()))
+                    .is_some()
+            })
+            .count()
+    };
+    let composer = cx.debug_bounds("note-composer").expect("the composer");
+    let panel = cx.debug_bounds("detail-body-panel").unwrap();
+    assert!(
+        composer.bottom() <= panel.bottom(),
+        "stuck at the foot, in reach: {composer:?} in {panel:?}"
+    );
+    assert!(stuck(cx) >= 1, "the composer stuck");
+    // Down the timeline: the session's first row stuck at the top, its lane running on below.
+    let at = cx.debug_bounds("detail-title").unwrap().center();
+    let mut lane_start_stuck = false;
+    for _ in 0..12 {
+        cx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at,
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(-150.),
+            )),
+            modifiers: gpui_kit::Modifiers::default(),
+            ..Default::default()
+        });
+        redraw(cx);
+        redraw(cx);
+        // The session's lane starts at the third row (after made and moved).
+        lane_start_stuck |= cx.debug_bounds("timeline-stuck-2").is_some();
+    }
+    redraw(cx);
+    assert!(
+        lane_start_stuck,
+        "the session's first row stuck at the top while its lane ran on"
+    );
+    // At the end: the composer back in its place, nothing stuck at the foot; the lane's start
+    // stuck at the top while its marks are in view.
+    let composer_end = cx.debug_bounds("note-composer").expect("the composer");
+    assert!(composer_end.bottom() <= panel.bottom());
+    app.read_with(cx, |a, cx| assert_eq!(a.note_text(cx), ""));
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("typed while stuck or not");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let all = Workspace::open(dir.path())
+        .unwrap()
+        .history(Some("LIV-1"))
+        .unwrap();
+    assert!(matches!(
+        &all.last().unwrap().op,
+        livtk_core::event::Op::NodeNote { data, .. } if data.text == "typed while stuck or not"
+    ));
+}

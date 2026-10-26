@@ -5614,3 +5614,46 @@ fn a_body_edited_down_the_panel_keeps_its_place_and_a_click_outside_saves(cx: &m
         "saved"
     );
 }
+
+/// A title wraps the same edited as read at every length, near each place a line breaks too:
+/// opening it never drops a word to a new line.
+#[gpui_kit::test]
+fn a_title_wraps_the_same_edited_at_every_length(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    open_detail(cx);
+    let words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi \
+                 omicron pi rho sigma tau upsilon phi chi psi omega";
+    let words: Vec<&str> = words.split_whitespace().collect();
+    let mut differ = Vec::new();
+    for n in 8..=words.len() {
+        for tail in ["", " W", " iii"] {
+            let title = format!("{}{tail}", words[..n].join(" "));
+            app.update(cx, |a, cx| {
+                let id = a.model().detail.as_ref().unwrap().node.id;
+                a.model_mut().edit(id, Some(&title), None);
+                cx.notify();
+            });
+            redraw(cx);
+            let reading = cx.debug_bounds("detail-title").unwrap();
+            click_on(cx, "detail-title");
+            redraw(cx);
+            let editing = cx.debug_bounds("title-editor").expect("editing");
+            if editing.size.height != reading.size.height {
+                differ.push(format!(
+                    "{title}: {:?} -> {:?}",
+                    reading.size.height, editing.size.height
+                ));
+            }
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "wrapped differently:\n{}",
+        differ.join("\n")
+    );
+}

@@ -246,7 +246,8 @@ impl InlineEdit {
                 cx.listener(|this, _: &input::Escape, window, cx| this.cancel_edit(window, cx)),
             )
             .map(|d| {
-                let text = div().child(
+                // Wider by the caret's room on the right, so it wraps where the text read.
+                let text = div().mr(-FIELD_CARET_ROOM).child(
                     // Extra small: `TEXTAREA_PX` across, nothing down, so only the frame's room
                     // counts.
                     Textarea::new(field)

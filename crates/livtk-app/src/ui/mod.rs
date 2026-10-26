@@ -298,6 +298,9 @@ const GRID_STEP: f32 = 24.;
 const TITLE_LINE: f32 = 28.;
 /// The horizontal padding GPUI Component gives an extra-small textarea.
 const TEXTAREA_PX: Pixels = px(4.);
+/// The room a text field keeps past each line's end for its caret, which it wraps short of
+/// (gpui-base's `RIGHT_MARGIN`): an editor given it back wraps where the read text does.
+const FIELD_CARET_ROOM: Pixels = px(10.);
 
 /// Quick to start, gentle to land: the panel opening.
 pub(super) fn ease_out_cubic(t: f32) -> f32 {

@@ -5,7 +5,6 @@ use super::text_style::TextRole;
 use super::*;
 
 impl LivtkApp {
-    /// The open node's title: double-click to edit.
     /// The Claude Code sessions that worked on a node, each a link: a click reads it in Agents,
     /// from the node's first event in it.
     pub(super) fn task_sessions(

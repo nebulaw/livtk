@@ -75,6 +75,9 @@ pub struct Config {
     /// How runs of Claude start and where builds work (`[runs]`).
     #[serde(default, skip_serializing_if = "Runs::is_default")]
     pub runs: Runs,
+    /// How sessions' names read.
+    #[serde(default, skip_serializing_if = "crate::sessions::Naming::is_default")]
+    pub sessions: crate::sessions::Naming,
 }
 
 /// How a project's runs of Claude go: whether they start on their own, how many builds at
@@ -570,6 +573,7 @@ impl Workspace {
             kinds: Vec::new(),
             relations: Vec::new(),
             runs: Runs::default(),
+            sessions: Default::default(),
         };
         let text = toml::to_string(&config).map_err(|e| Error::Config {
             path: dir.join("config.toml"),
@@ -997,6 +1001,11 @@ impl Workspace {
     /// Every session the log knows, the latest first.
     pub fn sessions(&self) -> Result<Vec<crate::store::SessionSummary>> {
         self.store.sessions()
+    }
+
+    /// The last `limit` events session `session` wrote, newest first.
+    pub(crate) fn session_events(&self, session: &str, limit: usize) -> Result<Vec<Event>> {
+        self.store.session_events(session, limit)
     }
 
     /// The nodes session `session` wrote to.

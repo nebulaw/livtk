@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use jiff::Timestamp;
 use livtk_core::format::session as short;
+use livtk_core::sessions::{Doing, SessionName};
 use livtk_core::{Actor, Command, Workspace};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -34,21 +35,69 @@ pub enum SessionsCmd {
     },
 }
 
-/// The sessions, or the sessions of one node.
-pub fn list(ws: &Workspace, key: Option<&str>, json: bool) -> Result<()> {
+/// What `livtk sessions` keeps to: sessions that did a stage's work, or were an agent's.
+pub struct Only<'a> {
+    pub stage: Option<&'a str>,
+    pub agent: Option<&'a str>,
+}
+
+/// The sessions, or the sessions of one node: each by its name (its task, what it did, who),
+/// as the app names it.
+pub fn list(ws: &Workspace, key: Option<&str>, only: &Only, json: bool) -> Result<()> {
+    let doing = only
+        .stage
+        .map(|s| {
+            Doing::parse(s)
+                .with_context(|| format!("{s} is no stage: plan, build, review, research or chat"))
+        })
+        .transpose()?;
+    // What Claude Code says of each: the name the human gave it, and its first prompt.
+    let transcripts = livtk_core::claude::transcripts_dir(ws.root())
+        .map(|d| livtk_core::claude::transcripts(&d))
+        .unwrap_or_default();
+    let ask = |session: &str| {
+        let t = transcripts.iter().find(|t| t.session == session);
+        (
+            session.to_owned(),
+            t.and_then(|t| t.title.clone()),
+            t.and_then(|t| t.first_prompt.clone()),
+        )
+    };
+    let naming = ws.config().sessions.clone();
+    let keep = |n: &SessionName| {
+        doing.is_none_or(|d| n.doing == d)
+            && only.agent.is_none_or(|a| {
+                n.agent
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(a))
+            })
+    };
     if let Some(key) = key {
         let uses = ws.sessions_of(key)?;
+        let asked: Vec<_> = uses.iter().map(|u| ask(&u.session)).collect();
+        let names = ws.session_names(&asked)?;
+        let shown: Vec<_> = uses.iter().zip(&names).filter(|(_, n)| keep(n)).collect();
         if json {
-            return crate::output::print_json(&uses);
+            // Each use as before, its name and the name's parts beside.
+            let rows: Vec<Value> = shown
+                .iter()
+                .map(|(u, n)| {
+                    let mut row = serde_json::to_value(u).unwrap_or_default();
+                    row["name"] = json!(n.text(&naming));
+                    row["parts"] = json!(n);
+                    row
+                })
+                .collect();
+            return crate::output::print_json(&rows);
         }
-        if uses.is_empty() {
+        if shown.is_empty() {
             println!("No Claude session is on record for {key}.");
         }
-        for u in &uses {
+        for (u, n) in &shown {
             println!(
-                "{}  {:<16} {} event(s), {} .. {}",
+                "{}  {:<28} {} event(s), {} .. {}",
                 short(&u.session),
-                u.by,
+                n.text(&naming),
                 u.events,
                 u.first.get(..16).unwrap_or(&u.first),
                 u.last.get(..16).unwrap_or(&u.last)
@@ -57,32 +106,35 @@ pub fn list(ws: &Workspace, key: Option<&str>, json: bool) -> Result<()> {
         return Ok(());
     }
     let all = ws.sessions()?;
+    let asked: Vec<_> = all.iter().map(|s| ask(&s.session)).collect();
+    let names = ws.session_names(&asked)?;
+    let shown: Vec<_> = all.iter().zip(&names).filter(|(_, n)| keep(n)).collect();
     if json {
-        let rows: Vec<Value> = all
+        let rows: Vec<Value> = shown
             .iter()
-            .map(|s| {
+            .map(|(s, n)| {
                 let nodes: Vec<String> = ws
                     .session_nodes(&s.session)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|b| b.key)
                     .collect();
-                json!({"session": s, "nodes": nodes})
+                json!({"name": n.text(&naming), "parts": n, "session": s, "nodes": nodes})
             })
             .collect();
         return crate::output::print_json(&rows);
     }
-    if all.is_empty() {
+    if shown.is_empty() {
         println!("No Claude session is on record yet.");
     }
-    for s in &all {
+    for (s, n) in &shown {
         println!(
-            "{}  {} .. {}  {} node(s)  {}",
+            "{}  {:<28} {} .. {}  {} node(s)",
             short(&s.session),
+            n.text(&naming),
             s.first.get(..16).unwrap_or(&s.first),
             s.last.get(..16).unwrap_or(&s.last),
             s.nodes,
-            s.by.join(", ")
         );
     }
     Ok(())

@@ -21,6 +21,7 @@ pub mod registry;
 pub mod rows;
 pub mod run;
 pub mod search;
+pub mod sessions;
 pub mod signal;
 mod store;
 mod workspace;

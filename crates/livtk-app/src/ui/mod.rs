@@ -2327,8 +2327,8 @@ impl LivtkApp {
                             .child(Input::new(&self.filter).appearance(false).small()),
                     ),
             );
-        // The docs are searched by their words alone.
-        if self.model.view() == View::Docs {
+        // Docs are searched by their words alone, sessions by their names' parts.
+        if matches!(self.model.view(), View::Docs | View::Sessions) {
             return panel;
         }
         // Priorities where the view's nodes have them; the inbox mixes kinds and keeps them.

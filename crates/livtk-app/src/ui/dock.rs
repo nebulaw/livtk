@@ -28,7 +28,9 @@ impl LivtkApp {
         }
         let mut shaping = Vec::new();
         let doc_list = view == View::Docs && !self.model.docs.reading;
-        if lists || view == View::Inbox || doc_list {
+        // Sessions are found by their name's parts: a task's key, a stage, an agent.
+        let session_list = view == View::Sessions && self.model.agents.reader.is_none();
+        if lists || view == View::Inbox || doc_list || session_list {
             shaping.push(self.dock_filter(wide, cx));
         }
         if lists {

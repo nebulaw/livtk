@@ -1332,6 +1332,28 @@ fn claude_names_its_session_and_earlier_work_is_claimed_from_transcripts() {
             .iter()
             .any(|s| s["session"]["session"] == "sess-a" && s["nodes"][0] == "LIV-2")
     );
+    // Each named by its task and what it did: a session that only made LIV-2 chatted.
+    let named = |args: &[&str]| -> Vec<String> {
+        json(d, args)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(named(&["sessions"]).contains(&"LIV-2 · Chat".to_owned()));
+    assert!(
+        named(&["sessions", "LIV-2"])
+            .iter()
+            .all(|n| n.starts_with("LIV-2"))
+    );
+    // Kept to a stage, or an agent.
+    assert!(named(&["sessions", "--stage", "build"]).is_empty());
+    assert!(!named(&["sessions", "--stage", "chat"]).is_empty());
+    assert!(named(&["sessions", "--agent", "refuter"]).is_empty());
+    let bad = livtk(d, As::Human, &["sessions", "--stage", "dance"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("no stage"));
 }
 
 /// A run from the command line: given to an agent, started on an acknowledged task, waiting

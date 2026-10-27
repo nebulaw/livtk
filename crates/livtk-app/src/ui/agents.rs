@@ -182,7 +182,7 @@ impl LivtkApp {
             return self.reader_view(cx);
         }
         // Sessions: past and running, Needs you first.
-        let rows = self.model.session_rows();
+        let rows = self.model.found_sessions();
         list = list.child(band("Sessions", rows.len(), None));
         if let Some(e) = &self.model.agents.sessions_error {
             list = list.child(quiet_line("sessions-error", e));

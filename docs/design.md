@@ -67,6 +67,15 @@ first, then Working and Idle. The list is merged from three sources: Claude Code
 wrote what to which task). The panel shows the one picked: its standing and what it did in livtk,
 with Read, Open (in the terminal) and Stop.
 
+**A session's name** says what it was, the same in the app and the CLI (`livtk sessions`): the
+task it was about (its run's, or the one it worked on most, `+N` for the others), what it did
+(Plan, Build, Review, Research, or Chat), and its agent when not livtk's own for that:
+`TAS-110 · Build`, `TAS-46 +4 · Plan`, `TAS-2 · Review · strict-reviewer`. A name you give it
+with `/rename` is kept; a session that touched no task keeps its first prompt's line. livtk works
+the name out from the log each time and never writes it into Claude Code's files. The view's
+filter, and `livtk sessions --stage` and `--agent`, find sessions by those parts. Its separator,
+and whether the agent shows, are `[sessions]` in the project's config.
+
 **Reading a session.**
 
 - **Read** (or a double click) takes the list's place with the conversation: what was asked, what

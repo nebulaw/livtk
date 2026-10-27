@@ -47,6 +47,8 @@ pub struct SessionRow {
     pub nodes: usize,
     /// Its transcript, while Claude Code keeps it.
     pub transcript: Option<PathBuf>,
+    /// Its name's parts: its task, what it did, its agent, to find it by.
+    pub parts: Option<livtk_core::sessions::SessionName>,
 }
 
 /// A session being read: its entries so far, where the next page starts, the calls opened.
@@ -168,6 +170,7 @@ impl Model {
                         by: Vec::new(),
                         nodes: 0,
                         transcript: None,
+                        parts: None,
                     });
                     rows.len() - 1
                 }
@@ -202,9 +205,48 @@ impl Model {
                 r.name = s.title();
             }
         }
+        // Each named as livtk names sessions: its task, what it did, who; a name the human gave
+        // kept. What Claude Code says of it is the fallback.
+        if let Some(p) = self.project() {
+            let asked: Vec<(String, Option<String>, Option<String>)> = rows
+                .iter()
+                .map(|r| {
+                    let t = self.agents.transcripts.iter().find(|t| t.session == r.id);
+                    (
+                        r.id.clone(),
+                        t.and_then(|t| t.title.clone()),
+                        t.and_then(|t| t.first_prompt.clone())
+                            .or_else(|| Some(r.name.clone())),
+                    )
+                })
+                .collect();
+            let naming = &p.ws.config().sessions;
+            if let Ok(names) = p.ws.session_names(&asked) {
+                for (r, n) in rows.iter_mut().zip(names) {
+                    r.name = n.text(naming);
+                    r.parts = Some(n);
+                }
+            }
+        }
         rows.sort_by(|a, b| {
             let rank = |r: &SessionRow| r.live.map_or(9, |s| s as u8);
             rank(a).cmp(&rank(b)).then(b.ended.cmp(&a.ended))
+        });
+        rows
+    }
+
+    /// The sessions the filter finds: by a word of a session's name, its task, what it did or
+    /// its agent. All of them while the filter is empty.
+    pub fn found_sessions(&self) -> Vec<SessionRow> {
+        let query = self.display().filter.clone();
+        let naming = self
+            .project()
+            .map(|p| p.ws.config().sessions.clone())
+            .unwrap_or_default();
+        let mut rows = self.session_rows();
+        rows.retain(|r| match &r.parts {
+            Some(n) => n.matches(&naming, &query),
+            None => r.name.to_lowercase().contains(&query.trim().to_lowercase()),
         });
         rows
     }

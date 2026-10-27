@@ -1963,3 +1963,56 @@ fn the_graph_keeps_its_camera_per_project() {
     back.graph_fit();
     assert_ne!(back.graph.camera, other);
 }
+
+/// The Sessions view names each session by its task, what it did and who, and its filter finds
+/// one by those parts.
+#[test]
+fn sessions_are_named_by_their_task_and_stage_and_found_by_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ws = project(dir.path());
+    let task = create(&mut ws, Kind::Task, "paint the shed");
+    let key = ws.node(&task).unwrap().key;
+    let run = |stage, session: &str, agent: Option<&str>| Command::RunNote {
+        node: key.clone(),
+        text: "Started.".into(),
+        run: livtk_core::event::RunData {
+            session: session.into(),
+            agent: agent.map(str::to_owned),
+            stage,
+            mark: livtk_core::event::RunMark::Started,
+        },
+    };
+    // Each run's notes are written in its own session, as a run writes them.
+    ws.set_session(Some("s-build".into()));
+    ws.execute(run(livtk_core::run::Stage::Build, "s-build", None), &CLAUDE)
+        .unwrap();
+    ws.set_session(Some("s-review".into()));
+    ws.execute(
+        run(
+            livtk_core::run::Stage::Review,
+            "s-review",
+            Some("project:strict-reviewer"),
+        ),
+        &CLAUDE,
+    )
+    .unwrap();
+    drop(ws);
+    let mut m = Model::open(&[dir.path().to_path_buf()]);
+    m.set_view(View::Sessions);
+    let names: Vec<String> = m.session_rows().into_iter().map(|r| r.name).collect();
+    assert!(names.contains(&format!("{key} · Build")), "{names:?}");
+    assert!(
+        names.contains(&format!("{key} · Review · strict-reviewer")),
+        "{names:?}"
+    );
+    for (query, found) in [
+        ("build", vec!["s-build"]),
+        ("strict-reviewer", vec!["s-review"]),
+    ] {
+        m.set_filter(query);
+        let ids: Vec<String> = m.found_sessions().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, found, "{query}");
+    }
+    m.set_filter(&key);
+    assert_eq!(m.found_sessions().len(), 2, "both by the task's key");
+}

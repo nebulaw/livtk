@@ -133,6 +133,12 @@ enum Cmd {
     #[command(args_conflicts_with_subcommands = true)]
     Sessions {
         key: Option<String>,
+        /// Only sessions that did this: plan, build, review, research or chat.
+        #[arg(long)]
+        stage: Option<String>,
+        /// Only sessions of this agent, by its short name (refuter, or a project's own).
+        #[arg(long)]
+        agent: Option<String>,
         #[command(subcommand)]
         cmd: Option<sessions::SessionsCmd>,
     },
@@ -623,7 +629,20 @@ fn dispatch(ws: &mut Workspace, cmd: Cmd, by: &Actor, json: bool) -> Result<()> 
         Cmd::Run { .. } => runs::list(ws, false, json),
         Cmd::Runs { all } => runs::list(ws, all, json),
         Cmd::Agent { cmd } => runs::agent(ws, cmd, by, json),
-        Cmd::Sessions { key, cmd: None } => sessions::list(ws, key.as_deref(), json),
+        Cmd::Sessions {
+            key,
+            stage,
+            agent,
+            cmd: None,
+        } => sessions::list(
+            ws,
+            key.as_deref(),
+            &sessions::Only {
+                stage: stage.as_deref(),
+                agent: agent.as_deref(),
+            },
+            json,
+        ),
         Cmd::Sessions { cmd: Some(cmd), .. } => sessions::run(ws, cmd, by, json),
         Cmd::Flow { project } => project::flow(ws, project.as_deref(), json),
         Cmd::Export { dir, check } => export::run(ws, dir.as_deref(), check),

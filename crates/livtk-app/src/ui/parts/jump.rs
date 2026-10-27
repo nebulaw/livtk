@@ -64,7 +64,7 @@ impl Jump {
             .when(count > 0, |d| {
                 d.child(
                     div()
-                        .debug_selector(move || format!("{id}-count"))
+                        .debug_selector(move || format!("{id}-count-{count}"))
                         .absolute()
                         .top(px(-4.))
                         .right(px(-4.))

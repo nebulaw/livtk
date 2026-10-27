@@ -7080,11 +7080,11 @@ fn a_long_panel_jumps_to_its_latest_and_back_to_its_top(cx: &mut TestAppContext)
         title,
         "not pulled down"
     );
-    assert!(shown(cx, "jump-latest-count"), "one new, counted");
+    assert!(shown(cx, "jump-latest-count-1"), "one new, counted");
     cx.simulate_keystrokes("secondary-down");
     redraw(cx);
     redraw(cx);
-    assert!(!shown(cx, "jump-latest-count"), "seen once there");
+    assert!(!shown(cx, "jump-latest-count-1"), "seen once there");
     // A short task: neither.
     app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
     settle(cx);
@@ -7226,4 +7226,86 @@ fn a_calendar_day_is_picked_by_a_click_within_its_range(cx: &mut TestAppContext)
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().draft.as_ref().unwrap().target, None)
     });
+}
+
+/// Your own note is never counted as new: sent from far up, the panel goes down to it. At the
+/// end, a note arriving is followed down. ↑ never covers the send button. The full page's panel
+/// jumps by ⌘↑ and ⌘↓ too.
+#[gpui_kit::test]
+fn the_panels_jumps_follow_your_note_and_keep_clear_of_the_composer(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for i in 0..40 {
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text: format!("step {i} of a long run"),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    redraw(cx);
+    redraw(cx);
+    let shown =
+        |cx: &mut gpui_kit::VisualTestContext, id: &'static str| cx.debug_bounds(id).is_some();
+    // Your own note, from the top: no count, and the panel at its end.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("mine");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    redraw(cx);
+    redraw(cx);
+    assert!(
+        !shown(cx, "jump-latest-count-1"),
+        "your own note is no news"
+    );
+    assert!(!shown(cx, "jump-latest"), "down at it");
+    // At the end, a note arriving is followed.
+    Workspace::open(dir.path())
+        .unwrap()
+        .execute(
+            Command::Note {
+                node: "LIV-1".into(),
+                text: "news".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    app.update(cx, |a, _| {
+        a.model_mut().tick();
+    });
+    redraw(cx);
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-latest"), "followed down");
+    // ↑ clear of the send button.
+    let up = cx.debug_bounds("jump-top").expect("the way up");
+    let send = cx.debug_bounds("note-send").expect("the send button");
+    assert!(
+        up.bottom() <= send.top() || up.top() >= send.bottom() || up.right() <= send.left(),
+        "{up:?} over {send:?}"
+    );
+    // The full page: ⌘↑ and ⌘↓ there too.
+    app.update(cx, |a, _| {
+        a.model_mut().detail_mode = livtk_app::model::DetailMode::Full;
+    });
+    redraw(cx);
+    redraw(cx);
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("secondary-up");
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-top"), "at the top");
+    cx.simulate_keystrokes("secondary-down");
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-latest"), "at the end");
 }

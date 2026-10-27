@@ -569,8 +569,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", Decide, nav),
         KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
+        // Where the list or a full page has the keys; a text field keeps ⌘↑ and ⌘↓ for itself.
         KeyBinding::new("secondary-up", JumpTop, nav),
         KeyBinding::new("secondary-down", JumpLatest, nav),
+        KeyBinding::new("secondary-up", JumpTop, Some(peek::DETAIL)),
+        KeyBinding::new("secondary-down", JumpLatest, Some(peek::DETAIL)),
         KeyBinding::new("n", NewTask, nav),
         KeyBinding::new("p", NewProject, nav),
         KeyBinding::new("b", ToggleLayout, nav),
@@ -1322,6 +1325,14 @@ impl LivtkApp {
         let text = state.read(cx).value().to_string();
         self.model.add_note(&text);
         state.update(cx, |s, cx| s.set_value("", window, cx));
+        // Your own note is never news to you: seen. Sent from the composer stuck at the foot,
+        // far from its place, the panel goes down to it; in its place, it joins just above.
+        if let Some(d) = &self.model.detail {
+            self.saw(d.node.id, d.history.len());
+            if self.stuck_foot().is_some() {
+                self.jump(true, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -3022,8 +3033,6 @@ impl Render for LivtkApp {
                     this.choice_where(|c| c.always, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &JumpTop, _, cx| this.jump(false, cx)))
-            .on_action(cx.listener(|this, _: &JumpLatest, _, cx| this.jump(true, cx)))
             .on_action(cx.listener(|this, _: &Reject, _, cx| {
                 if !this.answer_acted_on(runs::Ask::Deny, cx) {
                     this.choice_where(|c| c.to == State::Rejected, cx);
@@ -3158,6 +3167,9 @@ impl Render for LivtkApp {
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.toggle_palette(window, cx)),
             )
+            // Wherever the panel shows: beside, centred, or as the full page.
+            .on_action(cx.listener(|this, _: &JumpTop, _, cx| this.jump(false, cx)))
+            .on_action(cx.listener(|this, _: &JumpLatest, _, cx| this.jump(true, cx)))
             // From anywhere, typing included, as their keys (Cmd on macOS) and the menu bar do.
             .on_action(
                 cx.listener(|this, _: &NewTask, window, cx| {

@@ -327,6 +327,13 @@ impl LivtkApp {
         .inset_0()
     }
 
+    /// Where the composer is in its place on the rail, as last laid out, in window coordinates.
+    pub(in crate::ui) fn composer_bounds(&self) -> Option<Bounds<Pixels>> {
+        let r = self.rail.borrow();
+        let c = r.composer?;
+        r.rows.iter().find(|(o, _)| *o == c).map(|(_, b)| *b)
+    }
+
     /// The height the composer takes at the panel's foot while it is stuck there.
     pub(in crate::ui) fn stuck_foot(&self) -> Option<Pixels> {
         let r = self.rail.borrow();

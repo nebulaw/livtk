@@ -95,9 +95,10 @@ pub fn list(ws: &Workspace, key: Option<&str>, only: &Only, json: bool) -> Resul
         }
         for (u, n) in &shown {
             println!(
-                "{}  {:<28} {} event(s), {} .. {}",
+                "{}  {:<28} {:<16} {} event(s), {} .. {}",
                 short(&u.session),
                 n.text(&naming),
+                u.by,
                 u.events,
                 u.first.get(..16).unwrap_or(&u.first),
                 u.last.get(..16).unwrap_or(&u.last)

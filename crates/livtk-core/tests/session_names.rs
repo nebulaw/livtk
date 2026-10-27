@@ -84,6 +84,10 @@ fn a_run_is_named_by_its_task_and_stage_and_its_agent_when_not_livtks_own() {
     assert_eq!(name(&ws, "s-review"), "LIV-1 · Review");
     assert_eq!(name(&ws, "s-own"), "LIV-2 · Review · strict-reviewer");
     assert_eq!(name(&ws, "s-plan"), "LIV-3 · Plan");
+    // livtk's own agents are left out of the name, but still found by.
+    let review = ws.session_name("s-review", None, None).unwrap();
+    assert_eq!(review.agent.as_deref(), Some("refuter"));
+    assert!(review.matches(&Naming::default(), "refuter"));
 }
 
 #[test]
@@ -184,6 +188,27 @@ fn a_name_the_human_gave_is_kept_and_a_session_that_touched_nothing_keeps_its_pr
         .session_name("s-none", None, Some("\n  how do hooks work?\nmore"))
         .unwrap();
     assert_eq!(idle.text(&Naming::default()), "how do hooks work?");
+    // Only lessons and decisions: no task, so its prompt names it.
+    ws.set_session(Some("s-memory".into()));
+    for kind in [Kind::Lesson, Kind::Decision] {
+        ws.execute(
+            Command::Create {
+                kind,
+                title: "a rule".into(),
+                body: String::new(),
+                priority: None,
+                links: vec![],
+            },
+            &claude(None),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        ws.session_name("s-memory", None, Some("remember this"))
+            .unwrap()
+            .text(&Naming::default()),
+        "remember this"
+    );
     assert_eq!(
         ws.session_name("01a2b3c4-dead", None, None)
             .unwrap()

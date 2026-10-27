@@ -93,8 +93,10 @@ pub struct SessionName {
     /// How many other nodes it worked on besides.
     pub more: usize,
     pub doing: Doing,
-    /// Its agent's short name, when not livtk's own for the stage.
+    /// Its agent's short name: `refuter`, `implementer`, a project's own.
     pub agent: Option<String>,
+    /// Its agent is livtk's own for what it did: found by it, but left out of the name.
+    pub agent_is_own: bool,
     /// The name the human gave it (`/rename`), kept as given.
     pub title: Option<String>,
     /// Its first prompt's first line, for a session that touched no node.
@@ -116,6 +118,7 @@ impl SessionName {
             }];
             parts.push(self.doing.as_str().to_owned());
             if naming.agent
+                && !self.agent_is_own
                 && let Some(a) = &self.agent
             {
                 parts.push(a.clone());
@@ -142,6 +145,15 @@ impl SessionName {
                 .as_deref()
                 .is_some_and(|a| a.eq_ignore_ascii_case(&q))
     }
+}
+
+/// Keys in their number's order: `P1-2` before `P1-10`.
+fn by_key(a: &str, b: &str) -> std::cmp::Ordering {
+    let split = |k: &str| {
+        let (p, n) = k.rsplit_once('-').unwrap_or((k, ""));
+        (p.to_owned(), n.parse::<u64>().unwrap_or(u64::MAX))
+    };
+    split(a).cmp(&split(b))
 }
 
 /// An agent's short name: `livtk:refuter` is `refuter`.
@@ -187,6 +199,7 @@ impl Workspace {
             more: 0,
             doing: Doing::Chat,
             agent: None,
+            agent_is_own: false,
             title: title
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
@@ -201,26 +214,21 @@ impl Workspace {
         for e in &events {
             *count.entry(e.op.subjects().0).or_default() += 1;
         }
+        // Only tasks name a session: one that touched none keeps its first prompt's line.
         let mut worked: Vec<(crate::Node, usize)> = count
             .into_iter()
             .filter_map(|(id, n)| self.node(&id.to_string()).ok().map(|node| (node, n)))
+            .filter(|(node, _)| node.kind == Kind::Task)
             .collect();
-        worked.sort_by(|(a, x), (b, y)| {
-            (b.kind == Kind::Task)
-                .cmp(&(a.kind == Kind::Task))
-                .then(y.cmp(x))
-                .then(a.key.cmp(&b.key))
-        });
+        worked.sort_by(|(a, x), (b, y)| y.cmp(x).then(by_key(&a.key, &b.key)));
         // A run says what it is itself.
         if let Some(run) = runs.iter().rev().find(|r| r.session == session) {
             name.task = Some(run.key.clone());
             name.more = worked.iter().filter(|(n, _)| n.key != run.key).count();
             name.doing = Doing::of(run.stage);
-            name.agent = run
-                .agent
-                .as_deref()
-                .filter(|a| Some(*a) != run.stage.default_agent())
-                .map(short);
+            name.agent = run.agent.as_deref().map(short);
+            name.agent_is_own =
+                run.agent.is_none() || run.agent.as_deref() == run.stage.default_agent();
             return Ok(name);
         }
         let Some((first, _)) = worked.first() else {
@@ -260,9 +268,8 @@ impl Workspace {
             Doing::Research => Stage::Research.default_agent(),
             Doing::Plan | Doing::Chat => None,
         };
-        name.agent = agent
-            .filter(|a| Some(a.as_str()) != own)
-            .map(|a: String| short(&a));
+        name.agent_is_own = agent.is_none() || agent.as_deref() == own;
+        name.agent = agent.map(|a: String| short(&a));
         Ok(name)
     }
 }

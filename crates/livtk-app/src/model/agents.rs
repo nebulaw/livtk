@@ -28,6 +28,16 @@ pub struct AgentsPlace {
     pub transcripts: Vec<Transcript>,
     /// The session being read, in the middle.
     pub reader: Option<Reader>,
+    /// The session rows as last worked out: kept until the log, the transcripts or Claude
+    /// Code's live list change, so a draw never queries the store (TAS-119).
+    rows: std::cell::RefCell<Option<Vec<SessionRow>>>,
+}
+
+impl AgentsPlace {
+    /// What the session rows were worked out from has changed: work them out again when asked.
+    pub fn forget_rows(&self) {
+        self.rows.borrow_mut().take();
+    }
 }
 
 /// A session as the list shows it: from its transcript, Claude Code's live list and the log,
@@ -140,6 +150,7 @@ impl Model {
         match read {
             Ok(s) => {
                 self.agents.sessions = Some(s);
+                self.agents.forget_rows();
                 self.agents.sessions_error = None;
             }
             Err(e) => self.agents.sessions_error = Some(e),
@@ -149,12 +160,23 @@ impl Model {
     /// The project's transcripts, as listed off the window's thread.
     pub fn set_transcripts(&mut self, transcripts: Vec<Transcript>) {
         self.agents.transcripts = transcripts;
+        self.agents.forget_rows();
     }
 
     /// Every session of the project: those Claude Code keeps a transcript of, those it lists as
     /// running, and those the log knows. Needs you first, then the running ones, then by when
     /// each was last at work.
     pub fn session_rows(&self) -> Vec<SessionRow> {
+        if let Some(rows) = self.agents.rows.borrow().as_ref() {
+            return rows.clone();
+        }
+        let rows = self.work_out_session_rows();
+        *self.agents.rows.borrow_mut() = Some(rows.clone());
+        rows
+    }
+
+    /// The session rows, worked out from the transcripts, the live list and the log.
+    fn work_out_session_rows(&self) -> Vec<SessionRow> {
         let mut rows: Vec<SessionRow> = Vec::new();
         let find = |rows: &mut Vec<SessionRow>, id: &str| -> usize {
             match rows.iter().position(|r| r.id == id) {

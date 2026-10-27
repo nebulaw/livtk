@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# What the app costs the laptop while it waits: CPU and idle wakeups of a copy of livtk.app left
+# alone on a test project, in three states (its list, its board, a task open), and what each CLI
+# call takes. Its own config folder, so the app you use is never touched.
+#   scripts/energy                 measure target/livtk.app (scripts/release --quick builds it)
+#   scripts/energy --app PATH      measure another livtk.app
+#   scripts/energy --budget PCT    fail when any idle state's CPU is over PCT (default: report only)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+app=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)/livtk.app
+budget=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --app) app=$2; shift 2 ;;
+    --budget) budget=$2; shift 2 ;;
+    *) echo "energy: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+bin=$app/Contents/MacOS/livtk-app
+cli=$app/Contents/MacOS/livtk
+[ -x "$bin" ] || { echo "energy: no app at $app (scripts/release --quick builds one)" >&2; exit 2; }
+
+work=$(mktemp -d)
+pid=""
+# Only the app it started: an empty pid would be `kill 0`, the whole process group.
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; rm -rf "$work"' EXIT
+proj=$work/project
+mkdir -p "$proj" "$work/config"
+export LIVTK_CONFIG_DIR=$work/config
+(
+  cd "$proj"
+  "$cli" init --prefix TST >/dev/null
+  for t in "A long task" "A short one" "Another"; do "$cli" new "$t" >/dev/null; done
+  for i in $(seq 1 40); do "$cli" note TST-1 "step $i of a long run" >/dev/null; done
+)
+
+# Idle CPU (%) and idle wakeups per second of the app left alone in `state`, after it settles.
+measure() {
+  local state=$1 view=$2 layout=$3 open=$4
+  printf 'project = "%s"\nview = "%s"\nlayout = "%s"\n' "$proj" "$view" "$layout" >"$work/config/app.toml"
+  if [ -n "$open" ]; then
+    LIVTK_OPEN=$open "$bin" "$proj" >/dev/null 2>&1 &
+  else
+    "$bin" "$proj" >/dev/null 2>&1 &
+  fi
+  pid=$!
+  sleep 6
+  # Ten one-second samples; the first is top's own warm-up.
+  local out
+  out=$(top -l 11 -s 1 -pid "$pid" -stats cpu,idlew 2>/dev/null | awk 'NF==2 && $1 ~ /^[0-9.]+$/' | tail -10)
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pid=""
+  local cpu wake
+  cpu=$(echo "$out" | awk '{s+=$1} END {printf "%.1f", s/NR}')
+  wake=$(echo "$out" | awk '{gsub(/\+/,"",$2); w[NR]=$2} END {printf "%.0f", (w[NR]-w[1])/(NR-1)}')
+  printf '%-22s %7s%% CPU  %6s wakeups/s\n' "$state" "$cpu" "$wake"
+  echo "$state $cpu" >>"$work/results"
+}
+
+echo "livtk.app at idle ($(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist" 2>/dev/null || echo '?')):"
+measure "tasks, list" tasks list ""
+measure "tasks, board" tasks board ""
+measure "a task open" tasks list TST-1
+
+echo "the CLI:"
+for args in "list" "show TST-1" "sessions"; do
+  start=$(perl -MTime::HiRes=time -e 'printf "%.0f", time*1000')
+  (cd "$proj" && "$cli" $args >/dev/null)
+  end=$(perl -MTime::HiRes=time -e 'printf "%.0f", time*1000')
+  printf '  livtk %-18s %5s ms\n' "$args" "$((end - start))"
+done
+
+if [ -n "$budget" ]; then
+  over=$(awk -v b="$budget" '$NF+0 > b+0 {print}' "$work/results")
+  if [ -n "$over" ]; then
+    echo "energy: over the idle budget of ${budget}% CPU:" >&2
+    echo "$over" >&2
+    exit 1
+  fi
+fi

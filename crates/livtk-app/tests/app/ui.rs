@@ -5156,6 +5156,8 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
         )
         .unwrap();
     let (app, cx) = open_app(cx, &root);
+    // The panel in its place at once: its slide asks for frames a test window only draws when told.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 1400.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
     settle(cx);
@@ -5658,6 +5660,8 @@ fn a_tasks_panel_shows_everything_it_carries(cx: &mut TestAppContext) {
         (prj, sub)
     };
     let (app, cx) = open_app(cx, &root);
+    // The panel in its place at once: its slide asks for frames a test window only draws when told.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 1400.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
     settle(cx);
@@ -6560,6 +6564,8 @@ fn a_run_is_allowed_always_and_a_task_says_where_it_builds(cx: &mut TestAppConte
         )
         .unwrap();
     let (app, cx) = open_app(cx, &root);
+    // The panel in its place at once: its slide asks for frames a test window only draws when told.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 1400.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
     settle(cx);
@@ -6633,6 +6639,8 @@ fn a_build_does_its_job_and_a_push_is_refused_without_asking(cx: &mut TestAppCon
         )
         .unwrap();
     let (app, cx) = open_app(cx, &root);
+    // The panel in its place at once: its slide asks for frames a test window only draws when told.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 1400.);
     app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
     settle(cx);

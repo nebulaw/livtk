@@ -2532,6 +2532,8 @@ impl Model {
 
     /// Read everything shown again: what every pane shows, the sidebar's counts, the panel.
     fn reload(&mut self) {
+        // The log changed: what is worked out from it, worked out again.
+        self.agents.forget_rows();
         self.load_grid();
         // The panes first: the feed, looked at, marks what it shows seen before it is counted.
         for i in 0..self.panes.len() {

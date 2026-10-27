@@ -4,6 +4,8 @@
 #                            tests (quick)
 #   scripts/check --install  then install: on macOS ~/Applications/livtk.app and links to it on
 #                            PATH; elsewhere both binaries with cargo install
+#   scripts/check --energy   then what the app costs at idle (scripts/energy, on macOS): it opens
+#                            a few windows for half a minute, so it is asked for, not run always
 #
 # UI tests run in debug only (GPUI records the debug selectors they use only there). The CLI's
 # benchmarks time the binary that gets installed, start-up included, so they run in release; the
@@ -56,6 +58,11 @@ step "benchmarks and model tests: core, app" \
   "${with_models[@]}" cargo test -q --profile quick -p livtk-core -p livtk-app -- --ignored "${skip[@]}"
 step "benchmarks and model tests: CLI (release)" \
   "${with_models[@]}" cargo test -q --release -p livtk-cli -- --ignored "${skip[@]}"
+# An idle app draws nothing and costs next to no CPU: a quick build, left alone in each state.
+if [ "${1:-}" = "--energy" ] && [ "$(uname)" = Darwin ]; then
+  step "bundle (quick) for energy" scripts/bundle-app --quick
+  step "energy: idle under ${ENERGY_BUDGET:-2}% CPU" scripts/energy --budget "${ENERGY_BUDGET:-2}"
+fi
 if [ "${1:-}" = "--install" ]; then
   if [ "$(uname)" = Darwin ]; then
     # One bundle holds the app and the CLI; the commands on PATH link into it.

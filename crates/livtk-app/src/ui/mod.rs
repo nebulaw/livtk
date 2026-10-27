@@ -466,6 +466,11 @@ pub fn run(dirs: Vec<PathBuf>, quiet: Option<Quiet>) {
                 if let Some(why) = quiet {
                     app.model.tell_quiet(why);
                 }
+                // `LIVTK_OPEN=KEY`: open that node's panel at start, as `scripts/energy` measures
+                // an open task.
+                if let Ok(key) = std::env::var("LIVTK_OPEN") {
+                    app.model.go_to(&key);
+                }
                 app.follow_system(cx);
                 // Started by the updater: say it started well, so it stays, and what changed.
                 if crate::updates::report_started(livtk_build::BUILD) {

@@ -228,7 +228,7 @@ impl RenderOnce for StateFlow {
                     })
                 }
             })
-            .child(threads(&flow, !cx.reduce_motion(), drifting));
+            .child(threads(&flow, !cx.reduce_motion() && drifting, drifting));
         for (i, n) in flow.layout.nodes.iter().enumerate() {
             let s = &flow.steps[i];
             band = band.child(label(s, n));
@@ -252,9 +252,10 @@ impl RenderOnce for StateFlow {
     }
 }
 
-/// The threads, lit as their moves are. While `alive` (Reduce Motion off) the twisting ones
-/// breathe, so slightly it is felt more than seen; while `drifting` (the pointer over the flow)
-/// light drifts along the lit ones too. A low frame rate is plenty for so slow a movement.
+/// The threads, lit as their moves are. While `alive` (the pointer over the flow, Reduce Motion
+/// off) the twisting ones breathe, so slightly it is felt more than seen, and light drifts along
+/// the lit ones. Otherwise they are still: an animation that never ends draws the whole window
+/// every frame, a quarter of a laptop's CPU while nothing changes (TAS-119).
 fn threads(flow: &Rc<Flow>, alive: bool, drifting: bool) -> AnyElement {
     let paint = {
         let flow = flow.clone();

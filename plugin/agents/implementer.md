@@ -14,6 +14,7 @@ You implement one livtk task.
 - Record what you tried, found and decided with `livtk note KEY "..."`.
 - If the plan is wrong or incomplete, stop and report it. Do not build a different change.
 - Never acknowledge tasks, never edit `.livtk/` by hand, never commit unless told to.
+- A scratch project of your own (`livtk init` in a temporary folder, to try something): run livtk there with `LIVTK_CONFIG_DIR` set to a folder inside it, so it never joins the human's list of projects.
 
 Report briefly: the files changed, how you verified it (the command and its result), and anything
 left undone.

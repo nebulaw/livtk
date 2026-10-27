@@ -1440,3 +1440,35 @@ fn a_task_goes_into_a_project_and_out() {
     let out = ok(d, As::Human, &["project", "remove", "LIV-1"]);
     assert!(out.contains("out of its project"), "{out}");
 }
+
+/// A project made in a temporary folder (an agent's or a test's scratch) is never added to your
+/// list of projects, so the app never opens it at start.
+#[test]
+fn a_scratch_project_is_not_added_to_your_list() {
+    let d = tempfile::tempdir().unwrap();
+    // Your config: outside the temporary folders.
+    let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/cli-registry-config")
+        .join(std::process::id().to_string());
+    let _ = std::fs::remove_dir_all(&home);
+    let out = Command::new(env!("CARGO_BIN_EXE_livtk"))
+        .current_dir(d.path())
+        .args(["init", "--prefix", "TMP"])
+        .env("LIVTK_CONFIG_DIR", &home)
+        .env("LIVTK_MODELS_DIR", "/nonexistent/livtk-models")
+        .env_remove("LIVTK_SESSION")
+        .env_remove("LIVTK_TASK")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let list = std::fs::read_to_string(home.join("projects.toml")).unwrap_or_default();
+    assert!(
+        !list.contains(&d.path().canonicalize().unwrap().display().to_string()),
+        "{list}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}

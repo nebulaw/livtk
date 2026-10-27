@@ -29,17 +29,60 @@ pub fn config_dir() -> Option<PathBuf> {
 
 /// The registered project directories, in the order they were added. Ones that no longer hold a
 /// livtk project are left out, but kept in the file in case they come back (a remounted disk).
+/// Scratch projects (`scratch`) are left out and dropped from the file: they were never yours.
 pub fn projects(config: &Path) -> Result<Vec<PathBuf>> {
-    Ok(read(config)?
+    let mut file = read(config)?;
+    let before = file.projects.len();
+    file.projects.retain(|p| !scratch(config, p));
+    if file.projects.len() != before {
+        write(config, &file)?;
+    }
+    Ok(file
         .projects
         .into_iter()
         .filter(|p| p.join(crate::DIR_NAME).join("config.toml").is_file())
         .collect())
 }
 
+/// The system's folders for temporary files, as their real paths (macOS links `/tmp` and
+/// `/var` into `/private`).
+fn temp_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = [
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/folders"),
+    ]
+    .into_iter()
+    .flat_map(|p| {
+        let real = p.canonicalize().ok();
+        [Some(p), real]
+    })
+    .flatten()
+    .collect();
+    roots.dedup();
+    roots
+}
+
+fn under_temp(path: &Path) -> bool {
+    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    temp_roots()
+        .iter()
+        .any(|t| path.starts_with(t) || real.starts_with(t))
+}
+
+/// A scratch project: one in a temporary folder (an agent's or a test's), listed in a config
+/// that is not. It works when opened, but is never remembered in your list, so the app never
+/// opens it again (TAS-124). A config that is itself temporary (a test's) keeps its projects.
+pub fn scratch(config: &Path, project: &Path) -> bool {
+    under_temp(project) && !under_temp(config)
+}
+
 /// Remember a project directory. Idempotent.
 pub fn add(config: &Path, project: &Path) -> Result<()> {
     let project = project.canonicalize()?;
+    if scratch(config, &project) {
+        return Ok(());
+    }
     let mut file = read(config)?;
     if !file.projects.contains(&project) {
         file.projects.push(project);
@@ -103,6 +146,43 @@ mod tests {
         )
         .unwrap();
         p.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn a_scratch_project_is_never_remembered_and_is_dropped_from_the_list() {
+        let scratch_dir = tempfile::tempdir().unwrap();
+        let p = project(scratch_dir.path(), "scratch");
+        // Your config, outside the temporary folders: here, a folder in this crate's target.
+        let home = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/registry-test-config")
+            .join(std::process::id().to_string());
+        let _ = fs::remove_dir_all(&home);
+        assert!(scratch(&home, &p));
+        add(&home, &p).unwrap();
+        assert!(projects(&home).unwrap().is_empty(), "never remembered");
+        // A list that holds one from before is cleaned as it is read, and written back so.
+        let kept = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .canonicalize()
+            .unwrap();
+        write(
+            &home,
+            &File {
+                projects: vec![p.clone(), kept.clone()],
+            },
+        )
+        .unwrap();
+        let _ = projects(&home).unwrap();
+        assert_eq!(
+            read(&home).unwrap().projects,
+            [kept],
+            "dropped from the file"
+        );
+        // A temporary config (a test's) keeps its own scratch projects.
+        let config = scratch_dir.path().join("config");
+        assert!(!scratch(&config, &p));
+        add(&config, &p).unwrap();
+        assert_eq!(projects(&config).unwrap(), [p]);
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]

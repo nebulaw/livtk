@@ -44,6 +44,9 @@ case "$what" in
   deaf) trap '' INT
         echo '{"type":"system","subtype":"init"}'
         while :; do sleep 0.05; done ;;
+  numb) trap '' INT TERM
+        echo '{"type":"system","subtype":"init"}'
+        while :; do sleep 0.05; done ;;
   *) exit 1 ;;
 esac
 "#;
@@ -1017,4 +1020,41 @@ fn killing_a_turn_never_kills_a_process_that_took_its_pid() {
     );
     other.kill().unwrap();
     let _ = other.wait();
+}
+
+/// A turn still going is killed at once, even one that ignores being interrupted.
+#[test]
+fn killing_a_turn_ends_it_while_it_runs() {
+    let (_dir, mut ws, runner, key) = setup(&["deaf"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    turn_args(&root(&ws), 1);
+    let live = run::lives(ws.dir()).pop().expect("the run's record");
+    assert!(run::writing(&live), "the turn runs");
+    assert!(run::kill_turn(&live).unwrap(), "sent");
+    let start = Instant::now();
+    while run::writing(&live) {
+        assert!(start.elapsed() < WAIT, "the turn never ended");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A turn deaf to both the interrupt and the terminate is killed in the end, and its run ends
+/// stopped.
+#[test]
+fn a_stop_heard_by_nothing_is_killed() {
+    let (_dir, mut ws, runner, key) = setup(&["numb"]);
+    let _runs = KillRuns(ws.dir().to_path_buf());
+    runner
+        .start(&mut ws, &key, None, None, &[], &Actor::Human)
+        .unwrap();
+    turn_args(&root(&ws), 1);
+    std::thread::sleep(Duration::from_millis(200));
+    runner
+        .stop(&mut ws, &key, Ending::Stopped, &Actor::Human)
+        .unwrap();
+    let r = until(&mut ws, &runner, &key, "the kill", |r| r.ended().is_some());
+    assert_eq!(r.ended(), Some(Ending::Stopped));
 }

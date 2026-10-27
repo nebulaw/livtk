@@ -330,27 +330,29 @@ impl LivtkApp {
                 cx.listener(|this, _, window, cx| this.toggle_menu(Menu::AddLink, window, cx)),
             );
         div().relative().child(button).when(open, |d| {
-            let mut panel = menu_panel(200.).debug_selector(|| "add-link-menu".into());
-            for (i, choice) in link_choices(kind, &self.model.declared_rels())
-                .into_iter()
-                .enumerate()
-            {
-                let row_id = format!("link-choice-{i}");
-                panel = panel.child(
-                    option_row(SharedString::from(row_id.clone()))
-                        .debug_selector(move || row_id.clone())
-                        .child(choice.label)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.pick_link(choice, window, cx)
-                        })),
-                );
-            }
-            let panel = panel.child(menu_divider()).child(
-                option_row("link-choice-doc".into())
-                    .debug_selector(|| "link-choice-doc".into())
-                    .child(icon(Icon::Docs, 14., TEXT_3))
-                    .child("A doc…")
-                    .on_click(cx.listener(|this, _, window, cx| {
+            // The relations, as the new-node form's Add link offers them; then a doc.
+            let choices = link_choices(kind, &self.model.declared_rels());
+            let n = choices.len();
+            let mut rows: Vec<super::parts::ChoiceRow> = choices
+                .iter()
+                .map(|c| super::parts::ChoiceRow {
+                    lead: None,
+                    label: c.label.to_owned(),
+                    sub: None,
+                    on: false,
+                })
+                .collect();
+            rows.push(super::parts::ChoiceRow {
+                lead: Some(icon(Icon::Docs, 14., TEXT_3).into_any_element()),
+                label: "A doc…".to_owned(),
+                sub: None,
+                on: false,
+            });
+            let this = cx.entity().downgrade();
+            let on_pick: super::parts::OnPick = Rc::new(move |i, window, cx| {
+                let _ = this.update(cx, |this, cx| match choices.get(i) {
+                    Some(&choice) => this.pick_link(choice, window, cx),
+                    None => {
                         this.close_menu(window, cx);
                         this.help = false;
                         this.model.open_doc_picker();
@@ -358,8 +360,13 @@ impl LivtkApp {
                             this.reset_palette_input(window, cx);
                         }
                         cx.notify();
-                    })),
-            );
+                    }
+                });
+            });
+            let panel = super::parts::ChoiceMenu::new("link-choice", 200., on_pick)
+                .rows(rows)
+                .divider_before(n)
+                .build();
             d.child(self.popover(Menu::AddLink, true, 28., panel, cx))
         })
     }
@@ -1024,7 +1031,7 @@ const SEND_PRESSED: f32 = 21.;
 const SEND_EASE: u64 = 160;
 
 /// A group's name in a node's links: its relation, its docs, its sessions.
-fn group_label(label: &str) -> Div {
+pub(super) fn group_label(label: &str) -> Div {
     div()
         .text_xs()
         .font_weight(FontWeight::MEDIUM)

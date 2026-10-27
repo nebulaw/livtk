@@ -44,10 +44,12 @@ pub struct DocItem {
     pub line: Option<String>,
 }
 
-/// A link waiting for its other end: from (or to) `node`, by `choice`.
+/// A link waiting for its other end: from (or to) `node`, by `choice`. With no node, the one
+/// the new-node form is making: the link waits in its draft until it is made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkPick {
-    pub node: Uuid,
+    pub node: Option<Uuid>,
+    /// What the palette says it links: the node's key, or what the form makes.
     pub key: String,
     pub kind: Kind,
     pub choice: LinkChoice,
@@ -57,7 +59,7 @@ impl LinkPick {
     /// Whether `other` can be this link's other end, by the core's rule.
     fn accepts(&self, other: &Found) -> bool {
         let rel = self.choice.rel;
-        other.id != self.node
+        Some(other.id) != self.node
             && if self.choice.outgoing {
                 link_allowed(self.kind, rel, other.kind)
             } else {
@@ -185,9 +187,31 @@ impl Model {
         }
         self.palette = Some(Palette {
             link: Some(LinkPick {
-                node: row.id,
+                node: Some(row.id),
                 key: row.key,
                 kind: row.kind,
+                choice,
+            }),
+            ..Palette::default()
+        });
+        self.palette_query("");
+    }
+
+    /// Open the palette to pick the other end of a link for the node the form is making.
+    pub fn open_draft_link_picker(&mut self, choice: LinkChoice) {
+        let Some(making) = self.draft.as_ref().map(|d| d.making) else {
+            return;
+        };
+        if let Some(p) = self.projects.get_mut(self.current)
+            && let Err(e) = p.ws.prepare_search()
+        {
+            self.warn(e.to_string());
+        }
+        self.palette = Some(Palette {
+            link: Some(LinkPick {
+                node: None,
+                key: making.spec().title.to_owned(),
+                kind: making.spec().kind,
                 choice,
             }),
             ..Palette::default()
@@ -388,7 +412,17 @@ impl Model {
         let item = p.items.into_iter().nth(index)?;
         match (p.link, p.doc_pick, item) {
             (Some(pick), _, Item::Node(other)) => {
-                self.link(pick.node, pick.choice, other.id);
+                match pick.node {
+                    Some(node) => self.link(node, pick.choice, other.id),
+                    None => {
+                        if let Some(d) = self.draft.as_mut() {
+                            d.add_link(super::making::Pending {
+                                choice: pick.choice,
+                                to: other,
+                            });
+                        }
+                    }
+                }
                 None
             }
             (_, Some(DocPick::ForNode(key)), Item::Doc(d)) => {

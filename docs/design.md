@@ -114,6 +114,20 @@ them and never restyle them.
   row's size. An icon (or the accent's dot), a label cut when narrow, then a key hint or a few
   `TEXT_4` words kept whole. Muted (`TEXT_4`, `TEXT_3` on hover) or accent (`ACCENT_HOVER`), and
   disabled (no hover) while there is nothing to do.
+- **Chips** (`ui/parts/chip.rs`): a property as a 24px pill, a mark or icon then its value. Unset,
+  it says the property's name in `TEXT_4` with a dashed edge; open, it is lit (`SELECTED`) while
+  its menu shows. The new-node form's properties and Add link are chips.
+- **Choice menus** (`ui/parts/choice_menu.rs`): a menu that picks one. A field on top finds a
+  choice by typing (or types a new value, as a new owner); each row a lead, a label, quiet words
+  after, the chosen one ticked; up and down move the highlight, Enter picks, Esc closes. What the
+  choices are is the model's; the menu only draws them. The panel's Add link is one too.
+- **Date picker** (`ui/parts/date_picker.rs`): a field for a date in words ("Dec 15", "next
+  friday", "in 2 weeks", "eom", or ISO), the quick picks, a month's grid (today in the accent's
+  text, the date set filled in the accent), the way to the month before and after, and Clear.
+  The keys: up and down a week, left and right a day and Home and End the week's ends while its
+  field is empty, Page Up and Page Down a month, Enter picks the date typed or the day the keys
+  are on. Text it cannot read is said under the field, never guessed. Dates only, no times; the
+  dates themselves are `model::dates`, tested on their own.
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the
   highlight glides from row to row. A row leads with the same slot (priority or kind), then key,
   state, title, and ends with when it changed. Rows say something at a glance, never a bare name.
@@ -130,10 +144,18 @@ them and never restyle them.
 - **Radii**: `rounded_lg` for rows, fields and buttons; `rounded_xl` for menus, popovers, bars
   that float, cards.
 - **Empty states**: an icon, a line, what to do, and a button that does it.
-- **New-node form**: one modal for every kind it makes, its fields from the kind. N makes a task
-  (title, plan, priority), P a project (outcome, why and how, done when, target, owner, part of,
-  and Commit to it now, on). The dock's main button and an empty list make what the view lists.
-  A new kind joins the form as a row of `Making` and its fields, never as another form.
+- **New-node form**: one modal for every kind it makes, one grammar (prototype:
+  `docs/prototypes/new-node-form.html`). Its head says where it goes (the project) and what it
+  makes, with its close. Then its title and body, flush with the card's edge; the body grows
+  with its text to a cap. Then one row of chips, the kind's properties then **Add link**: a task's
+  State (Backlog or Planned), Priority, Project and Agent; a project's Status (Active or
+  Proposed), Owner, Target date and Part of. Add link offers the relations the panel's Add link
+  does, then the palette picks the node; the links show below the chips, grouped by relation,
+  named as everywhere, × to take one back. A node has one parent, so a "Part of…" link and the
+  Project chip take each other's place. Its foot: **Create more** (the form stays, emptied, its
+  chips kept) on the left; Cancel and Create (⌘↵, dimmed until there is a title) on the right.
+  N makes a task, P a project; the dock's main button and an empty list make what the view
+  lists. A new kind joins the form as a row of `Making` with its `Prop`s, never as another form.
 - **Timeline** (a node's Activity): one rail, oldest first, each event a 20px mark on it, each
   kind its own glyph in the same circle (`ui/timeline/kinds.rs` is the one table). What happened
   is solid. Two levels (`model/timeline.rs` holds the rules): the rail is the node's life (its

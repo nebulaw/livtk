@@ -12,6 +12,7 @@ use uuid::Uuid;
 mod activity;
 pub mod agents;
 pub mod contour;
+pub mod dates;
 pub mod docs;
 mod flow;
 mod graph;
@@ -691,6 +692,8 @@ pub struct Model {
     arrivals: Vec<Arrival>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
+    /// The new-node form's draft, while it is open.
+    pub draft: Option<making::Draft>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
     pub activity: Vec<livtk_core::Activity>,
     /// Agents and Sessions: the agent files, and the sessions.
@@ -924,6 +927,7 @@ impl Model {
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,
+            draft: None,
             activity: Vec::new(),
             agents: agents::AgentsPlace::default(),
             flow: None,

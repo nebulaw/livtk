@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New node form</title>
+<style>
+  :root {
+    --window: #010102; --content: #08090a; --surface: #0f1011; --hover: #141516;
+    --selected: #18191a; --border: #23252a; --border-strong: #34343a;
+    --text: #f7f8f8; --text-2: #d0d6e0; --text-3: #8a8f98; --text-4: #62666d;
+    --accent: #5e6ad2; --accent-hover: #828fff;
+    --p1: #eb5757; --p2: #f2994a; --p3: #8a8f98; --p4: #62666d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--window); color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  }
+  /* The window behind, dimmed. */
+  .behind { position: fixed; inset: 0; padding: 24px; display: grid; grid-template-columns: 220px 1fr; gap: 8px; }
+  .behind div { background: var(--content); border: 1px solid var(--border); border-radius: 10px; }
+  .dim { position: fixed; inset: 0; background: rgba(0,0,0,.6); }
+  .switch { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; z-index: 5; }
+  .switch button { all: unset; cursor: pointer; padding: 4px 12px; border-radius: 999px; color: var(--text-3); font-size: 12px; }
+  .switch button.on { background: var(--selected); color: var(--text); }
+
+  /* The card. */
+  .card { position: fixed; top: 110px; left: 50%; transform: translateX(-50%); width: 640px; max-width: calc(100vw - 32px);
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 24px 48px rgba(0,0,0,.5); display: flex; flex-direction: column; }
+  .head { display: flex; align-items: center; gap: 6px; padding: 12px 16px 0; font-size: 12px; color: var(--text-3); }
+  .crumb { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border: 1px solid var(--border-strong);
+    border-radius: 999px; color: var(--text-2); }
+  .crumb .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+  .head .sep { color: var(--text-4); }
+  .head .spacer { flex: 1; }
+  .icon-btn { all: unset; cursor: pointer; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--text-4); }
+  .icon-btn:hover { background: var(--hover); color: var(--text-2); }
+
+  .body { padding: 8px 16px 4px; display: flex; flex-direction: column; }
+  .title { all: unset; font-size: 18px; font-weight: 500; color: var(--text); padding: 6px 0 2px; }
+  .title::placeholder, .desc::placeholder { color: var(--text-4); }
+  .desc { all: unset; font-size: 13px; color: var(--text-2); min-height: 60px; max-height: 240px; overflow: auto; padding: 4px 0 8px;
+    white-space: pre-wrap; }
+  /* Properties: one row of chips, every kind the same. Unset says what it is, quietly. */
+  .props { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px 14px; position: relative; }
+  .chip { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px;
+    border: 1px solid var(--border-strong); border-radius: 999px; font-size: 12px; color: var(--text-2); position: relative; }
+  .chip:hover { background: var(--hover); }
+  .chip.unset { color: var(--text-4); border-style: dashed; }
+  .chip:focus-visible { outline: 1px solid var(--accent); }
+  .pmark { display: inline-flex; gap: 1.5px; align-items: flex-end; height: 10px; }
+  .pmark i { width: 2.5px; background: var(--text-4); border-radius: 1px; }
+  .pmark i.on { background: currentColor; }
+  .state { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-3); }
+  .state.active { border-color: var(--accent); background: radial-gradient(var(--accent) 35%, transparent 40%); }
+  .state.planned { border-color: var(--text-2); border-style: dashed; }
+
+  /* A chip's menu: a filter on top, the choices, the one chosen ticked. */
+  .menu { position: absolute; z-index: 10; min-width: 220px; background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 4px; display: none; }
+  .menu.open { display: block; }
+  .menu input { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 7px 8px; font-size: 12px;
+    border-bottom: 1px solid var(--border); margin-bottom: 4px; color: var(--text); }
+  .menu .item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 8px; cursor: pointer; color: var(--text-2); font-size: 12px; }
+  .menu .item:hover, .menu .item.hl { background: var(--selected); }
+  .menu .item .sub { color: var(--text-4); margin-left: auto; }
+  .menu .item .tick { margin-left: auto; color: var(--text-3); }
+  .menu .note { color: var(--text-4); font-size: 11px; padding: 6px 8px 4px; }
+  .cal { display: grid; grid-template-columns: repeat(7, 28px); gap: 2px; padding: 6px 4px; }
+  .cal span { height: 26px; display: grid; place-items: center; border-radius: 6px; color: var(--text-3); font-size: 11px; cursor: pointer; }
+  .cal span:hover { background: var(--selected); color: var(--text); }
+  .cal span.h { color: var(--text-4); cursor: default; }
+  .cal span.h:hover { background: none; }
+  .cal span.today { color: var(--accent-hover); }
+  .cal span.sel { background: var(--accent); color: var(--text); }
+
+  /* Links, as the task panel has them: a label, Add link, the links grouped by relation. */
+  .links { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .links:empty { display: none; }
+  .links .top { display: flex; align-items: center; }
+  .links .label { font-size: 11px; font-weight: 500; color: var(--text-4); }
+  .links .spacer { flex: 1; }
+  .add-link { all: unset; cursor: pointer; height: 24px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 8px; font-size: 12px; color: var(--text-3); }
+  .add-link:hover, .add-link.open { background: var(--hover); color: var(--text); }
+  .group { display: flex; flex-direction: column; gap: 2px; }
+  .group .name { font-size: 11px; color: var(--text-4); padding: 0 2px 2px; }
+  .linked { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px; color: var(--text-2); }
+  .linked:hover { background: var(--hover); }
+  .linked .key { color: var(--text-4); }
+  .linked .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .linked .x { all: unset; cursor: pointer; color: var(--text-4); width: 18px; text-align: center; visibility: hidden; }
+  .linked:hover .x { visibility: visible; }
+  .linked .x:hover { color: var(--text); }
+  .smark { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--text-3); flex: none; }
+  .smark.doing { border-color: #f2c94c; background: conic-gradient(#f2c94c 0 50%, transparent 50%); }
+  .smark.done { border-color: var(--accent); background: var(--accent); }
+  .smark.planned { border-style: dashed; border-color: var(--text-2); }
+
+  .foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border); }
+  .more { display: inline-flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; cursor: pointer; user-select: none; }
+  .tog { width: 26px; height: 15px; border-radius: 999px; background: var(--border-strong); position: relative; transition: background .15s; }
+  .tog::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--text-2); transition: left .15s; }
+  .tog.on { background: var(--accent); }
+  .tog.on::after { left: 13px; }
+  .foot .spacer { flex: 1; }
+  .btn { all: unset; cursor: pointer; height: 28px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+  .btn.ghost { color: var(--text-3); }
+  .btn.ghost:hover { background: var(--hover); color: var(--text-2); }
+  .btn.primary { background: var(--accent); color: var(--text); }
+  .btn.primary:hover { background: var(--accent-hover); }
+  .btn.primary[aria-disabled="true"] { opacity: .45; cursor: default; }
+  .btn kbd { font: inherit; font-size: 11px; opacity: .7; }
+
+  .notes { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: 640px; max-width: calc(100vw - 32px);
+    color: var(--text-4); font-size: 12px; }
+  .notes b { color: var(--text-3); font-weight: 500; }
+  @media (max-width: 680px) { .notes { display: none; } }
+</style>
+</head>
+<body>
+<div class="behind"><div></div><div></div></div>
+<div class="dim"></div>
+<div class="switch"><button data-kind="task" class="on">New task (N)</button><button data-kind="project">New project (P)</button></div>
+
+<div class="card" id="card">
+  <div class="head">
+    <span class="crumb"><span class="dot"></span>tasks</span>
+    <span class="sep">›</span>
+    <span id="what">New task</span>
+    <span class="spacer"></span>
+    <button class="icon-btn" title="Open as a full page">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 3h4v4M7 13H3V9M13 3 9 7M3 13l4-4"/></svg>
+    </button>
+    <button class="icon-btn" title="Close (Esc)">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+    </button>
+  </div>
+  <div class="body">
+    <input class="title" id="title" placeholder="Task title" autofocus>
+    <textarea class="desc" id="desc" rows="3" placeholder="Add a plan: the goal, the approach, how you'll know it's done…"></textarea>
+  </div>
+  <div class="props" id="props"></div>
+  <div class="links" id="groups"></div>
+  <div class="foot">
+    <span class="more" id="more"><span class="tog" id="moreTog"></span>Create more</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="cancel">Cancel</button>
+    <button class="btn primary" id="create">Create task <kbd>⌘↵</kbd></button>
+  </div>
+</div>
+
+<div class="notes">
+  <b>One grammar for every kind:</b> where it goes, its title, its body, then one row of properties as chips, then Create.
+  A chip that's unset says what it is, dashed and quiet; each opens a menu you can type into.
+  Add link is a chip too: the relation, then the node; the links show below the row, grouped by relation, × unlinks.
+</div>
+
+<div class="menu" id="menu"></div>
+
+<script>
+const PRI = [["Urgent", 4, "var(--p1)"], ["High", 3, "var(--p2)"], ["Medium", 2, "var(--p3)"], ["Low", 1, "var(--p4)"]];
+const pmark = (n, c) => `<span class="pmark" style="color:${c}">${[1,2,3].map(i => `<i class="${i <= Math.min(n,3) ? "on" : ""}" style="height:${3+i*2.5}px"></i>`).join("")}</span>`;
+const PROJECTS = [["TAS-1", "livtk 1.0"], ["TAS-34", "Attachments"], ["TAS-99", "Git in livtk"]];
+const PEOPLE = [["you", "You"], ["claude", "Claude"]];
+const NODES = [["TAS-94", "Attachments in the core and CLI: files and links on a task", "planned"],
+  ["TAS-99", "Git in the core and CLI: status, history, branches", "planned"],
+  ["TAS-105", "Research, fix hierarchies in Activity", "done"],
+  ["TAS-108", "Fix parent activity point height", "done"],
+  ["TAS-109", "Run tests: a turn sometimes never starts", "backlog"],
+  ["DOC-3", "The app's grammar", "doc"]];
+// The panel's relations, by kind: the same table the task panel's Add link reads.
+const LINKS = {
+  task: ["Waits for", "Blocks", "Part of", "Sub-tasks", "Related to"],
+  project: ["Related to"],
+};
+const linked = { task: [], project: [] };
+const AGENTS = [["", "Default", "livtk's own for the stage"], ["livtk:implementer", "implementer", "livtk"], ["livtk:researcher", "researcher", "livtk"]];
+
+const kinds = {
+  task: {
+    what: "New task", title: "Task title", create: "Create task",
+    desc: "Add a plan: the goal, the approach, how you'll know it's done…",
+    props: {
+      state: { label: "State", value: "backlog", choices: [["backlog", "Backlog", "to plan"], ["planned", "Planned", "plan written, waits for your ack"]] },
+      priority: { label: "Priority", value: 2 },
+      project: { label: "Project", value: null, choices: PROJECTS },
+      agent: { label: "Agent", value: "", choices: AGENTS },
+    },
+  },
+  project: {
+    what: "New project", title: "The outcome, in a line", create: "Create project",
+    desc: "Why it matters, and how it gets there…",
+    props: {
+      status: { label: "Status", value: "active", choices: [["active", "Active", "committed: work on it now"], ["proposed", "Proposed", "an idea, not yet committed"]] },
+      owner: { label: "Owner", value: null, choices: PEOPLE },
+      target: { label: "Target date", value: null },
+      partOf: { label: "Part of", value: null, choices: PROJECTS },
+    },
+  },
+};
+let kind = "task";
+const $ = id => document.getElementById(id);
+
+function chip(name, p) {
+  const set = p.value !== null && p.value !== undefined;
+  let inner;
+  switch (name) {
+    case "priority": { const [n, b, c] = PRI.find(x => x[1] === p.value) || PRI[2]; inner = pmark(b, c) + n; break; }
+    case "state": case "status": {
+      const [v, l] = p.choices.find(c => c[0] === p.value);
+      inner = `<span class="state ${v}"></span>${l}`; break;
+    }
+    case "agent": { const a = p.choices.find(c => c[0] === p.value); inner = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="10" height="8" rx="2"/><path d="M8 2v3M6 9h0M10 9h0"/></svg>` + (p.value ? a[1] : "Agent: Default"); break; }
+    case "target": inner = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3.5" width="11" height="10" rx="2"/><path d="M2.5 7h11M5.5 2v3M10.5 2v3"/></svg>` + (set ? fmt(p.value) : p.label); break;
+    case "owner": inner = `<span style="width:14px;height:14px;border-radius:50%;background:var(--selected);border:1px solid var(--border-strong);display:inline-block"></span>` + (set ? p.choices.find(c => c[0] === p.value)[1] : p.label); break;
+    default: inner = (set ? `<span style="color:var(--text-4)">${p.label}</span> ` + p.choices.find(c => c[0] === p.value)[1] : p.label);
+  }
+  const unset = !set || (name === "agent" && !p.value);
+  return `<button class="chip ${unset ? "unset" : ""}" data-p="${name}">${inner}</button>`;
+}
+function fmt(d) { return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" }); }
+
+function render() {
+  const k = kinds[kind];
+  $("what").textContent = k.what;
+  $("title").placeholder = k.title;
+  $("desc").placeholder = k.desc;
+  renderLinks();
+  // Add link is a chip like the others; the links it adds show below the row.
+  $("props").innerHTML = Object.entries(k.props).map(([n, p]) => chip(n, p)).join("") +
+    `<button class="chip unset" id="addLink"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>Add link</button>`;
+  document.querySelectorAll(".switch button").forEach(b => b.classList.toggle("on", b.dataset.kind === kind));
+  updateCreate();
+}
+function updateCreate() {
+  const k = kinds[kind];
+  const titled = $("title").value.trim();
+  $("create").innerHTML = `${k.create} <kbd>⌘↵</kbd>`;
+  $("create").setAttribute("aria-disabled", !titled);
+  $("create").title = titled ? "" : "Give it a title";
+}
+function renderLinks() {
+  const by = {};
+  linked[kind].forEach(([rel, key], i) => (by[rel] ||= []).push([key, i]));
+  $("groups").innerHTML = Object.entries(by).map(([rel, ks]) => `<div class="group"><div class="name">${rel}</div>` +
+    ks.map(([key, i]) => { const n = NODES.find(n => n[0] === key);
+      return `<div class="linked"><span class="smark ${n[2]}"></span><span class="key">${n[0]}</span><span class="t">${n[1]}</span><button class="x" data-unlink="${i}" title="Unlink">×</button></div>`; }).join("") +
+    `</div>`).join("");
+}
+// Add link: the relation first, then the node, found by typing: as the task panel does.
+function openAddLink(at) {
+  const m = $("menu");
+  m.innerHTML = LINKS[kind].map(r => `<div class="item" data-rel="${r}">${r}…</div>`).join("");
+  place(m, at); m.dataset.p = "link"; $("addLink").classList.add("open");
+}
+function openPick(rel, at) {
+  const m = $("menu");
+  const taken = linked[kind].map(l => l[1]);
+  const rows = q => NODES.filter(n => !taken.includes(n[0]) && (n[0] + " " + n[1]).toLowerCase().includes(q))
+    .map(n => `<div class="item" data-node="${n[0]}"><span class="smark ${n[2]}"></span><span style="color:var(--text-4)">${n[0]}</span> ${n[1]}</div>`).join("");
+  m.innerHTML = `<input placeholder="${rel}: find a task or doc…"><div id="pickRows">${rows("")}</div>`;
+  m.dataset.p = "pick"; m.dataset.rel = rel;
+  const f = m.querySelector("input"); f.focus();
+  f.oninput = () => { $("pickRows").innerHTML = rows(f.value.toLowerCase()); };
+}
+function place(m, at) {
+  const r = at.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - 300)) + "px";
+  m.style.top = (r.bottom + 6) + "px";
+  m.style.minWidth = "280px";
+  m.classList.add("open");
+}
+
+function openMenu(name, at) {
+  const p = kinds[kind].props[name];
+  const m = $("menu");
+  let html = "";
+  if (name === "priority") {
+    html = PRI.map(([n, b, c], i) => `<div class="item" data-v="${b}">${pmark(b, c)}${n}${p.value === b ? '<span class="tick">✓</span>' : ""}</div>`).join("");
+  } else if (name === "target") {
+    const now = new Date(), y = now.getFullYear(), mo = now.getMonth();
+    const quick = [["End of this week", new Date(y, mo, now.getDate() + (5 - now.getDay() + 7) % 7)],
+                   ["End of this month", new Date(y, mo + 1, 0)],
+                   ["End of the quarter", new Date(y, Math.floor(mo / 3) * 3 + 3, 0)]];
+    const first = new Date(y, mo, 1).getDay(), days = new Date(y, mo + 1, 0).getDate();
+    const cells = ["S","M","T","W","T","F","S"].map(d => `<span class="h">${d}</span>`)
+      .concat(Array(first).fill(`<span class="h"></span>`))
+      .concat(Array.from({ length: days }, (_, i) => {
+        const d = new Date(y, mo, i + 1);
+        const cls = (p.value && +p.value === +d) ? "sel" : (i + 1 === now.getDate() ? "today" : "");
+        return `<span class="${cls}" data-d="${+d}">${i + 1}</span>`;
+      }));
+    html = `<input placeholder="Type a date: Dec 15, next friday, 2026-12-15">` +
+      quick.map(([l, d]) => `<div class="item" data-d="${+d}">${l}<span class="sub">${fmt(d)}</span></div>`).join("") +
+      `<div class="note">${now.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</div><div class="cal">${cells.join("")}</div>` +
+      (p.value ? `<div class="item" data-d="">Clear the date</div>` : "");
+  } else {
+    const none = (name === "project" || name === "partOf" || name === "owner")
+      ? `<div class="item" data-v="">No ${p.label.toLowerCase()}${p.value === null ? '<span class="tick">✓</span>' : ""}</div>` : "";
+    html = `<input placeholder="${name === "owner" ? "A name, or type one" : "Find…"}">` + none +
+      p.choices.map(([v, l, sub]) => `<div class="item" data-v="${v}">${l}${p.value === v ? '<span class="tick">✓</span>' : sub ? `<span class="sub">${sub}</span>` : ""}</div>`).join("");
+  }
+  m.innerHTML = html;
+  const r = at.getBoundingClientRect();
+  m.style.minWidth = "";
+  m.style.left = Math.min(r.left, innerWidth - 240) + "px";
+  m.style.top = (r.bottom + 6) + "px";
+  m.classList.add("open");
+  m.dataset.p = name;
+  const f = m.querySelector("input"); if (f) f.focus();
+}
+
+document.addEventListener("click", e => {
+  const m = $("menu");
+  const c = e.target.closest(".chip:not(#addLink)");
+  const close = () => { m.classList.remove("open"); m.style.minWidth = ""; $("addLink").classList.remove("open"); };
+  if (c) { e.stopPropagation(); return m.classList.contains("open") && m.dataset.p === c.dataset.p ? close() : openMenu(c.dataset.p, c); }
+  if (e.target.closest("#addLink")) { e.stopPropagation(); return m.classList.contains("open") && m.dataset.p === "link" ? close() : openAddLink($("addLink")); }
+  const rel = e.target.closest(".menu .item[data-rel]");
+  if (rel) { e.stopPropagation(); return openPick(rel.dataset.rel); }
+  const node = e.target.closest(".menu .item[data-node]");
+  if (node) { linked[kind].push([m.dataset.rel, node.dataset.node]); close(); return renderLinks(); }
+  const un = e.target.closest("[data-unlink]");
+  if (un) { linked[kind].splice(+un.dataset.unlink, 1); return renderLinks(); }
+  const it = e.target.closest(".menu .item, .menu .cal span[data-d]");
+  if (it) {
+    const p = kinds[kind].props[m.dataset.p];
+    if ("d" in it.dataset) p.value = it.dataset.d ? new Date(+it.dataset.d) : null;
+    else p.value = m.dataset.p === "priority" ? +it.dataset.v : (it.dataset.v === "" && m.dataset.p !== "agent" ? null : it.dataset.v);
+    m.classList.remove("open"); render(); return;
+  }
+  if (!e.target.closest(".menu")) close();
+});
+document.querySelectorAll(".switch button").forEach(b => b.onclick = () => { kind = b.dataset.kind; render(); $("title").focus(); });
+$("more").onclick = () => $("moreTog").classList.toggle("on");
+$("title").oninput = updateCreate;
+// The desc grows with its text, to a cap, then scrolls.
+$("desc").oninput = e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 240) + "px"; };
+render();
+</script>
+</body>
+</html>

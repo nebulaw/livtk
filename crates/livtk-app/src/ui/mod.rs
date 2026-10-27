@@ -19,6 +19,7 @@ mod graph;
 pub mod icons;
 mod list;
 pub mod menus;
+mod new_form;
 mod node_ref;
 mod notices;
 mod overlays;
@@ -47,7 +48,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::model::making::{Making, New};
+use crate::model::making::{Making, Prop};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{self, Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::text::TextView;
@@ -56,6 +57,7 @@ use gpui_kit::*;
 use livtk_core::event::{Event, Op};
 use livtk_core::format::duration;
 use livtk_core::{Kind, State, Summary};
+use new_form::{DateState, NewForm};
 use uuid::Uuid;
 
 use crate::model::Axis as PaneAxis;
@@ -196,7 +198,6 @@ pub(super) const ORDERINGS: &[(&str, &str, Ordering)] = &[
     ("order-created", "Created", Ordering::Created),
 ];
 
-pub(super) const PRIORITY_IDS: [&str; 4] = ["priority-1", "priority-2", "priority-3", "priority-4"];
 /// Inside the palette's field: arrows move the highlight instead of the cursor.
 const PALETTE_FIELD: &str = "LivtkPalette > Input";
 
@@ -702,29 +703,6 @@ enum Part {
     Block(text::BlockAt),
 }
 
-/// The form that makes a node: its kind, its title and body, and the fields its kind adds.
-struct NewForm {
-    making: Making,
-    title: Entity<InputState>,
-    body: Entity<TextareaState>,
-    fields: Fields,
-}
-
-/// The fields a kind adds to the form.
-enum Fields {
-    Task {
-        priority: u8,
-    },
-    Project {
-        done_when: Entity<InputState>,
-        target: Entity<InputState>,
-        owner: Entity<InputState>,
-        /// The project it is part of: its key and title.
-        part_of: Option<(String, String)>,
-        commit: bool,
-    },
-}
-
 pub struct LivtkApp {
     model: Model,
     nav: FocusHandle,
@@ -752,6 +730,12 @@ pub struct LivtkApp {
     note_ready: std::cell::Cell<(bool, Option<Instant>)>,
     /// The command palette's field; what it holds lives in the model.
     palette_input: Entity<InputState>,
+    /// The field atop an open chip menu of the new-node form: what it finds, or a date typed.
+    menu_query: Entity<InputState>,
+    /// The choice the keys are on in an open chip menu.
+    menu_hl: usize,
+    /// Where the open date picker is.
+    date: DateState,
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
@@ -909,6 +893,7 @@ impl LivtkApp {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter…"));
         let palette_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search…"));
+        let menu_query = cx.new(|cx| InputState::new(window, cx).placeholder("Find…"));
         let reader = docs::Reader::new(window, cx);
         let settings = settings::Settings::new(window, cx);
         let agent_form = agents::AgentForm::new(window, cx);
@@ -916,6 +901,13 @@ impl LivtkApp {
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
+            cx.subscribe_in(&menu_query, window, |this, _, event: &InputEvent, _, cx| {
+                // What is typed finds anew, from the top.
+                if let InputEvent::Change = event {
+                    this.menu_hl = 0;
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&reader.find, window, Self::on_find),
             cx.subscribe_in(&settings.gate, window, Self::on_gate_input),
             cx.subscribe_in(&settings.rule, window, Self::on_rule_input),
@@ -1037,6 +1029,13 @@ impl LivtkApp {
             follows_system: false,
             list_scrolls: Default::default(),
             palette_input,
+            menu_query,
+            menu_hl: 0,
+            date: DateState {
+                month: crate::model::dates::Month::of(jiff::Zoned::now().date()),
+                cursor: jiff::Zoned::now().date(),
+                unread: None,
+            },
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
@@ -1240,6 +1239,13 @@ impl LivtkApp {
         self.form.is_some()
     }
 
+    /// What the new-node form's title holds, while it is open.
+    pub fn form_title(&self, cx: &App) -> Option<String> {
+        self.form
+            .as_ref()
+            .map(|f| f.title.read(cx).value().to_string())
+    }
+
     /// The open menu.
     pub fn menu_open(&self) -> Option<&'static str> {
         self.menu.map(|m| match m {
@@ -1247,7 +1253,8 @@ impl LivtkApp {
             Menu::Grouping => "grouping",
             Menu::Ordering => "ordering",
             Menu::View => "view",
-            Menu::Priority => "priority",
+            Menu::FormProp(p) => p.id(),
+            Menu::FormLink => "form-add-link",
             Menu::RowPriority(_) => "row-priority",
             Menu::DetailPriority => "detail-priority",
             Menu::AddLink => "add-link",
@@ -1260,7 +1267,6 @@ impl LivtkApp {
             Menu::DetailAgent => "detail-agent",
             Menu::DetailWorktree => "detail-worktree",
             Menu::DetailProject => "detail-project",
-            Menu::PartOf => "part-of",
         })
     }
 
@@ -1447,7 +1453,11 @@ impl LivtkApp {
             cx.notify();
             return;
         }
-        self.focus_main(window, cx);
+        // A link picked for the form being filled: the keys go back to the form.
+        match &self.form {
+            Some(form) => form.title.read(cx).focus_handle(cx).focus(window, cx),
+            None => self.focus_main(window, cx),
+        }
         // Going to a node may have cleared the filter that hid it.
         self.sync_filter(window, cx);
         match ask {
@@ -1752,105 +1762,6 @@ impl LivtkApp {
             .and_then(|c| c.into_iter().find(|c| pick(c)));
         if let Some(c) = found {
             self.choose(&c, cx);
-        }
-    }
-
-    /// New Task, from anywhere: the form, over whatever else was open. One already open keeps its
-    /// half-typed text and gets the keys back.
-    /// Open the form making a node of kind `making`; one already open keeps the keys.
-    fn open_form(&mut self, making: Making, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(form) = &self.form {
-            form.title.read(cx).focus_handle(cx).focus(window, cx);
-            return;
-        }
-        self.close_overlays(window, cx);
-        let (title_hint, body_hint) = (making.spec().title_hint, making.spec().body_hint);
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder(title_hint));
-        let body = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(body_hint)
-                .auto_grow(5, 14)
-        });
-        let sub = cx.subscribe_in(&title, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.submit_form(window, cx);
-            }
-        });
-        self._subscriptions.push(sub);
-        // The body's textarea takes Ctrl+Enter itself, so the form's binding never sees it: it
-        // reports it as a secondary Enter (after putting in the newline Enter does).
-        let sub = cx.subscribe_in(&body, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter {
-                secondary: true, ..
-            } = event
-            {
-                this.submit_form(window, cx);
-            }
-        });
-        self._subscriptions.push(sub);
-        let fields = match making {
-            Making::Task => Fields::Task { priority: 3 },
-            Making::Project => {
-                let field = |hint: &'static str, window: &mut Window, cx: &mut Context<Self>| {
-                    cx.new(|cx| InputState::new(window, cx).placeholder(hint))
-                };
-                Fields::Project {
-                    done_when: field("Done when… (what will be true)", window, cx),
-                    target: field("YYYY-MM-DD", window, cx),
-                    owner: field("Who owns it", window, cx),
-                    part_of: None,
-                    commit: true,
-                }
-            }
-        };
-        title.read(cx).focus_handle(cx).focus(window, cx);
-        self.form = Some(NewForm {
-            making,
-            title,
-            body,
-            fields,
-        });
-        cx.notify();
-    }
-
-    fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &self.form else { return };
-        let title = form.title.read(cx).value().to_string();
-        // Without the newline Ctrl+Enter leaves at the end.
-        let body = form.body.read(cx).value().trim_end().to_owned();
-        let value = |f: &Entity<InputState>| -> Option<String> {
-            let v = f.read(cx).value().trim().to_owned();
-            (!v.is_empty()).then_some(v)
-        };
-        let new = match &form.fields {
-            Fields::Task { priority } => New::Task {
-                title,
-                body,
-                priority: *priority,
-            },
-            Fields::Project {
-                done_when,
-                target,
-                owner,
-                part_of,
-                commit,
-            } => New::Project(livtk_core::NewProject {
-                title,
-                body,
-                done_when: value(done_when).unwrap_or_default(),
-                target: value(target),
-                owner: value(owner),
-                part_of: part_of.as_ref().map(|(k, _)| k.clone()),
-                commit: *commit,
-            }),
-        };
-        if self.model.create(new) {
-            self.form = None;
-            self.sync_filter(window, cx);
-            self.focus_main(window, cx);
-            self.after_move(cx);
-        } else {
-            cx.notify();
         }
     }
 
@@ -2214,6 +2125,7 @@ impl LivtkApp {
             self.model.close_palette();
         } else {
             self.form = None;
+            self.model.close_draft();
         }
         self.menu = None;
         self.restore_focus(window, cx);
@@ -2224,6 +2136,7 @@ impl LivtkApp {
         self.model.close_palette();
         self.menu = None;
         self.form = None;
+        self.model.close_draft();
         self.help = false;
         self.about = false;
         self.focus_main(window, cx);
@@ -2390,48 +2303,6 @@ impl LivtkApp {
                 )
                 .with_priority(1),
             )
-    }
-
-    /// A button that opens a menu of choices, showing the current one, as Linear's selects do.
-    fn select(
-        &self,
-        menu: Menu,
-        id: &'static str,
-        current: Div,
-        panel: impl FnOnce(&Self, &mut Context<Self>) -> Div,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let open = self.menu == Some(menu);
-        let button = div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .h(px(28.))
-            .pl_2()
-            .pr(px(6.))
-            .flex()
-            .items_center()
-            .gap_2()
-            .rounded_lg()
-            .border_1()
-            .text_color(color(TEXT_2))
-            .when(open, |b| {
-                b.bg(color(SELECTED)).border_color(color(BORDER_STRONG))
-            })
-            .when(!open, |b| {
-                b.border_color(color(BORDER))
-                    .hover(|h| h.bg(color(HOVER)).text_color(color(TEXT)))
-            })
-            .child(current)
-            // Small, as Linear keeps its chevrons: the filled caret is heavy at text size.
-            .child(icon(Icon::CaretDown, 10., TEXT_4))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx)),
-            );
-        div().relative().child(button).when(open, |d| {
-            let panel = panel(self, cx);
-            d.child(self.popover(menu, false, 32., panel, cx))
-        })
     }
 
     fn filter_menu(&self, cx: &mut Context<Self>) -> Div {
@@ -2706,71 +2577,6 @@ impl LivtkApp {
             }
             d.child(self.popover(menu, false, 26., panel, cx))
         })
-    }
-
-    /// The project a new one is part of: none, or any project there is.
-    fn part_of_menu(&self, cx: &mut Context<Self>) -> Div {
-        let current = match self.form.as_ref().map(|f| &f.fields) {
-            Some(Fields::Project { part_of, .. }) => part_of.as_ref().map(|(k, _)| k.clone()),
-            _ => None,
-        };
-        let mut panel = menu_panel(280.).debug_selector(|| "part-of-menu".into());
-        let choices =
-            std::iter::once(None).chain(self.model.project_choices().into_iter().map(Some));
-        for choice in choices {
-            let key = choice.as_ref().map(|(k, _)| k.clone());
-            let id = format!("part-of-{}", key.as_deref().unwrap_or("none"));
-            let label = choice
-                .as_ref()
-                .map_or_else(|| "None".to_owned(), |(k, t)| format!("{k}  {t}"));
-            panel = panel.child(
-                option_row(SharedString::from(id.clone()))
-                    .debug_selector(move || id.clone())
-                    .child(div().flex_1().truncate().child(label))
-                    .child(check(current == key))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(NewForm {
-                            fields: Fields::Project { part_of, .. },
-                            ..
-                        }) = &mut this.form
-                        {
-                            part_of.clone_from(&choice);
-                        }
-                        this.close_menu(window, cx);
-                    })),
-            );
-        }
-        panel
-    }
-
-    /// The new task's priority, chosen from a menu as in Linear's issue composer.
-    fn priority_menu(&self, cx: &mut Context<Self>) -> Div {
-        let current = match self.form.as_ref().map(|f| &f.fields) {
-            Some(Fields::Task { priority }) => *priority,
-            _ => 3,
-        };
-        let mut panel = menu_panel(180.).debug_selector(|| "priority-menu".into());
-        for p in 1..=4u8 {
-            let id = PRIORITY_IDS[usize::from(p - 1)];
-            panel = panel.child(
-                option_row(id.into())
-                    .debug_selector(move || id.into())
-                    .child(priority_mark(p))
-                    .child(PRIORITY_NAMES[usize::from(p - 1)])
-                    .child(check(current == p))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(NewForm {
-                            fields: Fields::Task { priority },
-                            ..
-                        }) = &mut this.form
-                        {
-                            *priority = p;
-                        }
-                        this.close_menu(window, cx);
-                    })),
-            );
-        }
-        panel
     }
 
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -3542,8 +3348,10 @@ enum Menu {
     Ordering,
     /// How a list is shown: the tasks' list or board, its empty groups, its dismissed work.
     View,
-    /// The new task's priority, in the form.
-    Priority,
+    /// A property's chip in the new-node form.
+    FormProp(Prop),
+    /// The new-node form's Add link chip: the relations to link by.
+    FormLink,
     /// A task's priority, from its row or card.
     RowPriority(Uuid),
     /// The open task's priority, in the detail panel.
@@ -3558,8 +3366,6 @@ enum Menu {
     Standing,
     /// The projects, from the collapsed sidebar's rail.
     Projects,
-    /// The project a new one is part of, in the form.
-    PartOf,
     /// The activity grid's range, and what it counts.
     GridWhat,
     /// How a node's detail opens: side peek, center peek, full page.

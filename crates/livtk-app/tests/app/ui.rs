@@ -241,37 +241,88 @@ fn click_on(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
+/// A new task's properties are chips, each set from its menu by a click, by typing to find, or by
+/// the keys; Add link goes through the panel's relations and the palette; all of it lands on the
+/// task made. Esc closes a chip's menu before the form.
 #[gpui_kit::test]
-fn the_new_task_takes_its_priority_from_a_menu(cx: &mut TestAppContext) {
+fn a_new_tasks_chips_and_links_land_on_the_task_made(cx: &mut TestAppContext) {
     let dir = project();
+    Workspace::open(dir.path())
+        .unwrap()
+        .new_project(
+            &livtk_core::NewProject {
+                title: "The importer".into(),
+                commit: true,
+                ..Default::default()
+            },
+            &Actor::Human,
+        )
+        .unwrap();
     let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
     cx.simulate_keystrokes("n");
-    cx.run_until_parked();
-    click_on(cx, "priority-select");
-    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("priority")));
-    click_on(cx, "priority-1");
+    settle(cx);
+    cx.simulate_input("urgent work");
+    // Priority, found by typing, picked with Enter.
+    click_on(cx, "prop-priority");
+    app.read_with(cx, |a, _| assert_eq!(a.menu_open(), Some("prop-priority")));
+    cx.simulate_input("urg");
+    cx.simulate_keystrokes("enter");
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None);
-        assert!(a.form_open(), "choosing kept the form open");
+        assert!(a.form_open(), "picking kept the form open");
+        assert_eq!(a.model().draft.as_ref().unwrap().priority, 1);
     });
-    cx.simulate_input("urgent work");
-    click_on(cx, "create-task");
-    let ws = Workspace::open(dir.path()).unwrap();
-    let created = ws
-        .tasks(&[])
-        .unwrap()
-        .into_iter()
-        .find(|t| t.title == "urgent work")
-        .expect("created");
-    assert_eq!(created.priority, 1);
-
-    // Esc closes the menu before the form.
-    cx.simulate_keystrokes("n");
-    click_on(cx, "priority-select");
+    // State, by the keys: down from Backlog to Planned.
+    click_on(cx, "prop-state");
+    cx.simulate_keystrokes("down enter");
+    // Project, by a click.
+    click_on(cx, "prop-project");
+    redraw(cx);
+    click_on(cx, "form-menu-1");
+    // Esc closes a chip's menu, not the form.
+    click_on(cx, "prop-agent");
     cx.simulate_keystrokes("escape");
     app.read_with(cx, |a, _| {
         assert_eq!(a.menu_open(), None);
         assert!(a.form_open());
+    });
+    // A link: Waits for…, then LIV-2 in the palette.
+    click_on(cx, "form-add-link");
+    cx.simulate_input("waits");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    app.read_with(cx, |a, _| {
+        assert!(a.model().palette.is_some(), "the palette picks the node")
+    });
+    cx.simulate_input("second");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("form-link-LIV-2").is_some(),
+        "the link shown below the chips"
+    );
+    app.read_with(cx, |a, _| assert!(a.form_open(), "the form stays"));
+    click_on(cx, "create-task");
+    settle(cx);
+    let ws = Workspace::open(dir.path()).unwrap();
+    let made = ws
+        .tasks(&[])
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "urgent work")
+        .expect("made");
+    let n = ws.node(&made.key).unwrap();
+    assert_eq!(n.priority, 1);
+    assert_eq!(n.state, State::Planned, "starts planned");
+    let (parents, _) = ws.related(&n.key, livtk_core::Rel::Parent).unwrap();
+    assert_eq!(parents[0].title, "The importer", "in its project");
+    let (waits, _) = ws.related(&n.key, livtk_core::Rel::DependsOn).unwrap();
+    assert_eq!(waits[0].key, "LIV-2", "waits for LIV-2");
+    app.read_with(cx, |a, _| {
+        assert!(!a.form_open());
+        assert!(a.model().draft.is_none());
     });
 }
 
@@ -5414,10 +5465,9 @@ fn key_hints_are_a_setting(cx: &mut TestAppContext) {
     assert!(app.read_with(cx, |a, _| a.help_open()), "the shortcuts");
 }
 
-/// P makes a project from anywhere, through the same form as a task: a bad target, or Claude as
-/// owner, is refused and nothing made; filled right (owner, part of a project with nothing in it
-/// yet), it is made active with its done-when ending its body, and shown in Projects with its
-/// panel open. Switched off, the next starts proposed. N still makes a task.
+/// P makes a project through the same form: its status, owner, target date and parent are chips;
+/// no Done when is asked for; Claude is never its owner; a target is typed, picked, or refused
+/// when it is no date.
 #[gpui_kit::test]
 fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     let dir = project();
@@ -5427,7 +5477,6 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
         .new_project(
             &livtk_core::NewProject {
                 title: "The bigger outcome".into(),
-                done_when: "it is done".into(),
                 commit: true,
                 ..Default::default()
             },
@@ -5449,36 +5498,49 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("p");
     settle(cx);
     assert!(cx.debug_bounds("new-project-card").is_some(), "New project");
+    for chip in [
+        "prop-status",
+        "prop-owner",
+        "prop-target",
+        "prop-part-of",
+        "form-add-link",
+    ] {
+        assert!(cx.debug_bounds(named(chip.into())).is_some(), "{chip}");
+    }
     cx.simulate_input("Ship the importer");
-    click_on(cx, "new-project-done");
-    cx.simulate_input("every record reads the same");
-    click_on(cx, "new-project-target");
-    cx.simulate_input("next week");
+    let projects = |dir: &std::path::Path| Workspace::open(dir).unwrap().projects().unwrap();
+    // Claude is never its owner: typed as a new owner, refused when made.
+    click_on(cx, "prop-owner");
+    cx.simulate_input("Claude:implementer");
+    cx.simulate_keystrokes("enter");
     click_on(cx, "create-project");
     redraw(cx);
-    let projects = |dir: &std::path::Path| Workspace::open(dir).unwrap().projects().unwrap();
-    assert_eq!(projects(dir.path()).len(), 1, "refused: nothing made");
+    assert_eq!(projects(dir.path()).len(), 1, "refused: Claude as owner");
     assert!(
         cx.debug_bounds("new-project-card").is_some(),
         "the form stays"
     );
-    // Claude never owns it, whatever the case.
-    click_on(cx, "new-project-owner");
-    cx.simulate_input("Claude:implementer");
-    // Put right.
-    click_on(cx, "new-project-target");
+    // Put right: a new owner, typed.
+    click_on(cx, "prop-owner");
+    cx.simulate_input("Karl");
+    cx.simulate_keystrokes("enter");
+    // A target that is no date is said back, and sets nothing.
+    click_on(cx, "prop-target");
+    cx.simulate_input("soon");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert!(cx.debug_bounds("form-date-unread").is_some(), "said back");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().draft.as_ref().unwrap().target, None)
+    });
+    // A typed one.
     cx.simulate_keystrokes("secondary-a backspace");
     cx.simulate_input("2026-12-01");
-    click_on(cx, "create-project");
-    redraw(cx);
-    assert!(projects(dir.path()).len() == 1, "refused: Claude as owner");
-    click_on(cx, "new-project-owner");
-    cx.simulate_keystrokes("secondary-a backspace");
-    cx.simulate_input("Karl");
+    cx.simulate_keystrokes("enter");
     // Part of the project with nothing in it yet: offered all the same.
-    click_on(cx, "part-of-select");
-    redraw(cx);
-    click_on(cx, named(format!("part-of-{outer}")));
+    click_on(cx, "prop-part-of");
+    cx.simulate_input("bigger");
+    cx.simulate_keystrokes("enter");
     click_on(cx, "create-project");
     settle(cx);
     let made: Vec<_> = projects(dir.path())
@@ -5486,23 +5548,14 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
         .filter(|p| p.key != outer)
         .collect();
     assert_eq!(made.len(), 1);
-    let n = Workspace::open(dir.path())
-        .unwrap()
-        .node(&made[0].key)
-        .unwrap();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let n = ws.node(&made[0].key).unwrap();
     assert_eq!(n.props["owner"], "Karl");
-    let (part_of, _) = Workspace::open(dir.path())
-        .unwrap()
-        .related(&n.key, livtk_core::Rel::Parent)
-        .unwrap();
+    let (part_of, _) = ws.related(&n.key, livtk_core::Rel::Parent).unwrap();
     assert_eq!(part_of[0].key, outer, "part of it");
     assert_eq!(n.title, "Ship the importer");
     assert_eq!(n.state, State::Active, "committed to, made by you");
-    assert!(
-        n.body.ends_with("Done when: every record reads the same"),
-        "{}",
-        n.body
-    );
+    assert!(!n.body.contains("Done when"), "none asked for: {}", n.body);
     assert_eq!(n.props["target"], "2026-12-01");
     app.read_with(cx, |a, _| {
         assert_eq!(a.model().view(), View::Projects, "shown where projects are");
@@ -5513,15 +5566,18 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
             "selected, its panel open"
         );
     });
-    // Not committed to: proposed.
+    // Proposed, by its chip; its target a quick pick, the end of this month.
     cx.simulate_keystrokes("escape");
     redraw(cx);
     cx.simulate_keystrokes("p");
     settle(cx);
     cx.simulate_input("A maybe");
-    click_on(cx, "new-project-done");
-    cx.simulate_input("we know");
-    click_on(cx, "new-project-commit-on");
+    click_on(cx, "prop-status");
+    cx.simulate_input("prop");
+    cx.simulate_keystrokes("enter");
+    click_on(cx, "prop-target");
+    redraw(cx);
+    click_on(cx, "form-date-quick-1");
     click_on(cx, "create-project");
     settle(cx);
     let maybe = projects(dir.path())
@@ -5529,6 +5585,15 @@ fn p_makes_a_project_through_the_one_form(cx: &mut TestAppContext) {
         .find(|p| p.title == "A maybe")
         .expect("made");
     assert_eq!(maybe.state, State::Proposed);
+    let eom = jiff::Zoned::now().date().last_of_month().to_string();
+    assert_eq!(
+        Workspace::open(dir.path())
+            .unwrap()
+            .node(&maybe.key)
+            .unwrap()
+            .props["target"],
+        eom.as_str()
+    );
     // N is still a task.
     cx.simulate_keystrokes("n");
     settle(cx);
@@ -6855,4 +6920,92 @@ fn a_stuck_row_leads_back_under_the_rows_stuck_above_it(cx: &mut TestAppContext)
         cx.debug_bounds("timeline-stuck-3").is_none(),
         "back in line"
     );
+}
+
+/// The date picker's keys: down a week, left a day while its field is empty, Enter picks the
+/// day they are on; Clear takes the date away.
+#[gpui_kit::test]
+fn the_date_pickers_keys_move_a_day_and_enter_picks_it(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    cx.simulate_keystrokes("p");
+    settle(cx);
+    click_on(cx, "prop-target");
+    redraw(cx);
+    let today = jiff::Zoned::now().date();
+    assert!(
+        cx.debug_bounds(named(format!("form-date-day-{today}")))
+            .is_some(),
+        "this month's grid, today in it"
+    );
+    cx.simulate_keystrokes("down left enter");
+    let want = today.saturating_add(jiff::Span::new().days(6));
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().draft.as_ref().unwrap().target, Some(want));
+        assert_eq!(a.menu_open(), None);
+    });
+    // Its chip says it; Clear takes it away.
+    click_on(cx, "prop-target");
+    redraw(cx);
+    click_on(cx, "form-date-clear");
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().draft.as_ref().unwrap().target, None)
+    });
+}
+
+/// Create more keeps the form open, empty, its chips kept and its links gone, for the next one;
+/// Cancel closes it, making nothing; Create without a title makes nothing.
+#[gpui_kit::test]
+fn create_more_keeps_the_form_and_cancel_makes_nothing(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    let tasks = |dir: &std::path::Path| Workspace::open(dir).unwrap().tasks(&[]).unwrap();
+    let before = tasks(dir.path()).len();
+    cx.simulate_keystrokes("n");
+    settle(cx);
+    // No title: nothing made.
+    click_on(cx, "create-task");
+    assert_eq!(tasks(dir.path()).len(), before);
+    click_on(cx, "form-more");
+    click_on(cx, "prop-priority");
+    cx.simulate_input("high");
+    cx.simulate_keystrokes("enter");
+    click_on(cx, "form-add-link");
+    cx.simulate_input("related");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("first");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert!(cx.debug_bounds("form-link-LIV-1").is_some());
+    cx.simulate_input("one");
+    click_on(cx, "create-task");
+    settle(cx);
+    app.read_with(cx, |a, cx| {
+        assert!(a.form_open(), "Create more: the form stays");
+        let d = a.model().draft.as_ref().unwrap();
+        assert_eq!(d.priority, 2, "its chips kept");
+        assert!(d.links.is_empty(), "its links were the last one's");
+        assert_eq!(a.form_title(cx).as_deref(), Some(""), "emptied");
+    });
+    cx.simulate_input("two");
+    click_on(cx, "create-task");
+    settle(cx);
+    let made: Vec<_> = tasks(dir.path())
+        .into_iter()
+        .filter(|t| t.title == "one" || t.title == "two")
+        .collect();
+    assert_eq!(made.len(), 2);
+    assert!(made.iter().all(|t| t.priority == 2));
+    // Cancel: closed, nothing more made.
+    cx.simulate_input("three");
+    click_on(cx, "form-cancel");
+    app.read_with(cx, |a, _| {
+        assert!(!a.form_open());
+        assert!(a.model().draft.is_none());
+    });
+    assert!(!tasks(dir.path()).iter().any(|t| t.title == "three"));
 }

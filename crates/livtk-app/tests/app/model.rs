@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use livtk_app::model::making::New;
+use livtk_app::model::making::Making;
 use livtk_app::model::{
     GroupKey, Grouping, Layout, Model, Ordering, RETRY_FIRST, RETRY_MAX, View, choices,
 };
@@ -349,11 +349,9 @@ fn a_new_task_from_the_app_lands_in_tasks_selected() {
     let dir = tempfile::tempdir().unwrap();
     project(dir.path());
     let mut m = Model::open(&[dir.path().to_path_buf()]);
-    assert!(m.create(New::Task {
-        title: "Draw the first window".into(),
-        body: String::new(),
-        priority: 2,
-    }));
+    m.open_draft(Making::Task);
+    m.draft.as_mut().unwrap().priority = 2;
+    assert!(m.create("Draw the first window", ""));
     assert_eq!(m.view(), View::Tasks);
     let sel = m.selected().unwrap();
     assert_eq!(
@@ -363,11 +361,10 @@ fn a_new_task_from_the_app_lands_in_tasks_selected() {
     m.set_priority(1);
     assert_eq!(m.selected().unwrap().priority, 1);
     assert!(
-        !m.create(New::Task {
-            title: "   ".into(),
-            body: String::new(),
-            priority: 3,
-        }),
+        {
+            m.open_draft(Making::Task);
+            !m.create("   ", "")
+        },
         "an empty title is refused"
     );
     assert!(

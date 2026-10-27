@@ -111,6 +111,7 @@ icons! {
     Continue => "fast-forward",
     Claude => "sparkles-alt",
     You => "user",
+    Calendar => "calendar",
     ZoomOut => "minus",
     Fit => "maximize",
     ZoomIn => "plus",

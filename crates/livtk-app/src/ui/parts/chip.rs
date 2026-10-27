@@ -17,6 +17,7 @@ pub(in crate::ui) struct Chip {
     label: SharedString,
     set: bool,
     open: bool,
+    still: bool,
 }
 
 impl Chip {
@@ -28,6 +29,7 @@ impl Chip {
             label: label.into(),
             set: true,
             open: false,
+            still: false,
         }
     }
 
@@ -49,6 +51,12 @@ impl Chip {
         self
     }
 
+    /// Only says something: no hover, nothing to click.
+    pub(in crate::ui) fn still(mut self, still: bool) -> Self {
+        self.still = still;
+        self
+    }
+
     pub(in crate::ui) fn build(self) -> Stateful<Div> {
         let Chip {
             id,
@@ -56,6 +64,7 @@ impl Chip {
             label,
             set,
             open,
+            still,
         } = self;
         let name = id.clone();
         div()
@@ -74,7 +83,7 @@ impl Chip {
             .when(!set, |d| d.border_dashed().text_color(color(TEXT_4)))
             .when(set, |d| d.text_color(color(TEXT_2)))
             .when(open, |d| d.bg(color(SELECTED)).text_color(color(TEXT)))
-            .when(!open, |d| d.hover(|h| h.bg(color(HOVER))))
+            .when(!open && !still, |d| d.hover(|h| h.bg(color(HOVER))))
             .children(lead)
             .child(div().max_w(px(220.)).truncate().child(label))
     }

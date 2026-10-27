@@ -137,6 +137,11 @@ them and never restyle them.
   field is empty, Page Up and Page Down a month, Enter picks the date typed or the day the keys
   are on. Text it cannot read is said under the field, never guessed. Dates only, no times; the
   dates themselves are `model::dates`, tested on their own.
+- **Link lists** (`ui/parts/link_list.rs`): links grouped by relation, each group headed as
+  every list heads it (`model::link_heading`: Part of, Sub-tasks, Waits for, Blocks, Related
+  to…), each node named the same way (state mark, key, title; a click opens it), the × at its
+  end taking the link back. A node's panel and the new-node form draw theirs with it, and a node
+  named anywhere else is one of its rows.
 - **Jumps** (`ui/parts/jump.rs`): a quiet 32px round button over a long scroll, its arrow the
   way it goes, a count in the accent for what arrived at that end unseen, a tooltip naming it and
   its keys. A node's panel shows ↓ (to the latest, ⌘↓) once its end is more than a screen below

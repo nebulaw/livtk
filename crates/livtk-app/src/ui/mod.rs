@@ -69,8 +69,8 @@ use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, DocPick, FeedRow, GroupKey,
     Grouping, Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, ListSpec, Look, Mark,
     Model, Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, UpdateState, View,
-    arrows_with, created_as, describe, drop_allowed, has_flow, link_choices, link_curve,
-    state_name, steps_with, visible_runs,
+    arrows_with, created_as, describe, drop_allowed, has_flow, link_curve, state_name, steps_with,
+    visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -741,6 +741,8 @@ pub struct LivtkApp {
     menu_hl: usize,
     /// Where the open date picker is.
     date: DateState,
+    /// The dates a target may take: any, as a slipped target can be in the past.
+    target_range: crate::model::dates::Range,
     palette_scroll: ScrollHandle,
     /// The board's sideways scroll, which Shift+wheel drives.
     board_scroll: ScrollHandle,
@@ -1043,6 +1045,7 @@ impl LivtkApp {
                 cursor: jiff::Zoned::now().date(),
                 unread: None,
             },
+            target_range: crate::model::dates::Range::default(),
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
@@ -1245,6 +1248,16 @@ impl LivtkApp {
 
     pub fn form_open(&self) -> bool {
         self.form.is_some()
+    }
+
+    /// Keep a target date between `min` and `max`, for tests, as a project's setting would.
+    #[doc(hidden)]
+    pub fn set_target_range_for_test(
+        &mut self,
+        min: Option<jiff::civil::Date>,
+        max: Option<jiff::civil::Date>,
+    ) {
+        self.target_range = crate::model::dates::Range { min, max };
     }
 
     /// What the new-node form's title holds, while it is open.

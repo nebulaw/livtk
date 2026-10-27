@@ -331,17 +331,16 @@ impl LivtkApp {
             );
         div().relative().child(button).when(open, |d| {
             // The relations, as the new-node form's Add link offers them; then a doc.
-            let choices = link_choices(kind, &self.model.declared_rels());
-            let n = choices.len();
-            let mut rows: Vec<super::parts::ChoiceRow> = choices
+            let relations = self.model.link_relations_for(kind, "");
+            let choices: Vec<LinkChoice> = relations
                 .iter()
-                .map(|c| super::parts::ChoiceRow {
-                    lead: None,
-                    label: c.label.to_owned(),
-                    sub: None,
-                    on: false,
+                .filter_map(|c| match c.pick {
+                    crate::model::making::Pick::Link(l) => Some(l),
+                    _ => None,
                 })
                 .collect();
+            let n = choices.len();
+            let mut rows = super::new_form::choice_rows(relations);
             rows.push(super::parts::ChoiceRow {
                 lead: Some(icon(Icon::Docs, 14., TEXT_3).into_any_element()),
                 label: "A doc…".to_owned(),
@@ -372,29 +371,34 @@ impl LivtkApp {
     }
 
     /// One group of the open node's links: a click on one goes to it, its × removes the link.
-    pub(super) fn link_group(&self, g: &LinkGroup, cx: &mut Context<Self>) -> Div {
-        let mut out = div().flex().flex_col().gap_1().child(group_label(g.label));
+    pub(super) fn link_items(
+        &self,
+        g: &LinkGroup,
+        cx: &mut Context<Self>,
+    ) -> Vec<super::parts::LinkItem> {
         let (rel, outgoing) = (g.rel, g.outgoing);
         let group = g.label.to_lowercase().replace(' ', "-");
-        for b in &g.briefs {
-            let key = b.key.clone();
-            let unlink = unlink_button(
-                format!("unlink-{group}-{key}"),
-                move |this, _| this.model.unlink(rel, outgoing, &key),
-                cx,
-            );
-            out = out.child(self.node_ref(
-                format!("link-{group}-{}", b.key),
-                &b.key,
-                b.kind,
-                b.state,
-                &b.title,
-                OpenIn::View,
-                Some(unlink),
-                cx,
-            ));
-        }
-        out
+        g.briefs
+            .iter()
+            .map(|b| {
+                let key = b.key.clone();
+                let unlink = unlink_button(
+                    format!("unlink-{group}-{key}"),
+                    move |this, _| this.model.unlink(rel, outgoing, &key),
+                    cx,
+                );
+                self.link_item(
+                    format!("link-{group}-{}", b.key),
+                    &b.key,
+                    b.kind,
+                    b.state,
+                    &b.title,
+                    OpenIn::View,
+                    Some(unlink),
+                    cx,
+                )
+            })
+            .collect()
     }
 
     /// The node's docs, as a link group: each by its title (its path struck when it is gone), a
@@ -586,8 +590,12 @@ impl LivtkApp {
                     .child(div().flex_1())
                     .child(self.add_link_button(n.kind, cx)),
             );
+        let mut list = super::parts::LinkList::new();
         for g in &d.link_groups {
-            links = links.child(self.link_group(g, cx));
+            list = list.group(g.label, self.link_items(g, cx));
+        }
+        if !list.is_empty() {
+            links = links.child(list.build());
         }
         if !d.docs.is_empty() {
             links = links.child(self.doc_group(&n.key, &d.docs, cx));

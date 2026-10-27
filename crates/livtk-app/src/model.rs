@@ -557,6 +557,25 @@ pub struct LinkGroup {
     pub briefs: Vec<Brief>,
 }
 
+/// How the links of `rel`, seen from the node they are listed on (`outgoing`: it is their
+/// source), are headed: the panel's groups and the new-node form's alike.
+pub fn link_heading(rel: Rel, outgoing: bool) -> &'static str {
+    match (rel, outgoing) {
+        (Rel::Parent, true) => "Part of",
+        (Rel::Parent, false) => "Sub-tasks",
+        (Rel::DependsOn, true) => "Waits for",
+        (Rel::DependsOn, false) => "Blocks",
+        (Rel::Relates, _) => "Related to",
+        (Rel::Supersedes, true) => "Replaces",
+        (Rel::Supersedes, false) => "Replaced by",
+        (Rel::LearnedFrom, true) => "Learned from",
+        (Rel::LearnedFrom, false) => "Taught",
+        // The project's own: by its name, and from the other end by its inverse.
+        (rel, true) => heading(rel.as_str()),
+        (rel, false) => heading(rel.inverse().unwrap_or(rel.as_str())),
+    }
+}
+
 /// A link the human can add from a node: how it reads, and which relation and direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LinkChoice {
@@ -2718,6 +2737,10 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         outgoing,
         briefs: briefs.clone(),
     };
+    // A relation's links, headed as every list of links heads them.
+    let links_of = |rel, outgoing, briefs: &Vec<Brief>| {
+        group(link_heading(rel, outgoing), rel, outgoing, briefs)
+    };
     // A project's parts: the projects in it, then its tasks by state, in working order.
     let parts_groups: Vec<LinkGroup> = if node.kind == Kind::Project {
         let mut out = vec![group(
@@ -2740,7 +2763,7 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
         }
         out
     } else {
-        vec![group("Sub-tasks", Rel::Parent, false, &parts)]
+        vec![links_of(Rel::Parent, false, &parts)]
     };
     let project = if node.kind == Kind::Project {
         let now = jiff::Timestamp::now();
@@ -2752,30 +2775,22 @@ fn load_detail(ws: &Workspace, id: Uuid) -> livtk_core::Result<Detail> {
     } else {
         None
     };
-    let link_groups: Vec<LinkGroup> = [group("Part of", Rel::Parent, true, &part_of)]
+    let link_groups: Vec<LinkGroup> = [links_of(Rel::Parent, true, &part_of)]
         .into_iter()
         .chain(parts_groups)
         .chain([
-            group("Waits for", Rel::DependsOn, true, &links.depends_on),
-            group("Blocks", Rel::DependsOn, false, &links.blocks),
-            group("Related to", Rel::Relates, true, &related),
-            group("Replaces", Rel::Supersedes, true, &replaces),
-            group("Replaced by", Rel::Supersedes, false, &replaced_by),
-            group("Learned from", Rel::LearnedFrom, true, &learned_from),
-            group("Taught", Rel::LearnedFrom, false, &taught),
+            links_of(Rel::DependsOn, true, &links.depends_on),
+            links_of(Rel::DependsOn, false, &links.blocks),
+            links_of(Rel::Relates, true, &related),
+            links_of(Rel::Supersedes, true, &replaces),
+            links_of(Rel::Supersedes, false, &replaced_by),
+            links_of(Rel::LearnedFrom, true, &learned_from),
+            links_of(Rel::LearnedFrom, false, &taught),
         ])
         // The project's own relations, each from either end: by its name, and by its inverse.
         .chain(declared_rels(ws).into_iter().flat_map(|rel| {
             let (to, from) = ws.related(&key, rel).unwrap_or_default();
-            [
-                group(heading(rel.as_str()), rel, true, &to),
-                group(
-                    heading(rel.inverse().unwrap_or(rel.as_str())),
-                    rel,
-                    false,
-                    &from,
-                ),
-            ]
+            [links_of(rel, true, &to), links_of(rel, false, &from)]
         }))
         .filter(|g| !g.briefs.is_empty())
         .collect();

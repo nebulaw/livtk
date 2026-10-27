@@ -519,12 +519,9 @@ impl Model {
         found
     }
 
-    /// The relations a link can be added by from what the form makes, as the task panel offers
-    /// them, that `query` finds.
-    pub fn link_relations(&self, query: &str) -> Vec<Choice> {
-        let Some(kind) = self.draft.as_ref().map(|d| d.making.spec().kind) else {
-            return Vec::new();
-        };
+    /// The relations a link can be added by from a node of `kind`, that `query` finds: one list
+    /// for the panel's Add link and the form's.
+    pub fn link_relations_for(&self, kind: Kind, query: &str) -> Vec<Choice> {
         super::link_choices(kind, &self.declared_rels())
             .into_iter()
             .filter(|l| query.trim().is_empty() || super::fuzzy(query.trim(), l.label).is_some())
@@ -535,6 +532,13 @@ impl Model {
                 pick: Pick::Link(l),
             })
             .collect()
+    }
+
+    /// The relations a link can be added by from what the form makes.
+    pub fn link_relations(&self, query: &str) -> Vec<Choice> {
+        self.draft.as_ref().map_or_else(Vec::new, |d| {
+            self.link_relations_for(d.making.spec().kind, query)
+        })
     }
 
     /// Set what `pick` sets on the draft. A relation opens the palette for the link's other

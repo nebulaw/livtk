@@ -300,7 +300,7 @@ fn a_new_tasks_chips_and_links_land_on_the_task_made(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     redraw(cx);
     assert!(
-        cx.debug_bounds("form-link-LIV-2").is_some(),
+        cx.debug_bounds("form-link-waits-for-LIV-2").is_some(),
         "the link shown below the chips"
     );
     app.read_with(cx, |a, _| assert!(a.form_open(), "the form stays"));
@@ -6980,7 +6980,7 @@ fn create_more_keeps_the_form_and_cancel_makes_nothing(cx: &mut TestAppContext) 
     cx.simulate_input("first");
     cx.simulate_keystrokes("enter");
     redraw(cx);
-    assert!(cx.debug_bounds("form-link-LIV-1").is_some());
+    assert!(cx.debug_bounds("form-link-related-to-LIV-1").is_some());
     cx.simulate_input("one");
     click_on(cx, "create-task");
     settle(cx);
@@ -7091,4 +7091,139 @@ fn a_long_panel_jumps_to_its_latest_and_back_to_its_top(cx: &mut TestAppContext)
     redraw(cx);
     redraw(cx);
     assert!(!shown(cx, "jump-latest") && !shown(cx, "jump-top"));
+}
+
+/// The new-node form's links read as the panel's, under the same headings, whichever way they
+/// point; × takes one back; one node under two relations is two rows. The Agent chip gives the
+/// task to its agent, and a new project's links are made with it.
+#[gpui_kit::test]
+fn the_forms_links_point_the_right_way_and_its_agent_is_given(cx: &mut TestAppContext) {
+    let dir = project();
+    std::fs::create_dir_all(dir.path().join(".claude/agents")).unwrap();
+    std::fs::write(
+        dir.path().join(".claude/agents/tester.md"),
+        "---\nname: tester\ndescription: Tests things.\n---\nTest it.\n",
+    )
+    .unwrap();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    let link = |cx: &mut gpui_kit::VisualTestContext, rel: &str, to: &str| {
+        click_on(cx, "form-add-link");
+        cx.simulate_input(rel);
+        cx.simulate_keystrokes("enter");
+        redraw(cx);
+        cx.simulate_input(to);
+        cx.simulate_keystrokes("enter");
+        redraw(cx);
+    };
+    cx.simulate_keystrokes("n");
+    settle(cx);
+    cx.simulate_input("the middle one");
+    click_on(cx, "prop-agent");
+    cx.simulate_input("tester");
+    cx.simulate_keystrokes("enter");
+    // Blocks LIV-2 and relates to it (one node, two rows), has LIV-1 as its sub-task.
+    link(cx, "blocks", "second");
+    link(cx, "sub-task", "first");
+    link(cx, "related", "second");
+    for row in [
+        "form-link-blocks-LIV-2",
+        "form-link-sub-tasks-LIV-1",
+        "form-link-related-to-LIV-2",
+    ] {
+        assert!(cx.debug_bounds(named(row.into())).is_some(), "{row}");
+    }
+    // × takes one back.
+    click_on(cx, "form-unlink-related-to-LIV-2");
+    redraw(cx);
+    assert!(cx.debug_bounds("form-link-related-to-LIV-2").is_none());
+    click_on(cx, "create-task");
+    settle(cx);
+    let ws = Workspace::open(dir.path()).unwrap();
+    let made = ws
+        .tasks(&[])
+        .unwrap()
+        .into_iter()
+        .find(|t| t.title == "the middle one")
+        .expect("made");
+    let n = ws.node(&made.key).unwrap();
+    assert_eq!(n.props["agent"], "tester", "given to its agent");
+    let (waits, blocks) = ws.related(&n.key, livtk_core::Rel::DependsOn).unwrap();
+    assert!(waits.is_empty());
+    assert_eq!(
+        blocks.iter().map(|b| b.key.as_str()).collect::<Vec<_>>(),
+        ["LIV-2"],
+        "LIV-2 waits for it"
+    );
+    let (_, subs) = ws.related(&n.key, livtk_core::Rel::Parent).unwrap();
+    assert_eq!(subs[0].key, "LIV-1", "LIV-1 is part of it");
+    let (related, _) = ws.related(&n.key, livtk_core::Rel::Relates).unwrap();
+    assert!(related.is_empty(), "taken back before it was made");
+    // A project's links are made with it.
+    app.update(cx, |a, _| a.model_mut().close_detail());
+    cx.simulate_keystrokes("p");
+    settle(cx);
+    cx.simulate_input("A related outcome");
+    link(cx, "related", "first");
+    click_on(cx, "create-project");
+    settle(cx);
+    let ws = Workspace::open(dir.path()).unwrap();
+    let p = ws
+        .projects()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.title == "A related outcome")
+        .expect("made");
+    let (related, _) = ws.related(&p.key, livtk_core::Rel::Relates).unwrap();
+    assert_eq!(related[0].key, "LIV-1");
+}
+
+/// A day of the calendar is picked by a click. A target kept to a range dims the days outside
+/// it, which a click does not pick, and says back a typed date outside it.
+#[gpui_kit::test]
+fn a_calendar_day_is_picked_by_a_click_within_its_range(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    let today = jiff::Zoned::now().date();
+    let month = today.first_of_month();
+    // Two days of this month, whatever today is: its first, and its last.
+    let (first, last) = (month, today.last_of_month());
+    cx.simulate_keystrokes("p");
+    settle(cx);
+    click_on(cx, "prop-target");
+    redraw(cx);
+    click_on(cx, named(format!("form-date-day-{last}")));
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().draft.as_ref().unwrap().target, Some(last));
+    });
+    // Kept to this month's first day only: its last cannot be picked, nor typed.
+    app.update(cx, |a, _| {
+        a.set_target_range_for_test(Some(first), Some(first))
+    });
+    click_on(cx, "prop-target");
+    redraw(cx);
+    click_on(cx, "form-date-clear");
+    click_on(cx, "prop-target");
+    redraw(cx);
+    click_on(cx, named(format!("form-date-day-{last}")));
+    app.read_with(cx, |a, _| {
+        assert_eq!(
+            a.model().draft.as_ref().unwrap().target,
+            None,
+            "outside: not picked"
+        );
+    });
+    cx.simulate_input(&last.to_string());
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("form-date-unread").is_some(),
+        "outside: said back"
+    );
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.model().draft.as_ref().unwrap().target, None)
+    });
 }

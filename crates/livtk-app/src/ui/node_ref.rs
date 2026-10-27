@@ -36,18 +36,37 @@ impl LivtkApp {
         end: Option<Stateful<Div>>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let row = link_row(selector)
-            .hover(|h| h.bg(color(HOVER)))
-            .child(state_mark(kind, state))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(color(TEXT_4))
-                    .child(key.to_owned()),
-            )
-            .child(link_title(title.to_owned()))
-            .children(end);
-        self.goes_to(row, key, open, cx)
+        super::parts::node_row(self.link_item(selector, key, kind, state, title, open, end, cx))
+    }
+
+    /// A node as a list of links holds it: a click opens it as `open` says.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn link_item(
+        &self,
+        selector: String,
+        key: &str,
+        kind: Kind,
+        state: State,
+        title: &str,
+        open: OpenIn,
+        end: Option<Stateful<Div>>,
+        cx: &mut Context<Self>,
+    ) -> super::parts::LinkItem {
+        let (this, go) = (cx.entity().downgrade(), key.to_owned());
+        super::parts::LinkItem {
+            selector,
+            key: key.to_owned(),
+            kind,
+            state,
+            title: title.to_owned(),
+            end,
+            open: std::rc::Rc::new(move |_, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    open_node(&mut this.model, &go, open);
+                    cx.notify();
+                });
+            }),
+        }
     }
 
     /// `el`, a click on which opens the node `key`, and only that: not what `el` is inside.

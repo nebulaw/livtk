@@ -10,7 +10,7 @@ use jiff::civil::Date;
 use super::form::toggle;
 use super::parts::{Chip, ChoiceMenu, ChoiceRow, DatePicker};
 use super::*;
-use crate::model::dates::{self, Month, Quick, Range, Step, WeekStart};
+use crate::model::dates::{self, Month, Quick, Step, WeekStart};
 use crate::model::making::{Choice, Pick, Prop};
 
 /// The form's fields: its title and body. Everything else it sets is the model's draft.
@@ -194,8 +194,13 @@ impl LivtkApp {
                 return;
             }
             match dates::parse(&typed, today(), WEEK_START) {
-                Ok(d) if Range::default().contains(d) => self.form_date(Some(d), window, cx),
-                Ok(_) => {}
+                Ok(d) if self.target_range.contains(d) => self.form_date(Some(d), window, cx),
+                // A date it may not take is said back, as one it cannot read is.
+                Ok(d) => {
+                    self.date.unread =
+                        Some((typed, format!("{d} is outside the dates it can take")));
+                    cx.notify();
+                }
                 Err(e) => {
                     self.date.unread = Some((typed, e.0));
                     cx.notify();
@@ -231,7 +236,7 @@ impl LivtkApp {
                 MenuKey::End if empty => Step::WeekEnd,
                 _ => return false,
             };
-            self.date.cursor = dates::step(self.date.cursor, by, WEEK_START, Range::default());
+            self.date.cursor = dates::step(self.date.cursor, by, WEEK_START, self.target_range);
             self.date.month = Month::of(self.date.cursor);
             cx.notify();
             return true;
@@ -343,24 +348,18 @@ impl LivtkApp {
                         .gap(px(6.))
                         .text_xs()
                         .text_color(color(TEXT_3))
+                        // Where it goes: the project, as a chip that is only said.
                         .child(
-                            div()
-                                .h(px(22.))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(color(BORDER_STRONG))
-                                .text_color(color(TEXT_2))
-                                .child(div().size(px(8.)).rounded(px(2.)).bg(color(ACCENT)))
-                                .child(
-                                    self.model
-                                        .project()
-                                        .map(|p| p.name.clone())
-                                        .unwrap_or_default(),
-                                ),
+                            Chip::new(
+                                "form-where",
+                                self.model
+                                    .project()
+                                    .map(|p| p.name.clone())
+                                    .unwrap_or_default(),
+                            )
+                            .lead(div().size(px(8.)).rounded(px(2.)).bg(color(ACCENT)))
+                            .still(true)
+                            .build(),
                         )
                         .child(div().text_color(color(TEXT_4)).child("›"))
                         .child(spec.title)
@@ -527,16 +526,7 @@ impl LivtkApp {
 
     /// The open chip's menu: its field, its choices, the keys' highlight.
     fn choice_menu(&self, id: &'static str, cx: &mut Context<Self>) -> Div {
-        let rows = self
-            .form_choices(cx)
-            .into_iter()
-            .map(|c| ChoiceRow {
-                lead: pick_lead(&c.pick),
-                label: c.label,
-                sub: c.sub,
-                on: c.on,
-            })
-            .collect::<Vec<_>>();
+        let rows = choice_rows(self.form_choices(cx));
         let hl = (!rows.is_empty()).then(|| self.menu_hl.min(rows.len() - 1));
         let this = cx.entity().downgrade();
         let on_pick: super::parts::OnPick = Rc::new(move |i, window, cx| {
@@ -583,8 +573,7 @@ impl LivtkApp {
         )
         .cursor(Some(self.date.cursor))
         .chosen(chosen)
-        // Any day: a target can be set in the past, as one that has slipped is.
-        .range(Range::default())
+        .range(self.target_range)
         .week_start(WEEK_START)
         .quick(&Quick::TARGET)
         .field(
@@ -613,48 +602,52 @@ impl LivtkApp {
         if draft.links.is_empty() {
             return None;
         }
-        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        // Grouped and headed as the panel groups a node's links, in the order first added.
+        let mut groups: Vec<(&'static str, Vec<usize>)> = Vec::new();
         for (i, l) in draft.links.iter().enumerate() {
-            let heading = l.choice.label.trim_end_matches('…').to_owned();
+            let heading = crate::model::link_heading(l.choice.rel, l.choice.outgoing);
             match groups.iter_mut().find(|(h, _)| *h == heading) {
                 Some((_, v)) => v.push(i),
                 None => groups.push((heading, vec![i])),
             }
         }
-        let mut out = div()
-            .debug_selector(|| "form-links".into())
-            .px_4()
-            .pb_3()
-            .flex()
-            .flex_col()
-            .gap_3();
+        let mut list = super::parts::LinkList::new();
         for (heading, at) in groups {
-            let mut group = div().flex().flex_col().gap_1().child(group_label(&heading));
-            for i in at {
-                let to = &draft.links[i].to;
-                let unlink = unlink_button(
-                    format!("form-unlink-{}", to.key),
-                    move |this, _| {
-                        if let Some(d) = this.model.draft.as_mut() {
-                            d.remove_link(i);
-                        }
-                    },
-                    cx,
-                );
-                group = group.child(self.node_ref(
-                    format!("form-link-{}", to.key),
-                    &to.key,
-                    to.kind,
-                    to.state,
-                    &to.title,
-                    OpenIn::View,
-                    Some(unlink),
-                    cx,
-                ));
-            }
-            out = out.child(group);
+            let slug = heading.to_lowercase().replace(' ', "-");
+            let items = at
+                .into_iter()
+                .map(|i| {
+                    let to = &draft.links[i].to;
+                    let unlink = unlink_button(
+                        format!("form-unlink-{slug}-{}", to.key),
+                        move |this, _| {
+                            if let Some(d) = this.model.draft.as_mut() {
+                                d.remove_link(i);
+                            }
+                        },
+                        cx,
+                    );
+                    self.link_item(
+                        format!("form-link-{slug}-{}", to.key),
+                        &to.key,
+                        to.kind,
+                        to.state,
+                        &to.title,
+                        OpenIn::View,
+                        Some(unlink),
+                        cx,
+                    )
+                })
+                .collect();
+            list = list.group(heading, items);
         }
-        Some(out)
+        Some(
+            div()
+                .debug_selector(|| "form-links".into())
+                .px_4()
+                .pb_3()
+                .child(list.build()),
+        )
     }
 }
 
@@ -680,6 +673,20 @@ fn prop_icon(prop: Prop) -> Icon {
         Prop::Target => Icon::Calendar,
         Prop::State | Prop::Priority | Prop::Status => Icon::Tasks,
     }
+}
+
+/// The model's choices as a menu's rows: each led by its value's mark or its kind's icon. The
+/// panel's Add link and every chip's menu draw theirs from it.
+pub(super) fn choice_rows(choices: Vec<Choice>) -> Vec<ChoiceRow> {
+    choices
+        .into_iter()
+        .map(|c| ChoiceRow {
+            lead: pick_lead(&c.pick),
+            label: c.label,
+            sub: c.sub,
+            on: c.on,
+        })
+        .collect()
 }
 
 /// What a choice leads with in its menu: its value's mark, or its kind's icon.

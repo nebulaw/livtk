@@ -62,9 +62,9 @@ const SHADOW_BLUR: f32 = 14.0;
 const SMALL_UP_TO: u32 = 32;
 /// The crop small sizes show, as a square in the master's pixels: centred on the smiley.
 const SMALL_CROP: Crop = Crop {
-    x: 280,
-    y: 40,
-    size: 620,
+    x: 270,
+    y: 20,
+    size: 640,
 };
 
 #[derive(Clone, Copy)]

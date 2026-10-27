@@ -3144,6 +3144,10 @@ fn about_says_which_build_this_is(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.debug_bounds("about").is_some(), "About opens");
     assert!(cx.debug_bounds("about-build").is_some());
+    let icon = cx
+        .debug_bounds("about-icon")
+        .expect("the app's icon in About");
+    assert_eq!(icon.size.width, gpui_kit::px(96.));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(cx.debug_bounds("about").is_none(), "Esc closes it");

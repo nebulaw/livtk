@@ -140,6 +140,15 @@ menu still moves it).
   is text; its `ACCENT` fill then eases in (and out again as the text goes), a press shrinks it a
   little in its slot and it springs back, and it sends as Enter does.
 
+## App icon
+
+One master, `assets/brand/logo.png`; every icon is made from it by `cargo xtask icons`, never by
+hand, and committed (a test fails when they no longer match). macOS: `livtk.icns`, the art in
+Apple's rounded square (824 on the 1024 grid, radius 185.4) with its soft shadow, every size from
+16 to 1024; at 32 px and below a tighter crop on the smiley, so it still reads. The bundle names
+it in `Info.plist`; About shows `livtk-256.png`. Windows and Linux come as more outputs of the
+same generator.
+
 ## Keys and focus
 
 - Text fields (filter, find, editor, terminal) sit outside the list's keys, as overlays or in the

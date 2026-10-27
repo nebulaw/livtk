@@ -2897,7 +2897,11 @@ impl LivtkApp {
             .flex_col()
             .items_center()
             .gap_2()
-            .child(icon(Icon::Inbox, 32., ACCENT))
+            .child(
+                img(app_icon())
+                    .debug_selector(|| "about-icon".into())
+                    .size(px(96.)),
+            )
             .child(
                 div()
                     .text_lg()
@@ -4144,4 +4148,15 @@ fn making_icon(m: Making) -> Icon {
         Making::Task => Icon::NewTask,
         Making::Project => Icon::Project,
     }
+}
+
+/// The app's icon, as the Dock shows it: made from the logo by `cargo xtask icons`.
+fn app_icon() -> std::sync::Arc<Image> {
+    static ICON: std::sync::LazyLock<std::sync::Arc<Image>> = std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../../../assets/brand/livtk-256.png").to_vec(),
+        ))
+    });
+    ICON.clone()
 }

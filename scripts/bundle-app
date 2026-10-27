@@ -41,7 +41,9 @@ commit=$(echo "$identity" | sed -n 's/.*(build [0-9]*, \([^,)]*\).*/\1/p')
 case "$identity" in *", modified)"*) modified=true ;; *) modified=false ;; esac
 app=$target/livtk.app
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# The icon, made from the logo by `cargo xtask icons` (assets/brand/).
+cp assets/brand/livtk.icns "$app/Contents/Resources/livtk.icns"
 # The app, the CLI, and the helper that installs an update once the app has quit.
 cp "$built/livtk-app" "$built/livtk" "$built/livtk-update" "$app/Contents/MacOS/"
 cat >"$app/Contents/Info.plist" <<EOF
@@ -53,6 +55,7 @@ cat >"$app/Contents/Info.plist" <<EOF
   <key>CFBundleName</key><string>livtk</string>
   <key>CFBundleDisplayName</key><string>livtk</string>
   <key>CFBundleExecutable</key><string>livtk-app</string>
+  <key>CFBundleIconFile</key><string>livtk</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$build</string>

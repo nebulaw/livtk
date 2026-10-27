@@ -1,0 +1,3 @@
+# Project tasks, as Rust projects run them: `cargo xtask <task>` (see xtask/).
+[alias]
+xtask = "run --quiet --package xtask --"

@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+description = "The project's own tasks: `cargo xtask icons` makes the app's icons from the logo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+# Already in the tree through GPUI: the same version, PNG only.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true

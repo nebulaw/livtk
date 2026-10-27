@@ -6,6 +6,7 @@ members = [
     "crates/livtk-cli",
     "crates/livtk-update",
     "crates/livtk-app",
+    "xtask",
 ]
 # The app pulls in a whole UI stack; plain `cargo build` and `cargo test` leave it out.
 default-members = [
@@ -13,6 +14,7 @@ default-members = [
     "crates/livtk-core",
     "crates/livtk-cli",
     "crates/livtk-update",
+    "xtask",
 ]
 
 [workspace.package]
@@ -67,6 +69,14 @@ expect_used = "deny"
 # Dependencies need no debug info: we debug our own code, and debug info is most of the size of
 # the GPUI stack (an 11 GB target directory with it).
 debug = false
+
+# The icons are made pixel by pixel (`cargo xtask icons` and its tests): built optimised even in
+# debug, so a check never waits on them.
+[profile.dev.package.xtask]
+opt-level = 3
+
+[profile.dev.package.image]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

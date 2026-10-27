@@ -585,11 +585,11 @@ impl Runner {
         };
         let livtk = ws.dir().to_path_buf();
         let mut live = live(&livtk, &run.session).unwrap_or_else(|| gone(&run, ws.root()));
-        if let Some(pid) = live.pid.filter(|&p| running(p, &live.session)) {
+        if writing(&live) {
             live.stopping = Some(how);
             live.stop_asked = Some(now_secs());
             save(&livtk, &live)?;
-            return signal(pid, rustix::process::Signal::INT);
+            return signal_turn(&live, rustix::process::Signal::INT).map(|_| ());
         }
         end(ws, &run, &mut live, how, stopped_text(how), by)
     }
@@ -764,6 +764,22 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// End `live`'s turn at once, if it is still going: its process group killed. The one way
+/// anything (a stop that waited too long, a test cleaning up) kills a turn.
+pub fn kill_turn(live: &Live) -> Result<bool> {
+    signal_turn(live, rustix::process::Signal::KILL)
+}
+
+/// `sig` to `live`'s turn, only while its pid still runs that turn: a turn that has ended
+/// leaves its pid in the record until the run ends, and the system may have handed that pid,
+/// and so its process group, to another process since. Whether it was sent.
+fn signal_turn(live: &Live, sig: rustix::process::Signal) -> Result<bool> {
+    match live.pid.filter(|&p| running(p, &live.session)) {
+        Some(pid) => signal(pid, sig).map(|()| true),
+        None => Ok(false),
+    }
 }
 
 /// `sig` to the turn's process group (its own, led by `pid`), by the system call itself, so a
@@ -1061,12 +1077,12 @@ pub fn settle(ws: &mut Workspace, runner: &Runner) -> Result<bool> {
         }
         if writing(&live) {
             // Asked to stop, and still going: made to, harder as it goes on.
-            if let (Some(pid), Some(asked)) = (live.pid, live.stop_asked) {
+            if let Some(asked) = live.stop_asked {
                 let waited = now_secs().saturating_sub(asked);
                 if waited >= STOP_KILL {
-                    let _ = signal(pid, rustix::process::Signal::KILL);
+                    let _ = signal_turn(&live, rustix::process::Signal::KILL);
                 } else if waited >= STOP_TERM {
-                    let _ = signal(pid, rustix::process::Signal::TERM);
+                    let _ = signal_turn(&live, rustix::process::Signal::TERM);
                 }
             }
             continue;

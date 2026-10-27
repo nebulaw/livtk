@@ -4735,6 +4735,11 @@ fn a_named_node_opens_on_a_click(cx: &mut TestAppContext) {
     assert!(ws.links("LIV-1").unwrap().blocks.is_empty());
 }
 
+/// How long a test waits for a stub run to start, go on or stop. A stub turn is a shell script,
+/// quick alone, but it can wait seconds for the machine while other builds and tests run: the
+/// wait only bounds a hang, it never paces a passing test.
+const RUN_WAIT: Duration = Duration::from_secs(30);
+
 /// Ends every run's turn in the project at `.0` when dropped: a failing test never leaves a stub
 /// turn looping behind it.
 struct KillRuns(std::path::PathBuf);
@@ -4742,11 +4747,7 @@ struct KillRuns(std::path::PathBuf);
 impl Drop for KillRuns {
     fn drop(&mut self) {
         for live in livtk_core::run::lives(&self.0.join(".livtk")) {
-            if let Some(pid) = live.pid {
-                let _ = std::process::Command::new("kill")
-                    .args(["-KILL", &format!("-{pid}")])
-                    .status();
-            }
+            let _ = livtk_core::run::kill_turn(&live);
         }
     }
 }
@@ -4774,10 +4775,7 @@ fn a_run_writing(root: &std::path::Path) -> livtk_core::run::Runner {
     while !std::fs::read_to_string(livtk_core::run::stream_path(ws.dir(), &live.session))
         .is_ok_and(|s| s.contains("init"))
     {
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "the turn never started"
-        );
+        assert!(start.elapsed() < RUN_WAIT, "the turn never started");
         std::thread::sleep(Duration::from_millis(20));
     }
     runner
@@ -4791,10 +4789,7 @@ fn until_runs(
 ) {
     let start = Instant::now();
     while !app.read_with(cx, |a, _| done(a.model())) {
-        assert!(
-            start.elapsed() < Duration::from_secs(30),
-            "the runs never got there"
-        );
+        assert!(start.elapsed() < RUN_WAIT, "the runs never got there");
         cx.executor().advance_clock(Duration::from_secs(3));
         cx.run_until_parked();
         std::thread::sleep(Duration::from_millis(30));
@@ -4849,7 +4844,7 @@ fn quitting_with_an_agent_working_asks_first(cx: &mut TestAppContext) {
             break;
         }
         assert!(
-            start.elapsed() < Duration::from_secs(20),
+            start.elapsed() < RUN_WAIT,
             "never stopped: {:?} {:?}",
             livtk_core::run::lives(ws.dir()),
             std::fs::read_dir(ws.dir().join("runs"))
@@ -4885,7 +4880,7 @@ fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
     let start = Instant::now();
     while ws.runs().unwrap()[0].ended().is_none() {
         livtk_core::run::settle(&mut ws, &runner).unwrap();
-        assert!(start.elapsed() < Duration::from_secs(20), "never stopped");
+        assert!(start.elapsed() < RUN_WAIT, "never stopped");
         std::thread::sleep(Duration::from_millis(30));
     }
     let (app, cx) = open_app(cx, &root);
@@ -4902,10 +4897,7 @@ fn runs_a_quit_stopped_are_offered_back(cx: &mut TestAppContext) {
             assert!(args.contains(&format!("--resume {session}")), "{args}");
             break;
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "never continued: {args}"
-        );
+        assert!(start.elapsed() < RUN_WAIT, "never continued: {args}");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -5021,7 +5013,7 @@ fn a_run_from_the_tasks_panel(cx: &mut TestAppContext) {
             if let Some(l) = a.lines().nth(n - 1) {
                 return l.to_owned();
             }
-            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            assert!(start.elapsed() < RUN_WAIT, "turn {n}: {a}");
             std::thread::sleep(Duration::from_millis(20));
         }
     };
@@ -5092,7 +5084,7 @@ fn a_runs_ask_is_answered_with_the_keys_that_decide(cx: &mut TestAppContext) {
             if let Some(l) = a.lines().nth(n - 1) {
                 return l.to_owned();
             }
-            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            assert!(start.elapsed() < RUN_WAIT, "turn {n}: {a}");
             std::thread::sleep(Duration::from_millis(20));
         }
     };
@@ -6420,7 +6412,7 @@ fn a_build_does_its_job_and_a_push_is_refused_without_asking(cx: &mut TestAppCon
             if let Some(l) = a.lines().nth(n - 1) {
                 return l.to_owned();
             }
-            assert!(start.elapsed() < Duration::from_secs(5), "turn {n}: {a}");
+            assert!(start.elapsed() < RUN_WAIT, "turn {n}: {a}");
             std::thread::sleep(Duration::from_millis(20));
         }
     };

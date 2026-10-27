@@ -13,6 +13,11 @@ use livtk_core::{Actor, Command, Kind, State, Workspace};
 
 const CLAUDE: Actor = Actor::Claude { agent: None };
 
+/// How long a test waits for a turn to start or a run to get somewhere. A stub turn is a shell
+/// script, quick alone, but it can wait seconds for the machine while other builds and tests
+/// run: the wait only bounds a hang, it never paces a passing test.
+const WAIT: Duration = Duration::from_secs(30);
+
 /// A stub `claude`: each turn takes the next word from `.stub-turns` beside it (the project's
 /// folder, wherever the turn works), writes its arguments to `.stub-args` there, and answers as
 /// the word says.
@@ -49,11 +54,7 @@ struct KillRuns(PathBuf);
 impl Drop for KillRuns {
     fn drop(&mut self) {
         for live in run::lives(&self.0) {
-            if let Some(pid) = live.pid {
-                let _ = std::process::Command::new("kill")
-                    .args(["-KILL", &format!("-{pid}")])
-                    .status();
-            }
+            let _ = run::kill_turn(&live);
         }
     }
 }
@@ -118,10 +119,7 @@ fn until(
         if done(&r) {
             return r;
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "waited for {what}: {r:?}"
-        );
+        assert!(start.elapsed() < WAIT, "waited for {what}: {r:?}");
         std::thread::sleep(Duration::from_millis(30));
     }
 }
@@ -142,7 +140,7 @@ fn turn_args(root: &Path, n: usize) -> String {
             return a.clone();
         }
         assert!(
-            start.elapsed() < Duration::from_secs(5),
+            start.elapsed() < WAIT,
             "turn {n} never started: {:?} {:?}",
             args(root),
             std::fs::read_dir(root.join(".livtk/runs"))
@@ -289,7 +287,7 @@ fn a_stop_ends_the_turn_keeps_the_work_and_it_can_continue() {
     let live = run::lives(ws.dir()).pop().unwrap();
     let start = Instant::now();
     while !run::writing(&live) {
-        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(start.elapsed() < WAIT);
         std::thread::sleep(Duration::from_millis(20));
     }
     // Its turn under way (the stub ready for the interrupt).
@@ -511,10 +509,7 @@ fn a_turn_finds_its_tools_on_its_path() {
     let file = root(&ws).join(".stub-path");
     let start = Instant::now();
     while !file.exists() {
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "the turn never ran"
-        );
+        assert!(start.elapsed() < WAIT, "the turn never ran");
         std::thread::sleep(Duration::from_millis(20));
     }
     let path = std::fs::read_to_string(file).unwrap();
@@ -987,4 +982,39 @@ fn a_here_document_is_one_command() {
         run::simple_commands("grep x <<< \"y\"\nls"),
         ["grep x <<< \"y\"", "ls"]
     );
+}
+
+/// A turn's pid left in its record after the turn ended may name another process's group by
+/// now: killing the turn leaves that process alone.
+#[test]
+fn killing_a_turn_never_kills_a_process_that_took_its_pid() {
+    use std::os::unix::process::CommandExt;
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let live = run::Live {
+        session: "01a1-a-turn-long-gone".into(),
+        key: "LIV-1".into(),
+        agent: None,
+        stage: Stage::Build,
+        cwd: PathBuf::from("/"),
+        allowed: vec![],
+        read: 0,
+        pid: Some(other.id()),
+        stopping: None,
+        stop_asked: None,
+    };
+    assert!(
+        !run::kill_turn(&live).unwrap(),
+        "not that turn's: nothing sent"
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "the other process lives on"
+    );
+    other.kill().unwrap();
+    let _ = other.wait();
 }

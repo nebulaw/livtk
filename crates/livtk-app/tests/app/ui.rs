@@ -7009,3 +7009,86 @@ fn create_more_keeps_the_form_and_cancel_makes_nothing(cx: &mut TestAppContext) 
     });
     assert!(!tasks(dir.path()).iter().any(|t| t.title == "three"));
 }
+
+/// A long task's panel offers jumps: down to the latest event once it is more than a screen
+/// below, up to the title once that is; ⌘↓ and ⌘↑ do the same. A note arriving while you read
+/// higher up does not move the view: the way down counts it. A short task offers neither.
+#[gpui_kit::test]
+fn a_long_panel_jumps_to_its_latest_and_back_to_its_top(cx: &mut TestAppContext) {
+    let dir = project();
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        for i in 0..40 {
+            ws.execute(
+                Command::Note {
+                    node: "LIV-1".into(),
+                    text: format!("step {i} of a long run"),
+                },
+                &CLAUDE,
+            )
+            .unwrap();
+        }
+    }
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-1"));
+    settle(cx);
+    redraw(cx);
+    redraw(cx);
+    let shown =
+        |cx: &mut gpui_kit::VisualTestContext, id: &'static str| cx.debug_bounds(id).is_some();
+    assert!(shown(cx, "jump-latest"), "the latest is far below");
+    assert!(!shown(cx, "jump-top"), "at the top already");
+    // Down: the composer in view, and the way back up.
+    click_on(cx, "jump-latest");
+    redraw(cx);
+    redraw(cx);
+    let panel = cx.debug_bounds("detail-body-panel").unwrap();
+    let composer = cx.debug_bounds("note-composer").expect("the composer");
+    assert!(
+        composer.bottom() <= panel.bottom(),
+        "{composer:?} in {panel:?}"
+    );
+    assert!(!shown(cx, "jump-latest"));
+    assert!(shown(cx, "jump-top"));
+    // ⌘↑ back up, ⌘↓ down again.
+    cx.simulate_keystrokes("secondary-up");
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-top"), "back at the title");
+    assert!(shown(cx, "jump-latest"));
+    // A note arriving up here: the view stays, the way down counts it.
+    let title = cx.debug_bounds("detail-title").unwrap();
+    Workspace::open(dir.path())
+        .unwrap()
+        .execute(
+            Command::Note {
+                node: "LIV-1".into(),
+                text: "news".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    app.update(cx, |a, _| {
+        a.model_mut().tick();
+    });
+    redraw(cx);
+    redraw(cx);
+    assert_eq!(
+        cx.debug_bounds("detail-title").unwrap(),
+        title,
+        "not pulled down"
+    );
+    assert!(shown(cx, "jump-latest-count"), "one new, counted");
+    cx.simulate_keystrokes("secondary-down");
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-latest-count"), "seen once there");
+    // A short task: neither.
+    app.update(cx, |a, _| a.model_mut().go_to("LIV-2"));
+    settle(cx);
+    redraw(cx);
+    redraw(cx);
+    assert!(!shown(cx, "jump-latest") && !shown(cx, "jump-top"));
+}

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel jump</title>
+<style>
+  :root {
+    --window: #010102; --content: #08090a; --surface: #0f1011; --hover: #141516;
+    --selected: #18191a; --border: #23252a; --border-strong: #34343a;
+    --text: #f7f8f8; --text-2: #d0d6e0; --text-3: #8a8f98; --text-4: #62666d;
+    --accent: #5e6ad2; --accent-hover: #828fff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; background: var(--window); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Inter", sans-serif; }
+  .list { flex: 1; margin: 8px 0 8px 8px; background: var(--content); border: 1px solid var(--border); border-radius: 10px; }
+  .panel { width: 460px; display: flex; flex-direction: column; position: relative; }
+  .head { height: 46px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--border); color: var(--text-3); }
+  .scroll { flex: 1; overflow-y: auto; padding: 20px; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { .scroll { scroll-behavior: auto; } }
+  h1 { font-size: 18px; font-weight: 500; margin: 0 0 6px; }
+  .meta { color: var(--text-4); font-size: 12px; margin-bottom: 18px; }
+  .body p { color: var(--text-2); margin: 0 0 10px; }
+  .label { font-size: 11px; font-weight: 500; color: var(--text-4); margin: 22px 0 10px; }
+  .event { display: flex; gap: 10px; padding: 6px 0; color: var(--text-3); }
+  .mark { width: 20px; height: 20px; flex: none; border-radius: 50%; border: 1.5px solid var(--text-4); }
+  .event b { color: var(--text-2); font-weight: 500; }
+  .composer { margin-top: 14px; height: 44px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text-4); display: flex; align-items: center; padding: 0 12px; }
+
+  /* The jumps: one quiet round button at the panel's foot, the way it points saying where it goes.
+     Shown only once the other end is far off; it never covers the composer. */
+  .jump { position: absolute; right: 18px; width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-2);
+    display: grid; place-items: center; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.45);
+    opacity: 0; transform: translateY(6px); pointer-events: none; transition: opacity .16s, transform .16s; }
+  .jump.on { opacity: 1; transform: none; pointer-events: auto; }
+  .jump:hover { background: var(--hover); color: var(--text); }
+  .jump.down { bottom: 18px; }
+  .jump.up { bottom: 58px; }
+  .jump .new { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+    background: var(--accent); color: var(--text); font-size: 10px; display: grid; place-items: center; }
+  .tip { position: absolute; right: 58px; padding: 4px 8px; border-radius: 6px; background: var(--selected); border: 1px solid var(--border);
+    color: var(--text-2); font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s; }
+  .jump:hover + .tip { opacity: 1; }
+  .tip.down { bottom: 22px; } .tip.up { bottom: 62px; }
+  kbd { font: inherit; color: var(--text-4); margin-left: 6px; }
+
+  .notes { position: fixed; left: 24px; bottom: 20px; max-width: 520px; color: var(--text-4); font-size: 12px; }
+  .notes b { color: var(--text-3); font-weight: 500; }
+  .sim { margin-top: 8px; }
+  .sim button { all: unset; cursor: pointer; padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div class="list"></div>
+<div class="panel">
+  <div class="head">TAS-117 <span style="flex:1"></span>×</div>
+  <div class="scroll" id="scroll">
+    <h1>Prototype and implement scroll down and scroll up in the tasks panel</h1>
+    <div class="meta">Created 2 hours ago by you · Changed just now</div>
+    <div class="body" id="body"></div>
+    <div class="label">Activity</div>
+    <div id="events"></div>
+    <div class="composer">Add a note…</div>
+  </div>
+  <div class="jump up" id="up" title="">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>
+  </div>
+  <div class="tip up">Back to the top <kbd>⌘↑</kbd></div>
+  <div class="jump down" id="down">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg>
+    <span class="new" id="new" hidden>1</span>
+  </div>
+  <div class="tip down">To the latest <kbd>⌘↓</kbd></div>
+</div>
+
+<div class="notes">
+  <b>Scroll up and down in a task's panel.</b> Once you're more than a screen from an end, a quiet round button appears at the panel's foot: ↓ to the latest activity, ↑ back to the title. ⌘↓ and ⌘↑ do the same, and the jump is smooth unless less motion is asked for.
+  A note or move that lands while you're reading higher up doesn't pull you down: ↓ shows how many are new.
+  <div class="sim"><button id="arrive">Simulate a new note arriving</button></div>
+</div>
+
+<script>
+const body = document.getElementById("body");
+for (let i = 0; i < 6; i++) body.innerHTML += `<p>Paragraph ${i + 1} of the plan: what's wrong, the fix, and how we'll know it's done. ${"Words of the plan. ".repeat(8)}</p>`;
+const events = document.getElementById("events");
+const add = (i) => { events.innerHTML += `<div class="event"><span class="mark"></span><span><b>${i % 3 ? "Claude" : "You"}</b> ${["noted", "moved it to review", "edited the body"][i % 3]} · ${i}m ago</span></div>`; };
+for (let i = 0; i < 40; i++) add(i);
+
+const scroll = document.getElementById("scroll"), up = document.getElementById("up"), down = document.getElementById("down"), badge = document.getElementById("new");
+let unseen = 0;
+// A screen from an end, roughly: the panel's own height.
+const far = () => scroll.clientHeight;
+function update() {
+  const top = scroll.scrollTop, bottom = scroll.scrollHeight - scroll.clientHeight - top;
+  up.classList.toggle("on", top > far());
+  down.classList.toggle("on", bottom > far() || unseen > 0);
+  if (bottom < 8) { unseen = 0; }
+  badge.hidden = unseen === 0; badge.textContent = unseen;
+}
+scroll.addEventListener("scroll", update);
+up.onclick = () => scroll.scrollTo({ top: 0 });
+down.onclick = () => { unseen = 0; scroll.scrollTo({ top: scroll.scrollHeight }); };
+document.addEventListener("keydown", e => {
+  if (!e.metaKey) return;
+  if (e.key === "ArrowUp") { e.preventDefault(); up.onclick(); }
+  if (e.key === "ArrowDown") { e.preventDefault(); down.onclick(); }
+});
+document.getElementById("arrive").onclick = () => {
+  const atBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop < 8;
+  add(events.children.length);
+  if (atBottom) scroll.scrollTop = scroll.scrollHeight; else unseen++;
+  update();
+};
+update();
+</script>
+</body>
+</html>

@@ -716,7 +716,9 @@ impl LivtkApp {
                             .child(timeline),
                     )
                     .child(self.timeline_probe())
-                    .child(stuck),
+                    .child(self.jump_probe(n.id, d.history.len()))
+                    .child(stuck)
+                    .children(self.jump_buttons(cx)),
             )
     }
 

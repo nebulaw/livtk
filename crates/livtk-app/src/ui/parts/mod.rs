@@ -5,8 +5,10 @@ mod chip;
 mod choice_menu;
 mod date_picker;
 mod foot_row;
+mod jump;
 
 pub(super) use chip::Chip;
 pub(super) use choice_menu::{ChoiceMenu, ChoiceRow, OnPick};
 pub(super) use date_picker::DatePicker;
 pub(super) use foot_row::{FootRow, Lead, Tone};
+pub(super) use jump::{JUMP, Jump};

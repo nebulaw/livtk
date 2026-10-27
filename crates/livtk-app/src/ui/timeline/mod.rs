@@ -327,6 +327,12 @@ impl LivtkApp {
         .inset_0()
     }
 
+    /// The height the composer takes at the panel's foot while it is stuck there.
+    pub(in crate::ui) fn stuck_foot(&self) -> Option<Pixels> {
+        let r = self.rail.borrow();
+        r.composer_stuck.then_some(r.composer_h)
+    }
+
     /// The rows stuck to the panel's edges, over its content: at the top, the lanes whose work
     /// is in view; at the bottom, the composer while its place is below.
     pub(super) fn timeline_stuck(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {

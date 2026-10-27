@@ -17,6 +17,7 @@ mod feed;
 mod form;
 mod graph;
 pub mod icons;
+mod jumps;
 mod list;
 pub mod menus;
 mod new_form;
@@ -109,6 +110,8 @@ actions!(
     [
         Down,
         Up,
+        JumpTop,
+        JumpLatest,
         Open,
         Close,
         Decide,
@@ -566,6 +569,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("a", Decide, nav),
         KeyBinding::new("shift-a", Standing, nav),
         KeyBinding::new("x", Reject, nav),
+        KeyBinding::new("secondary-up", JumpTop, nav),
+        KeyBinding::new("secondary-down", JumpLatest, nav),
         KeyBinding::new("n", NewTask, nav),
         KeyBinding::new("p", NewProject, nav),
         KeyBinding::new("b", ToggleLayout, nav),
@@ -741,6 +746,8 @@ pub struct LivtkApp {
     board_scroll: ScrollHandle,
     /// The task panel's scroll: a stuck row of its timeline scrolls back to its place.
     detail_scroll: ScrollHandle,
+    /// The panel's jumps: which show, what is new below, a jump under way.
+    jumps: Rc<std::cell::RefCell<jumps::JumpState>>,
     /// How often a restart to update was asked for, for tests.
     restarts_asked: u32,
     /// How many looks for updates were started, for tests.
@@ -1039,6 +1046,7 @@ impl LivtkApp {
             palette_scroll: ScrollHandle::new(),
             board_scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
+            jumps: jumps::jumps(),
             restarts_asked: 0,
             checks_asked: 0,
             hold_checks: false,
@@ -3001,6 +3009,8 @@ impl Render for LivtkApp {
                     this.choice_where(|c| c.always, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &JumpTop, _, cx| this.jump(false, cx)))
+            .on_action(cx.listener(|this, _: &JumpLatest, _, cx| this.jump(true, cx)))
             .on_action(cx.listener(|this, _: &Reject, _, cx| {
                 if !this.answer_acted_on(runs::Ask::Deny, cx) {
                     this.choice_where(|c| c.to == State::Rejected, cx);

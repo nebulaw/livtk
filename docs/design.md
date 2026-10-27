@@ -137,6 +137,12 @@ them and never restyle them.
   field is empty, Page Up and Page Down a month, Enter picks the date typed or the day the keys
   are on. Text it cannot read is said under the field, never guessed. Dates only, no times; the
   dates themselves are `model::dates`, tested on their own.
+- **Jumps** (`ui/parts/jump.rs`): a quiet 32px round button over a long scroll, its arrow the
+  way it goes, a count in the accent for what arrived at that end unseen, a tooltip naming it and
+  its keys. A node's panel shows ↓ (to the latest, ⌘↓) once its end is more than a screen below
+  and ↑ (back to the title, ⌘↑) once its top is, at its foot and above the composer when that is
+  stuck. Something new while you read higher up never pulls you down: ↓ counts it. The jump is
+  smooth unless less motion is asked for.
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the
   highlight glides from row to row. A row leads with the same slot (priority or kind), then key,
   state, title, and ends with when it changed. Rows say something at a glance, never a bare name.

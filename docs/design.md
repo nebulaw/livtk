@@ -10,6 +10,11 @@ with their chats, terminals and the rest. When that comes, it changes here first
 
 - **Left: where to go.** The sidebar: projects, the views, the tools. Navigation only, in
   sidebar rows (32px, rounded, 15px text). Nothing else uses the sidebar's look.
+  Its foot holds the updates row, Shortcuts and Settings, each a **foot row** (below). The
+  updates row is always there, in one of three states: **Check for updates** (a click looks, as
+  the menu's Check for Updates… does), **Checking for updates…** (clicks do nothing until it is
+  done) and **Restart to update · build N** in the accent once a build is staged. The collapsed
+  rail has the same three states on one button; its dot shows only when a build is staged.
 - **Middle: the thing itself, edge to edge.** One surface fills each content box: a list, the
   board, the graph, the terminal, a doc being read. No second sidebar, no columns nested inside
   it, no floating fields of its own. The middle can be split into panes (below).
@@ -102,6 +107,13 @@ menu still moves it).
 
 ## Parts
 
+Parts built to be reused live in `ui/parts`, one look each from theme tokens only; views compose
+them and never restyle them.
+
+- **Foot rows** (`ui/parts/foot_row.rs`): the sidebar's quieter rows under the views, a sidebar
+  row's size. An icon (or the accent's dot), a label cut when narrow, then a key hint or a few
+  `TEXT_4` words kept whole. Muted (`TEXT_4`, `TEXT_3` on hover) or accent (`ACCENT_HOVER`), and
+  disabled (no hover) while there is nothing to do.
 - **List rows**: 36px, full width, `px_4`, hairline between rows; selected is `SELECTED`, and the
   highlight glides from row to row. A row leads with the same slot (priority or kind), then key,
   state, title, and ends with when it changed. Rows say something at a glance, never a bare name.

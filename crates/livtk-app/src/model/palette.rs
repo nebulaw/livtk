@@ -120,6 +120,8 @@ pub enum Ask {
     ClosePane,
     NextPane,
     NewTerminal,
+    /// Look for a newer build, as the menu's Check for Updates… does.
+    CheckForUpdates,
     /// Quit and install the staged build.
     RestartToUpdate,
 }
@@ -735,14 +737,15 @@ impl Model {
             Some(super::keys::HELP),
             Run::Ask(Ask::Help),
         ));
-        if let Some(build) = self.staged_build {
-            out.push(Action {
+        out.push(match self.updates.staged() {
+            Some(build) => Action {
                 label: format!("Restart to update · build {build}"),
                 context: None,
                 shortcut: None,
                 run: Run::Ask(Ask::RestartToUpdate),
-            });
-        }
+            },
+            None => plain("Check for updates", None, Run::Ask(Ask::CheckForUpdates)),
+        });
         out
     }
 }

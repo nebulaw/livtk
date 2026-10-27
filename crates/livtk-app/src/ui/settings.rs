@@ -427,8 +427,7 @@ impl LivtkApp {
     }
 
     fn updates(&self, cx: &mut Context<Self>) -> Div {
-        let staged = self.update.as_ref().map(|u| u.manifest.build);
-        let action = match staged {
+        let action = match self.model.updates.staged() {
             Some(build) => button(
                 "settings-restart",
                 &format!("Restart to build {build}"),

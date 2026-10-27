@@ -191,6 +191,29 @@ pub fn kind_title(kind: Kind) -> &'static str {
     })
 }
 
+/// Where looking for a newer build stands: what the sidebar's updates row, its rail button and
+/// the palette all read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UpdateState {
+    /// Nothing staged, nothing being looked for: a check can be asked.
+    #[default]
+    Idle,
+    /// A look for updates is under way; another is not started.
+    Checking,
+    /// Build N is staged and waits for a restart.
+    Staged(u64),
+}
+
+impl UpdateState {
+    /// The staged build's number, once there is one.
+    pub fn staged(self) -> Option<u64> {
+        match self {
+            UpdateState::Staged(build) => Some(build),
+            _ => None,
+        }
+    }
+}
+
 /// How a node's detail opens, as Notion opens a page from a database: in a panel beside the
 /// list (side peek), in a large card over the window (center peek), or in the list's place
 /// (full page).
@@ -659,9 +682,9 @@ pub struct Model {
     pub detail_pane: Option<u64>,
     /// Your own on/off choices about what the window shows.
     pub prefs: prefs::Prefs,
-    /// A newer build staged and waiting for a restart, by its number: what offers the restart
-    /// (the sidebar, its rail, the palette) reads it here.
-    pub staged_build: Option<u64>,
+    /// Where looking for a newer build stands: what offers a check or the restart (the
+    /// sidebar, its rail, the palette) reads it here.
+    pub updates: UpdateState,
     /// Catching up the window must not wait for, found by `tick`, for the view to run elsewhere.
     catch_ups: Vec<CatchUp>,
     /// What came into an inbox from someone else since the view last took it.
@@ -897,7 +920,7 @@ impl Model {
             detail_mode: DetailMode::default(),
             detail_pane: None,
             prefs: prefs::Prefs::default(),
-            staged_build: None,
+            updates: UpdateState::Idle,
             catch_ups: Vec::new(),
             arrivals: Vec::new(),
             palette: None,

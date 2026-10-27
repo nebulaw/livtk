@@ -410,7 +410,7 @@ impl LivtkApp {
             Run::Ask(Ask::EditTitle | Ask::EditBody) => Icon::Edit,
             Run::Ask(Ask::OpenFolder) => Icon::OpenProject,
             Run::Ask(Ask::Help) => Icon::Shortcuts,
-            Run::Ask(Ask::RestartToUpdate) => Icon::Meteor,
+            Run::Ask(Ask::CheckForUpdates | Ask::RestartToUpdate) => Icon::Meteor,
             Run::Ask(Ask::SplitRight) => Icon::PanelRight,
             Run::Ask(Ask::SplitDown) => Icon::PanelBottom,
             Run::Ask(Ask::ClosePane) => Icon::Close,

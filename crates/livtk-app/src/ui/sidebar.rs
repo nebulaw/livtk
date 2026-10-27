@@ -1,5 +1,6 @@
 //! The sidebar, its collapsed rail, the top bar, and the edges that resize them.
 
+use super::parts::{FootRow, Lead, Tone};
 use super::*;
 
 impl LivtkApp {
@@ -65,45 +66,19 @@ impl LivtkApp {
             side = side.child(self.side_move(view.title(), row.into_any_element(), cx));
         }
         side.child(div().flex_1())
-            .children(self.update_row(cx))
+            .child(self.update_row(cx))
             .child(
-                div()
-                    .id("shortcuts")
-                    .debug_selector(|| "shortcuts".into())
-                    .group("nav")
-                    .px_2()
-                    .h(px(NAV_ROW))
-                    .text_size(px(NAV_TEXT))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .text_color(color(TEXT_4))
-                    .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                    .child(icon_hover(Icon::Shortcuts, NAV_ICON, TEXT_4, "nav", TEXT_3))
-                    .child(div().flex_1().child("Shortcuts"))
-                    .children(hint(&format!("{} ?", keys::MOD), cx))
+                FootRow::new("shortcuts", Lead::Icon(Icon::Shortcuts), "Shortcuts")
+                    .keys(format!("{} ?", keys::MOD))
+                    .build(cx)
                     .on_click(
                         cx.listener(|this, _, window, cx| this.set_help(!this.help, window, cx)),
                     ),
             )
             .child(
-                div()
-                    .id("open-settings")
-                    .debug_selector(|| "open-settings".into())
-                    .group("nav")
-                    .px_2()
-                    .h(px(NAV_ROW))
-                    .text_size(px(NAV_TEXT))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_lg()
-                    .text_color(color(TEXT_4))
-                    .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT_3)))
-                    .child(icon_hover(Icon::Settings, NAV_ICON, TEXT_4, "nav", TEXT_3))
-                    .child(div().flex_1().child("Settings"))
-                    .children(hint(&format!("{} ,", keys::MOD), cx))
+                FootRow::new("open-settings", Lead::Icon(Icon::Settings), "Settings")
+                    .keys(format!("{} ,", keys::MOD))
+                    .build(cx)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_settings(settings::Section::Appearance, window, cx)
                     })),
@@ -408,7 +383,7 @@ impl LivtkApp {
             rail = rail.child(self.side_move(view.title(), button.into_any_element(), cx));
         }
         rail.child(div().flex_1())
-            .children(self.update_rail_button(cx))
+            .child(self.update_rail_button(cx))
             .child(
                 rail_button(
                     "rail-shortcuts".into(),
@@ -434,69 +409,62 @@ impl LivtkApp {
             .into_any_element()
     }
 
-    /// A staged build's restart, as the full sidebar offers it: the one row in the accent. As
-    /// the sidebar narrows, the build's number goes first, then its label is cut, so it never
-    /// runs past the edge; its tooltip says it all.
-    fn update_row(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        let build = self.model.staged_build?;
-        let roomy = self.sidebar_width >= UPDATE_ROW_ROOMY;
-        Some(
-            div()
-                .id("restart-to-update")
-                .debug_selector(|| "restart-to-update".into())
-                .px_2()
-                .h(px(NAV_ROW))
-                .text_size(px(NAV_TEXT))
-                .flex()
-                .items_center()
-                .gap_2()
-                .min_w_0()
-                .rounded_lg()
-                .text_color(color(ACCENT_HOVER))
-                .hover(|s| s.bg(color(HOVER)).text_color(color(TEXT)))
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(6.))
-                        .rounded_full()
-                        .bg(color(ACCENT)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child("Restart to update"),
-                )
-                .when(roomy, |d| {
-                    d.child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(color(TEXT_4))
-                            .child(format!("build {build}")),
-                    )
-                })
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(update_tip(build)).build(window, cx)
-                })
-                .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
-        )
+    /// The updates row, right above Shortcuts, in the state looking for a build is in: a check
+    /// to ask for, the check under way, or a staged build's restart (the one row in the
+    /// accent). As the sidebar narrows, the build's number goes first, then the label is cut,
+    /// so it never runs past the edge; its tooltip says it all.
+    fn update_row(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        match self.model.updates {
+            UpdateState::Idle => FootRow::new(
+                "check-updates",
+                Lead::Icon(Icon::Meteor),
+                "Check for updates",
+            )
+            .build(cx)
+            .on_click(cx.listener(|this, _, _, cx| this.check_updates(true, cx))),
+            UpdateState::Checking => FootRow::new(
+                "checking-updates",
+                Lead::Icon(Icon::Meteor),
+                "Checking for updates…",
+            )
+            .disabled(true)
+            .build(cx),
+            UpdateState::Staged(build) => {
+                let roomy = self.sidebar_width >= UPDATE_ROW_ROOMY;
+                FootRow::new("restart-to-update", Lead::Dot, "Restart to update")
+                    .tone(Tone::Accent)
+                    .trailing(roomy.then(|| format!("build {build}")))
+                    .tip(update_tip(build))
+                    .build(cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx)))
+            }
+        }
     }
 
-    /// A staged build's restart on the collapsed rail: its icon in the accent, a dot on it.
-    fn update_rail_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        let build = self.model.staged_build?;
-        Some(
-            rail_button(
-                "rail-update".into(),
-                Icon::Meteor,
-                false,
-                true,
-                update_tip(build).into(),
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.restart_to_update(cx))),
+    /// The updates row on the collapsed rail, in the same three states: its tooltip says which,
+    /// and a dot is on it only while a build waits for the restart.
+    fn update_rail_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let state = self.model.updates;
+        let tip = match state {
+            UpdateState::Idle => "Check for updates".to_owned(),
+            UpdateState::Checking => "Checking for updates…".to_owned(),
+            UpdateState::Staged(build) => update_tip(build),
+        };
+        let staged = state.staged().is_some();
+        rail_button(
+            "rail-update".into(),
+            Icon::Meteor,
+            false,
+            staged,
+            tip.into(),
         )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if staged {
+                this.restart_to_update(cx)
+            } else {
+                this.check_updates(true, cx)
+            }
+        }))
     }
 
     /// The projects, from the rail: pick one, or open another.

@@ -23,6 +23,7 @@ mod node_ref;
 mod notices;
 mod overlays;
 mod panes;
+mod parts;
 mod peek;
 mod props;
 mod runs;
@@ -64,9 +65,9 @@ use crate::model::keys;
 use crate::model::{
     Act, Arrival, Ask, CARD_H, CARD_W, Choice, DOTS_BELOW, Detail, DocPick, FeedRow, GroupKey,
     Grouping, Item as PaletteItem, Layout, Level, LinkChoice, LinkGroup, ListSpec, Look, Mark,
-    Model, Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, View, arrows_with,
-    created_as, describe, drop_allowed, has_flow, link_choices, link_curve, state_name, steps_with,
-    visible_runs,
+    Model, Ordering, Palette, Quiet, Run, Saved, SavedWindow, Step, Toast, UpdateState, View,
+    arrows_with, created_as, describe, drop_allowed, has_flow, link_choices, link_curve,
+    state_name, steps_with, visible_runs,
 };
 use icons::{Icon, icon, icon_hover};
 use theme::*;
@@ -758,10 +759,12 @@ pub struct LivtkApp {
     detail_scroll: ScrollHandle,
     /// How often a restart to update was asked for, for tests.
     restarts_asked: u32,
+    /// How many looks for updates were started, for tests.
+    checks_asked: u32,
+    /// For tests: a look for updates is only counted and stays under way, never looking.
+    hold_checks: bool,
     /// A newer build, staged and verified, waiting for "Restart to Update".
     update: Option<livtk_update::stage::Staged>,
-    /// A look for updates under way.
-    checking_updates: bool,
     /// Notifications opened with Show more.
     expanded: std::collections::HashSet<u64>,
     /// What the activity grid remembers between frames.
@@ -1038,10 +1041,11 @@ impl LivtkApp {
             board_scroll: ScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             restarts_asked: 0,
+            checks_asked: 0,
+            hold_checks: false,
             column_scrolls: Default::default(),
             grid_state,
             update: None,
-            checking_updates: false,
             expanded: Default::default(),
             graph_bounds: Rc::new(Cell::new(Bounds::default())),
             graph_press: None,
@@ -1468,6 +1472,7 @@ impl LivtkApp {
             }
             Some(Ask::OpenFolder) => self.open_folder(cx),
             Some(Ask::Help) => self.set_help(true, window, cx),
+            Some(Ask::CheckForUpdates) => self.check_updates(true, cx),
             Some(Ask::RestartToUpdate) => self.restart_to_update(cx),
             Some(Ask::SplitRight) => self.split_pane(PaneAxis::Row, window, cx),
             Some(Ask::SplitDown) => self.split_pane(PaneAxis::Column, window, cx),
@@ -1853,7 +1858,28 @@ impl LivtkApp {
     /// and a restart asked for is only counted, never installs.
     #[doc(hidden)]
     pub fn stage_update_for_test(&mut self, build: u64) {
-        self.model.staged_build = Some(build);
+        self.model.updates = UpdateState::Staged(build);
+    }
+
+    /// From now on a look for updates is only counted and stays under way, for tests: the
+    /// window shows a check running, and nothing is ever looked for.
+    #[doc(hidden)]
+    pub fn hold_update_checks_for_test(&mut self) {
+        self.hold_checks = true;
+    }
+
+    /// End the look held under way, as one that found nothing would, for tests.
+    #[doc(hidden)]
+    pub fn end_update_check_for_test(&mut self) {
+        if self.model.updates == UpdateState::Checking {
+            self.model.updates = UpdateState::Idle;
+        }
+    }
+
+    /// How many looks for updates were started, for tests.
+    #[doc(hidden)]
+    pub fn checks_asked(&self) -> u32 {
+        self.checks_asked
     }
 
     /// How often a restart to update was asked for, for tests.
@@ -2089,16 +2115,22 @@ impl LivtkApp {
             }
             return;
         }
-        if self.checking_updates {
+        // One look at a time; and a build staged is not looked for again.
+        if self.model.updates != UpdateState::Idle {
             return;
         }
-        self.checking_updates = true;
+        self.model.updates = UpdateState::Checking;
+        self.checks_asked += 1;
+        cx.notify();
+        if self.hold_checks {
+            return;
+        }
         let looked =
             cx.background_spawn(async { crate::updates::check(APP_ID, livtk_build::BUILD) });
         cx.spawn(async move |this, cx| {
             let found = looked.await;
             let _ = this.update(cx, |app, cx| {
-                app.checking_updates = false;
+                app.model.updates = UpdateState::Idle;
                 match found {
                     Ok(Some(staged)) => {
                         log::info!("update: build {} staged", staged.manifest.build);
@@ -2109,7 +2141,7 @@ impl LivtkApp {
                                 .about("livtk", "Update")
                                 .action("Restart to Update", Act::RestartToUpdate),
                         );
-                        app.model.staged_build = Some(staged.manifest.build);
+                        app.model.updates = UpdateState::Staged(staged.manifest.build);
                         app.update = Some(staged);
                     }
                     Ok(None) if asked => app

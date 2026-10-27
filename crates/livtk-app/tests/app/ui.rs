@@ -6374,30 +6374,86 @@ fn the_timeline_sticks_what_heads_the_view(cx: &mut TestAppContext) {
     ));
 }
 
-/// A staged build's restart is offered wherever the sidebar is: a row that fits the sidebar at
-/// any width, a button on the collapsed rail, a command in the palette; each restarts. With
-/// nothing staged, none of them shows.
+/// The sidebar always has an updates row, right above Shortcuts, fitting the sidebar at any
+/// width: with nothing staged it checks (once at a time, saying so while it looks); once a
+/// build is staged it restarts. The collapsed rail's button and the palette do the same.
 #[gpui_kit::test]
-fn restart_to_update_is_offered_at_any_sidebar_width(cx: &mut TestAppContext) {
+fn updates_are_checked_or_restarted_at_any_sidebar_width(cx: &mut TestAppContext) {
     let dir = project();
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
+    app.update(cx, |a, _| a.hold_update_checks_for_test());
     resize(cx, 1400., 900.);
     redraw(cx);
     assert!(
         cx.debug_bounds("restart-to-update").is_none(),
         "nothing staged"
     );
+    let checks = |cx: &mut gpui_kit::VisualTestContext| app.read_with(cx, |a, _| a.checks_asked());
+    // Nothing staged: the check sits right above Shortcuts, inside the sidebar at its narrowest.
+    drag_to(cx, "sidebar-edge", 170.);
+    redraw(cx);
+    let side = cx.debug_bounds("sidebar").unwrap();
+    let row = cx.debug_bounds("check-updates").expect("the check");
+    let shortcuts = cx.debug_bounds("shortcuts").unwrap();
+    assert!(
+        row.bottom() <= shortcuts.top() && shortcuts.top() - row.bottom() < gpui_kit::px(4.),
+        "right above Shortcuts: {row:?}, {shortcuts:?}"
+    );
+    assert!(
+        row.right() <= side.right() + gpui_kit::px(0.5),
+        "inside the sidebar: {row:?} in {side:?}"
+    );
+    // A click looks; while it looks, the row says so and another click looks no more.
+    click_on(cx, "check-updates");
+    assert_eq!(checks(cx), 1);
+    redraw(cx);
+    assert!(cx.debug_bounds("check-updates").is_none());
+    let looking = cx.debug_bounds("checking-updates").expect("checking");
+    assert_eq!(looking.top(), row.top(), "in the same place");
+    assert_eq!(
+        app.read_with(cx, |a, _| a.model().updates),
+        livtk_app::model::UpdateState::Checking
+    );
+    click_on(cx, "checking-updates");
+    assert_eq!(checks(cx), 1, "one look at a time");
+    // Found nothing: the palette offers the check too.
+    app.update(cx, |a, cx| {
+        a.end_update_check_for_test();
+        cx.notify();
+    });
+    redraw(cx);
+    cx.simulate_keystrokes("secondary-k");
+    cx.simulate_input("check for updates");
+    cx.simulate_keystrokes("enter");
+    redraw(cx);
+    assert_eq!(checks(cx), 2);
+    // Collapsed: the rail's button checks, with no dot while nothing is staged.
+    app.update(cx, |a, cx| {
+        a.end_update_check_for_test();
+        cx.notify();
+    });
+    cx.simulate_keystrokes("secondary-b");
+    redraw(cx);
+    let button = cx.debug_bounds("rail-update").expect("on the rail");
+    assert!(
+        cx.debug_bounds("rail-badge")
+            .is_none_or(|b| !button.contains(&b.center())),
+        "no dot with nothing staged"
+    );
+    click_on(cx, "rail-update");
+    assert_eq!(checks(cx), 3);
+    cx.simulate_keystrokes("secondary-b");
+    redraw(cx);
+    // A build staged: the same spot restarts.
     app.update(cx, |a, cx| {
         a.stage_update_for_test(267);
         cx.notify();
     });
     redraw(cx);
-    // At the sidebar's narrowest, the row stays inside it.
-    drag_to(cx, "sidebar-edge", 170.);
-    redraw(cx);
-    let side = cx.debug_bounds("sidebar").unwrap();
     let row = cx.debug_bounds("restart-to-update").expect("the row");
+    let shortcuts = cx.debug_bounds("shortcuts").unwrap();
+    assert!(row.bottom() <= shortcuts.top(), "above Shortcuts");
     assert!(
         row.right() <= side.right() + gpui_kit::px(0.5),
         "inside the sidebar: {row:?} in {side:?}"

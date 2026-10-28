@@ -4,12 +4,17 @@
 //! by hand: change the master (or a setting below) and run it again. What it writes is committed,
 //! so a build never needs it; a test fails when the committed files no longer match the master.
 //!
+//! `fixture`: a project of any number of events, made from a real log, to measure how livtk holds
+//! as projects grow (see `fixture.rs`).
+//!
 //! Today it makes the macOS icon. Each platform is one output of the same rendering:
 //! - macOS (`livtk.icns`): Apple's icon grid, the art in a rounded square with its shadow.
 //! - Windows, later: an `.ico` of 16, 20, 24, 32, 40, 48, 64 and 256 (256 stored as PNG),
 //!   embedded in the `.exe` by `winresource` from `build.rs`, Windows targets only.
 //! - Linux, later: `hicolor` PNGs (16 to 512) named after the app id,
 //!   `com.github.nebulaw.livtk.png`, with a `com.github.nebulaw.livtk.desktop` beside them.
+
+mod fixture;
 
 use std::path::{Path, PathBuf};
 
@@ -28,7 +33,10 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        _ => bail!("usage: cargo xtask icons"),
+        "fixture" => fixture::run(&std::env::args().skip(2).collect::<Vec<_>>()),
+        _ => bail!(
+            "usage: cargo xtask icons | fixture --events N --out DIR"
+        ),
     }
 }
 

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# How livtk holds as a project grows (TAS-125): for each project given (made by
+# `cargo xtask fixture`), what its files weigh and what its everyday calls cost. A copy of the
+# project is measured, so the fixture stays as made; its own config folder, so your app and
+# project list are never touched.
+#   scripts/scale DIR...              measure with target/livtk.app (scripts/release builds it)
+#   scripts/scale --app PATH DIR...   another livtk.app
+#   scripts/scale --no-app DIR...     the files and the CLI only, no window opened
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+app=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)/livtk.app
+with_app=1
+dirs=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --app) app=$2; shift 2 ;;
+    --no-app) with_app=0; shift ;;
+    *) dirs+=("$1"); shift ;;
+  esac
+done
+[ ${#dirs[@]} -gt 0 ] || { echo "usage: scripts/scale [--app PATH] [--no-app] DIR..." >&2; exit 2; }
+cli=$app/Contents/MacOS/livtk
+bin=$app/Contents/MacOS/livtk-app
+[ -x "$cli" ] || { echo "scale: no app at $app" >&2; exit 2; }
+
+work=$(mktemp -d)
+pid=""
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; rm -rf "$work"' EXIT
+export LIVTK_CONFIG_DIR=$work/config
+mkdir -p "$LIVTK_CONFIG_DIR"
+
+ms() { perl -MTime::HiRes=time -e 'printf "%.0f", time*1000'; }
+# The wall time of a command, in ms; its output is dropped.
+timed() {
+  local s e
+  s=$(ms)
+  "$@" >/dev/null 2>&1 || true
+  e=$(ms)
+  echo $((e - s))
+}
+kb() { echo $(( $(stat -f %z "$1" 2>/dev/null || echo 0) / 1024 )); }
+row() { printf '  %-44s %s\n' "$1" "$2"; }
+
+for src in "${dirs[@]}"; do
+  proj=$work/p
+  rm -rf "$proj"
+  cp -R "$src" "$proj"
+  log=$proj/.livtk/events.jsonl
+  n=$(wc -l <"$log" | tr -d ' ')
+  echo "$(basename "$src"): $n events"
+
+  # What the log weighs, plain and compressed.
+  row "log" "$(kb "$log") KB"
+  row "log, gzip -6" "$(( $(gzip -6 -c "$log" | wc -c) / 1024 )) KB"
+  if command -v zstd >/dev/null; then
+    row "log, zstd -3" "$(( $(zstd -3 -q -c "$log" | wc -c) / 1024 )) KB"
+    row "log, zstd -19" "$(( $(zstd -19 -q -c "$log" | wc -c) / 1024 )) KB"
+  fi
+
+  # The projection: built cold by the first call, then what it weighs.
+  rm -f "$proj"/.livtk/livtk.db*
+  row "first call, building the projection" "$(cd "$proj" && timed "$cli" list) ms"
+  row "projection (livtk.db + WAL)" "$(kb "$proj/.livtk/livtk.db") KB + $(kb "$proj/.livtk/livtk.db-wal") KB"
+  row "rebuild" "$(cd "$proj" && timed "$cli" rebuild) ms"
+
+  # Everyday calls, warm.
+  for args in "list" "list --all" "show TAS-1" "sessions" "log TAS-1" "inbox" "next" "flow"; do
+    # shellcheck disable=SC2086
+    row "livtk $args" "$(cd "$proj" && timed "$cli" $args) ms"
+  done
+  row "hook user-prompt-submit" "$(cd "$proj" && timed sh -c "echo '{\"prompt\":\"why does the notice stay\",\"session_id\":\"s\",\"cwd\":\"$proj\"}' | '$cli' hook user-prompt-submit") ms"
+  row "a note (append and apply)" "$(cd "$proj" && timed "$cli" note TAS-1 "measured") ms"
+  row "livtk list after it (catch-up)" "$(cd "$proj" && timed "$cli" list) ms"
+
+  # Git: the log committed, then a day's work (100 notes) committed on top.
+  (
+    cd "$proj"
+    git init -q . && git add .livtk/events.jsonl .livtk/config.toml && git -c user.name=s -c user.email=s@s commit -qm base
+    git gc -q --aggressive 2>/dev/null || git gc -q
+  )
+  row ".git after the first commit (gc'd)" "$(du -sk "$proj/.git" | cut -f1) KB"
+  (cd "$proj" && for i in $(seq 1 100); do "$cli" note TAS-1 "note $i of a day's work" >/dev/null; done)
+  (cd "$proj" && git add .livtk/events.jsonl && git -c user.name=s -c user.email=s@s commit -qm day && git gc -q)
+  row ".git after a day's 100 notes (gc'd)" "$(du -sk "$proj/.git" | cut -f1) KB"
+  row "git diff of that day" "$(cd "$proj" && timed git diff HEAD~1 -- .livtk/events.jsonl) ms"
+  row "git log -p of the log, last 10 commits" "$(cd "$proj" && timed git log -p -n 10 -- .livtk/events.jsonl) ms"
+
+  # The app: opened on the project, left 20 s; its memory then, and the CPU it took to start.
+  if [ "$with_app" = 1 ]; then
+    printf 'project = "%s"\nview = "tasks"\nlayout = "list"\n' "$proj" >"$LIVTK_CONFIG_DIR/app.toml"
+    "$bin" "$proj" >/dev/null 2>&1 &
+    pid=$!
+    sleep 20
+    row "app: memory after 20 s" "$(( $(ps -o rss= -p "$pid") / 1024 )) MB"
+    row "app: CPU time in its first 20 s" "$(ps -o time= -p "$pid" | tr -d ' ')"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    pid=""
+  fi
+done

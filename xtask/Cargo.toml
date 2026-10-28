@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "The project's own tasks: `cargo xtask icons` makes the app's icons from the logo"
+description = "The project's own tasks: `cargo xtask icons` makes the app's icons from the logo, `fixture` a project of any size"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

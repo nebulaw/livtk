@@ -104,6 +104,11 @@ if [ -n "$record" ]; then
   awk -F'\t' -v d="$(date -u +%Y-%m-%dT%H:%MZ)" -v b="$build" -v c="$commit" \
     '{printf "%s\t%s\t%s\t%s\t%s\t%s\n", d, b, c, $1, $2, $3}' "$work/results" >>"$record"
 fi
+# A window on screen wakes 15-25 times a second for GPUI's display link (FND-11): none at all
+# means it was not shown (the screen asleep or locked), so the numbers are of a hidden window.
+if awk -F'\t' '$3 != "0" {found=1} END {exit found}' "$work/results"; then
+  echo "energy: no wakeups in any state: the window was likely not on screen" >&2
+fi
 failed=0
 if grep -q $'\tnone' "$work/results"; then
   echo "energy: a state was not measured" >&2

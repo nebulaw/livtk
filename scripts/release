@@ -31,11 +31,19 @@ target=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_di
 scripts/bundle-app "${quick[@]}"
 app=$target/livtk.app
 # An app that burns the laptop at idle is not released: what TAS-119 found went unseen for weeks.
+# Its numbers join the trend only once it passes: the trend is of releases.
+# The window's display link wakes it 15-25 times a second while it shows (FND-11): with the
+# screen asleep or locked, the numbers are of a hidden window, and lower.
 if [ ${#quick[@]} -eq 0 ]; then
-  scripts/energy --app "$app" --gate --record docs/research/energy-trend.tsv || {
+  measured=$(mktemp)
+  scripts/energy --app "$app" --gate --record "$measured" || {
+    rm -f "$measured"
     echo "release: not released: over the idle energy budget (scripts/energy --gate)" >&2
     exit 1
   }
+  trend=docs/research/energy-trend.tsv
+  if [ -s "$trend" ]; then tail -n +2 "$measured" >>"$trend"; else cp "$measured" "$trend"; fi
+  rm -f "$measured"
 fi
 plist=$app/Contents/Info.plist
 read_key() { plutil -extract "$1" raw -o - "$plist"; }

@@ -53,7 +53,8 @@ export LIVTK_CONFIG_DIR=$work/config
   for i in $(seq 1 40); do "$cli" note TST-1 "step $i of a long run" >/dev/null; done
 )
 
-# Idle CPU (%) and idle wakeups per second of the app left alone in `state`, after it settles.
+# Idle CPU (%, the median second) and idle wakeups per second of the app left alone in `state`,
+# after it settles.
 measure() {
   local state=$1 view=$2 layout=$3 open=$4
   printf 'project = "%s"\nview = "%s"\nlayout = "%s"\n' "$proj" "$view" "$layout" >"$work/config/app.toml"
@@ -78,7 +79,9 @@ measure() {
     printf '%s\tnone\tnone\n' "$state" >>"$work/results"
     return
   fi
-  cpu=$(echo "$out" | awk '{s+=$1} END {printf "%.1f", s/NR}')
+  # The median second: a moment of the machine's own load (a build just ended, Spotlight) moves
+  # it not, and an animation that never ends, steady in every second, shows in full.
+  cpu=$(echo "$out" | awk '{print $1}' | sort -n | awk '{v[NR]=$1} END {m=(NR%2)?v[(NR+1)/2]:(v[NR/2]+v[NR/2+1])/2; printf "%.1f", m}')
   wake=$(echo "$out" | awk '{gsub(/\+/,"",$2); w[NR]=$2} END {printf "%.0f", (w[NR]-w[1])/(NR-1)}')
   printf '%-22s %7s%% CPU  %6s wakeups/s\n' "$state" "$cpu" "$wake"
   printf '%s\t%s\t%s\n' "$state" "$cpu" "$wake" >>"$work/results"

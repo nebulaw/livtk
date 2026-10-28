@@ -233,14 +233,22 @@ impl Model {
                 .is_none_or(|t| now.duration_since(t) >= RUNS_EVERY)
     }
 
-    pub fn runs_surveyed(&mut self, found: Found, now: Instant) {
-        self.runs.going = found.going;
-        self.runs.quit = found.quit;
-        self.runs.writing = found.writing;
-        self.runs.needs_you = found.needs_you;
-        self.runs.queued = found.queued;
-        self.runs.surveying = false;
-        self.runs.surveyed = Some(now);
+    /// Whether it found anything changed, so the window is drawn again only then (DEC-6).
+    pub fn runs_surveyed(&mut self, found: Found, now: Instant) -> bool {
+        let r = &mut self.runs;
+        let changed = r.going != found.going
+            || r.quit != found.quit
+            || r.writing != found.writing
+            || r.needs_you != found.needs_you
+            || r.queued != found.queued;
+        r.going = found.going;
+        r.quit = found.quit;
+        r.writing = found.writing;
+        r.needs_you = found.needs_you;
+        r.queued = found.queued;
+        r.surveying = false;
+        r.surveyed = Some(now);
+        changed
     }
 
     /// Survey the runs at the next tick, not a beat later: something just changed them.

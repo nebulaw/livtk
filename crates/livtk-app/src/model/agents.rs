@@ -157,21 +157,35 @@ impl Model {
     }
 
     /// The sessions as Claude Code listed them, or why it could not.
-    pub fn set_sessions(&mut self, read: Result<Vec<Session>, String>) {
+    /// Whether anything changed, so the view is drawn again only then.
+    pub fn set_sessions(&mut self, read: Result<Vec<Session>, String>) -> bool {
         match read {
             Ok(s) => {
-                self.agents.sessions = Some(s);
-                self.agents.forget_rows();
-                self.agents.sessions_error = None;
+                let changed = self.agents.sessions.as_ref() != Some(&s)
+                    || self.agents.sessions_error.is_some();
+                if changed {
+                    self.agents.sessions = Some(s);
+                    self.agents.forget_rows();
+                    self.agents.sessions_error = None;
+                }
+                changed
             }
-            Err(e) => self.agents.sessions_error = Some(e),
+            Err(e) => {
+                let changed = self.agents.sessions_error.as_ref() != Some(&e);
+                self.agents.sessions_error = Some(e);
+                changed
+            }
         }
     }
 
-    /// The project's transcripts, as listed off the window's thread.
-    pub fn set_transcripts(&mut self, transcripts: Vec<Transcript>) {
+    /// The project's transcripts, as listed off the window's thread. Whether they changed.
+    pub fn set_transcripts(&mut self, transcripts: Vec<Transcript>) -> bool {
+        if self.agents.transcripts == transcripts {
+            return false;
+        }
         self.agents.transcripts = transcripts;
         self.agents.forget_rows();
+        true
     }
 
     /// Every session of the project: those Claude Code keeps a transcript of, those it lists as

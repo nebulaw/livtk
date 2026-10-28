@@ -100,14 +100,19 @@ impl LivtkApp {
         cx.spawn(async move |this, cx| {
             let (found, claude) = found.await;
             let _ = this.update(cx, |app, cx| {
+                let mut changed = app.model.runs.claude != claude;
                 app.model.runs.claude = claude;
-                app.model.runs_surveyed(found, Instant::now());
+                changed |= app.model.runs_surveyed(found, Instant::now());
                 // Once a launch: what the last quit stopped, offered back.
                 if !app.runs_offered && !app.model.runs.quit.is_empty() && app.asking.is_none() {
                     app.runs_offered = true;
                     app.asking = Some(Asking::Continue);
+                    changed = true;
                 }
-                cx.notify();
+                // Drawn again only when something it shows changed.
+                if changed {
+                    cx.notify();
+                }
             });
         })
         .detach();

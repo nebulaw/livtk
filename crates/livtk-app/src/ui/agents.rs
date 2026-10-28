@@ -82,7 +82,7 @@ impl LivtkApp {
     }
 
     /// Ask Claude Code for the sessions, off the window's thread, again every few seconds while
-    /// the place is shown.
+    /// the place is shown; drawn again only when they changed (DEC-6).
     fn poll_sessions(&mut self, cx: &mut Context<Self>) {
         if self.agent_form.polling {
             return;
@@ -103,15 +103,17 @@ impl LivtkApp {
         cx.spawn(async move |this, cx| {
             let (live, transcripts) = read.await;
             let _ = this.update(cx, |app, cx| {
-                app.model.set_sessions(live);
-                app.model.set_transcripts(transcripts);
-                cx.notify();
+                let sessions = app.model.set_sessions(live);
+                if app.model.set_transcripts(transcripts) | sessions {
+                    cx.notify();
+                }
             });
             cx.background_executor().timer(POLL).await;
             let _ = this.update(cx, |app, cx| {
                 app.agent_form.polling = false;
+                // Still shown: look again, without drawing what hasn't changed.
                 if app.model.view() == View::Sessions {
-                    cx.notify();
+                    app.poll_sessions(cx);
                 }
             });
         })

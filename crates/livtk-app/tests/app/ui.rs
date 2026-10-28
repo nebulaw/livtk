@@ -7433,14 +7433,15 @@ fn drawing_a_view_queries_nothing(cx: &mut TestAppContext) {
     assert!(queried.is_empty(), "drawing queried the store: {queried:?}");
 }
 
-/// How many frames are drawn over two seconds of the app left alone.
+/// How many frames are drawn over a while of the app left alone: longer than its slowest timer
+/// (the loop's safety net, a minute), so a redraw on any beat shows.
 fn idle_frames(cx: &mut gpui_kit::VisualTestContext) -> u64 {
     settle(cx);
     settle(cx);
     let before = livtk_app::ui::frames_drawn();
-    for _ in 0..20 {
+    for _ in 0..130 {
         cx.executor()
-            .advance_clock(std::time::Duration::from_millis(100));
+            .advance_clock(std::time::Duration::from_millis(500));
         cx.run_until_parked();
     }
     livtk_app::ui::frames_drawn() - before

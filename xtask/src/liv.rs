@@ -1,9 +1,15 @@
 //! `liv`: Liv as an app bundle, beside livtk.app and never in its place (proposal 0003 §5).
 //!
-//!   cargo xtask liv                     bundle Liv (the quick profile)
+//!   cargo xtask liv                     bundle Liv
 //!   cargo xtask liv --install           then move Liv.app to ~/Applications
-//!   cargo xtask liv --release [NOTES]   from a release build, and publish it to Liv's own update
-//!                                       channel
+//!   cargo xtask liv --publish [NOTES]   then put it in Liv's local update channel, where an
+//!                                       installed Liv finds it (Check for Updates)
+//!   --profile release                   build with the release profile (default: quick, release
+//!                                       speed in seconds, for the build-and-try loop)
+//!
+//! Builds made here trust this machine's own signing key, made once in `.liv-dev/` at the
+//! repository's root (never committed), and follow the local channel; releases made here are
+//! signed with it. Releases on GitHub are signed with the release key instead (TAS-140).
 //!
 //! The bundle is made by `cargo bundle` from `[package.metadata.bundle]` in `crates/liv`: no
 //! Info.plist or file copying of ours. What cargo-bundle leaves to us is here: the ad-hoc
@@ -21,33 +27,39 @@ pub fn run(args: &[String]) -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("an app bundle is for macOS; elsewhere run `cargo run -p liv`");
     }
+    let usage = "usage: cargo xtask liv [--install] [--publish [NOTES]] [--profile quick|release]";
     let mut install = false;
-    let mut release: Option<String> = None;
-    let mut it = args.iter();
+    let mut publish_notes: Option<String> = None;
+    let mut profile = "quick".to_owned();
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--install" => install = true,
-            "--release" => release = Some(it.next().cloned().unwrap_or_default()),
-            _ => bail!("usage: cargo xtask liv [--install] [--release [NOTES]]"),
+            "--publish" => {
+                // Notes are the next word unless it is the next option.
+                let notes = it.next_if(|n| !n.starts_with("--")).cloned();
+                publish_notes = Some(notes.unwrap_or_default());
+            }
+            "--profile" => match it.next().map(String::as_str) {
+                Some(p @ ("quick" | "release")) => profile = p.to_owned(),
+                _ => bail!("{usage}"),
+            },
+            _ => bail!("{usage}"),
         }
     }
+    let profile = profile.as_str();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let target = target_dir(&root)?;
-    let profile = if release.is_some() {
-        "release"
-    } else {
-        "quick"
-    };
     // Built here, locked to Cargo.lock; cargo-bundle then bundles that very binary.
-    run_ok(Command::new("cargo").current_dir(&root).args([
-        "build",
-        "-q",
-        "--locked",
-        "--profile",
-        profile,
-        "-p",
-        "liv",
-    ]))?;
+    let key = DevKey::here(&root)?;
+    run_ok(
+        Command::new("cargo")
+            .current_dir(&root)
+            .args(["build", "-q", "--locked", "--profile", profile, "-p", "liv"])
+            // What a build made here trusts, and where it looks for updates.
+            .env("LIV_DEV_KEY", &key.public)
+            .env("LIV_DEFAULT_CHANNEL", "local"),
+    )?;
     let built = target.join(profile).join("liv");
     let identity = output(Command::new(&built).arg("--version"))?;
     let mut id = Identity::parse(&identity)?;
@@ -102,8 +114,8 @@ pub fn run(args: &[String]) -> Result<()> {
     )?;
     println!("built {}: {identity}", app.display());
 
-    if let Some(notes) = release {
-        publish(&app, &id, notes)?;
+    if let Some(notes) = publish_notes {
+        publish(&app, &id, notes, &key)?;
     }
     if install {
         let to = PathBuf::from(std::env::var("HOME").context("a home folder")?)
@@ -174,7 +186,7 @@ impl Identity {
 
 /// Put `app` in Liv's update channel: the bundle zipped as macOS zips apps, and its manifest
 /// beside it, last, so the channel never names an artifact that is not all there.
-fn publish(app: &Path, id: &Identity, notes: String) -> Result<()> {
+fn publish(app: &Path, id: &Identity, notes: String, key: &DevKey) -> Result<()> {
     if id.modified {
         eprintln!(
             "liv: the sources have uncommitted changes; build {} is HEAD's number",
@@ -204,17 +216,69 @@ fn publish(app: &Path, id: &Identity, notes: String) -> Result<()> {
         sha256: format!("{:x}", Sha256::digest(&bytes)),
         size: bytes.len() as u64,
         notes,
-        signature: None,
     };
-    let path = channel.join(format!("liv-{}.json", id.build));
-    std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)?;
+    let name = format!("liv-{}.json", id.build);
+    let body = serde_json::to_string_pretty(&manifest)?;
+    // The signature first, then the manifest: a channel never names a build it can't trust.
+    std::fs::write(
+        channel.join(livtk_update::sign::signature_name(&name)),
+        key.sign(body.as_bytes())?,
+    )?;
+    std::fs::write(channel.join(&name), body)?;
     println!(
-        "released Liv build {} ({}) to {}",
+        "published Liv build {} ({}) to {}",
         id.build,
         id.commit,
         channel.display()
     );
     Ok(())
+}
+
+/// This machine's own signing key for Liv's local releases: made once, in `.liv-dev/` at the
+/// repository's root, which git ignores. Its public key is built into the builds made here.
+struct DevKey {
+    public: String,
+    secret: minisign::SecretKey,
+}
+
+impl DevKey {
+    fn here(root: &Path) -> Result<DevKey> {
+        let dir = root.join(".liv-dev");
+        let (public_path, secret_path) = (dir.join("dev.pub"), dir.join("dev.key"));
+        if !secret_path.exists() {
+            std::fs::create_dir_all(&dir)?;
+            let kp = minisign::KeyPair::generate_unencrypted_keypair()
+                .map_err(|e| anyhow::anyhow!("making Liv's local signing key: {e}"))?;
+            let secret = kp
+                .sk
+                .to_box(Some("Liv's local signing key: this machine only"))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            std::fs::write(&public_path, kp.pk.to_base64())?;
+            std::fs::write(&secret_path, secret.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            println!("made Liv's local signing key in {}", dir.display());
+        }
+        let secret = minisign::SecretKeyBox::from_string(&std::fs::read_to_string(&secret_path)?)
+            .and_then(|b| b.into_unencrypted_secret_key())
+            .map_err(|e| anyhow::anyhow!("{}: {e}", secret_path.display()))?;
+        Ok(DevKey {
+            public: std::fs::read_to_string(&public_path)?.trim().to_owned(),
+            secret,
+        })
+    }
+
+    /// A signature of `bytes`, as a `.minisig` file holds it.
+    fn sign(&self, bytes: &[u8]) -> Result<String> {
+        Ok(
+            minisign::sign(None, &self.secret, std::io::Cursor::new(bytes), None, None)
+                .map_err(|e| anyhow::anyhow!("signing: {e}"))?
+                .into_string(),
+        )
+    }
 }
 
 /// Where cargo builds, as cargo itself says, whatever sets it.
@@ -279,8 +343,8 @@ mod tests {
         assert_eq!(id.updates.as_deref(), Some(Path::new("/s/liv/updates")));
     }
 
-    /// A build published to a channel stages as the updater stages it: found, verified,
-    /// unpacked, and its identity matching its manifest. Run after a release, with `LIV_CHANNEL`
+    /// A build published to a channel stages as the updater stages it: its signature checked,
+    /// found, verified, unpacked, and its identity matching its manifest. Run after `--publish`, with `LIV_CHANNEL`
     /// naming the channel: `LIV_CHANNEL=… cargo test -p xtask -- --ignored a_published_build`.
     #[test]
     #[ignore = "needs a published build: LIV_CHANNEL"]
@@ -296,7 +360,12 @@ mod tests {
         let app = doc["package"]["metadata"]["bundle"]["identifier"]
             .as_str()
             .unwrap();
-        let found = livtk_update::LocalFolder::new(&channel)
+        let public = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../.liv-dev/dev.pub"),
+        )
+        .expect("this machine's signing key: cargo xtask liv makes it");
+        let keys = livtk_update::sign::Keys::new([public.as_str()]).unwrap();
+        let found = livtk_update::LocalFolder::trusting(&channel, keys)
             .newest(app)
             .unwrap()
             .expect("a build in the channel");

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use livtk_update::stage::{sha256_of, stage, verify};
 use livtk_update::swap::{Outcome, Swap, swap};
-use livtk_update::{Arch, FORMAT, Found, LocalFolder, Manifest, Platform, Source};
+use livtk_update::{Arch, Artifact, FORMAT, Found, LocalFolder, Manifest, Platform, Source};
 
 const APP: &str = "com.github.nebulaw.livtk";
 
@@ -23,7 +23,6 @@ fn manifest(build: u64, artifact: &str, sha256: &str, size: u64) -> Manifest {
         sha256: sha256.into(),
         size,
         notes: String::new(),
-        signature: None,
     }
 }
 
@@ -76,7 +75,10 @@ fn the_local_folder_offers_the_newest_build_for_this_app_here() {
 
     let found = LocalFolder::new(dir.path()).newest(APP).unwrap().unwrap();
     assert_eq!(found.manifest.build, 9, "by build number");
-    assert_eq!(found.artifact, dir.path().join("livtk-9.zip"));
+    assert_eq!(
+        found.artifact,
+        Artifact::File(dir.path().join("livtk-9.zip"))
+    );
 }
 
 #[test]
@@ -87,7 +89,7 @@ fn an_artifact_is_checked_by_size_then_by_hash() {
     let hash = sha256_of(&file).unwrap();
     let found = |m: Manifest| Found {
         manifest: m,
-        artifact: file.clone(),
+        artifact: Artifact::File(file.clone()),
     };
     verify(&found(manifest(1, "a.zip", &hash, 7))).unwrap();
     assert!(
@@ -140,7 +142,7 @@ fn staging_unpacks_the_app_and_checks_it_is_the_build_the_manifest_names() {
     let staging = dir.path().join("staging");
     let found = Found {
         manifest: manifest(12, "livtk-12.zip", &hash, size),
-        artifact: zip.clone(),
+        artifact: Artifact::File(zip.clone()),
     };
     let staged = stage(&found, &staging).unwrap();
     assert!(staged.app.ends_with("livtk.app"));
@@ -148,7 +150,7 @@ fn staging_unpacks_the_app_and_checks_it_is_the_build_the_manifest_names() {
 
     let lying = Found {
         manifest: manifest(13, "livtk-12.zip", &hash, size),
-        artifact: zip,
+        artifact: Artifact::File(zip),
     };
     assert!(stage(&lying, &staging).is_err(), "build 12 inside, 13 said");
 }
@@ -283,4 +285,348 @@ fn an_interrupted_swap_gets_its_old_app_back_first() {
     let mut fake = Fake::new();
     assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::RolledBack);
     assert_eq!(mark(&s.installed), "old");
+}
+
+// ---- Signed manifests -------------------------------------------------------------------
+
+/// A fresh key pair: its public key as an app holds it, and a way to sign with its secret one.
+struct Signer {
+    public: String,
+    secret: minisign::SecretKey,
+}
+
+impl Signer {
+    fn new() -> Signer {
+        let kp = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        Signer {
+            public: kp.pk.to_base64(),
+            secret: kp.sk,
+        }
+    }
+
+    fn sign(&self, bytes: &[u8]) -> String {
+        minisign::sign(None, &self.secret, std::io::Cursor::new(bytes), None, None)
+            .unwrap()
+            .into_string()
+    }
+
+    fn keys(&self) -> Keys {
+        Keys::new([self.public.as_str()]).unwrap()
+    }
+}
+
+use livtk_update::sign::{Keys, signature_name};
+
+#[test]
+fn a_manifest_is_trusted_only_when_a_trusted_key_signed_it_as_it_is() {
+    let ours = Signer::new();
+    let theirs = Signer::new();
+    let body = br#"{"format":1}"#;
+    let sig = ours.sign(body);
+
+    assert!(
+        ours.keys().verify(body, &sig).is_ok(),
+        "signed by a trusted key"
+    );
+    assert!(
+        ours.keys().verify(br#"{"format":2}"#, &sig).is_err(),
+        "changed after signing"
+    );
+    assert!(theirs.keys().verify(body, &sig).is_err(), "another key");
+    assert!(ours.keys().verify(body, "not a signature").is_err());
+    assert!(
+        Keys::default().verify(body, &sig).is_err(),
+        "no key is trusted"
+    );
+    let both = Keys::new([theirs.public.as_str(), "", ours.public.as_str()]).unwrap();
+    assert!(
+        both.verify(body, &sig).is_ok(),
+        "any trusted key, empty slots skipped"
+    );
+    assert!(Keys::new(["not a key"]).is_err());
+}
+
+fn signed(dir: &Path, name: &str, m: &Manifest, by: &Signer) {
+    let body = serde_json::to_string(m).unwrap();
+    std::fs::write(dir.join(name), &body).unwrap();
+    std::fs::write(dir.join(signature_name(name)), by.sign(body.as_bytes())).unwrap();
+}
+
+#[test]
+fn a_trusting_folder_offers_the_newest_signed_build_and_passes_over_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let ours = Signer::new();
+    let theirs = Signer::new();
+    signed(dir.path(), "a.json", &manifest(5, "a.zip", HASH, 1), &ours);
+    // Newer, but unsigned, signed by another key, or changed after signing: passed over.
+    write(dir.path(), "b.json", &manifest(6, "b.zip", HASH, 1));
+    signed(
+        dir.path(),
+        "c.json",
+        &manifest(7, "c.zip", HASH, 1),
+        &theirs,
+    );
+    signed(dir.path(), "d.json", &manifest(8, "d.zip", HASH, 1), &ours);
+    write(dir.path(), "d.json", &manifest(9, "d.zip", HASH, 1));
+
+    let folder = LocalFolder::trusting(dir.path(), ours.keys());
+    let found = folder.newest(APP).unwrap().unwrap();
+    assert_eq!(found.manifest.build, 5);
+    // The same folder unverified (livtk.app's own channel) offers the newest of all.
+    assert_eq!(
+        LocalFolder::new(dir.path())
+            .newest(APP)
+            .unwrap()
+            .unwrap()
+            .manifest
+            .build,
+        9
+    );
+}
+
+#[test]
+fn only_a_newer_build_is_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.json", &manifest(5, "a.zip", HASH, 1));
+    let folder = LocalFolder::new(dir.path());
+    let newer = |this| livtk_update::source::newer(&folder, APP, this).unwrap();
+    assert_eq!(newer(4).map(|f| f.manifest.build), Some(5));
+    assert!(newer(5).is_none(), "the same build");
+    assert!(newer(6).is_none(), "an older one");
+    let empty = tempfile::tempdir().unwrap();
+    assert!(
+        livtk_update::source::newer(&LocalFolder::new(empty.path()), APP, 0)
+            .unwrap()
+            .is_none(),
+        "nothing there"
+    );
+}
+
+#[test]
+fn names_are_written_as_manifests_write_them() {
+    for p in [Platform::Macos, Platform::Windows, Platform::Linux] {
+        assert_eq!(
+            serde_json::to_string(&p).unwrap(),
+            format!("\"{}\"", p.name())
+        );
+    }
+    for a in [Arch::Aarch64, Arch::X86_64] {
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            format!("\"{}\"", a.name())
+        );
+    }
+    assert_eq!(
+        livtk_update::manifest::release_name("liv", Platform::Macos, Arch::Aarch64),
+        "liv-macos-aarch64.json"
+    );
+}
+
+// ---- GitHub Releases, offline -----------------------------------------------------------
+
+use livtk_update::fetch::Fetch;
+use livtk_update::github::{GitHubReleases, Track};
+use std::collections::HashMap;
+
+/// The web, as a table of bodies by URL; what isn't in it is a 404.
+struct Web(HashMap<String, Vec<u8>>);
+
+impl Fetch for Web {
+    fn get(&self, url: &str) -> livtk_update::Result<Option<Vec<u8>>> {
+        Ok(self.0.get(url).cloned())
+    }
+}
+
+const DL: &str = "https://dl.example";
+
+/// A release with this platform's manifest (signed by `by`, naming `zip`) and its artifact.
+fn release(
+    web: &mut HashMap<String, Vec<u8>>,
+    tag: &str,
+    m: &Manifest,
+    by: &Signer,
+    draft: bool,
+    prerelease: bool,
+) -> serde_json::Value {
+    let name = livtk_update::manifest::release_name(
+        "liv",
+        Platform::this().unwrap(),
+        Arch::this().unwrap(),
+    );
+    let body = serde_json::to_string(m).unwrap();
+    let url = |n: &str| format!("{DL}/{tag}/{n}");
+    web.insert(url(&name), body.clone().into_bytes());
+    web.insert(
+        url(&signature_name(&name)),
+        by.sign(body.as_bytes()).into_bytes(),
+    );
+    serde_json::json!({
+        "tag_name": tag, "draft": draft, "prerelease": prerelease,
+        "assets": [
+            {"name": name, "browser_download_url": url(&name)},
+            {"name": signature_name(&name), "browser_download_url": url(&signature_name(&name))},
+            {"name": m.artifact, "browser_download_url": url(&m.artifact)},
+        ]
+    })
+}
+
+fn github(web: HashMap<String, Vec<u8>>, track: Track, keys: Keys) -> GitHubReleases {
+    let mut g = GitHubReleases::new("o/r", track, "liv", keys, Box::new(Web(web)));
+    g.api = "https://api.example".into();
+    g
+}
+
+#[test]
+fn stable_follows_the_latest_release_and_preview_the_newest_one() {
+    let ours = Signer::new();
+    let mut web = HashMap::new();
+    let stable = release(
+        &mut web,
+        "v1",
+        &manifest(10, "liv-10.zip", HASH, 1),
+        &ours,
+        false,
+        false,
+    );
+    let pre = release(
+        &mut web,
+        "v2-pre",
+        &manifest(11, "liv-11.zip", HASH, 1),
+        &ours,
+        false,
+        true,
+    );
+    let draft = release(
+        &mut web,
+        "v3",
+        &manifest(12, "liv-12.zip", HASH, 1),
+        &ours,
+        true,
+        false,
+    );
+    web.insert(
+        "https://api.example/repos/o/r/releases/latest".into(),
+        stable.to_string().into_bytes(),
+    );
+    web.insert(
+        "https://api.example/repos/o/r/releases?per_page=30".into(),
+        serde_json::json!([draft, pre, stable])
+            .to_string()
+            .into_bytes(),
+    );
+
+    let s = github(web.clone(), Track::Stable, ours.keys())
+        .newest(APP)
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.manifest.build, 10);
+    assert_eq!(s.artifact, Artifact::Url(format!("{DL}/v1/liv-10.zip")));
+    let p = github(web, Track::Preview, ours.keys())
+        .newest(APP)
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.manifest.build, 11, "the newest that isn't a draft");
+}
+
+#[test]
+fn a_release_signed_by_another_key_or_unsigned_is_refused() {
+    let ours = Signer::new();
+    let theirs = Signer::new();
+    let mut web = HashMap::new();
+    let r = release(
+        &mut web,
+        "v1",
+        &manifest(10, "liv-10.zip", HASH, 1),
+        &theirs,
+        false,
+        false,
+    );
+    web.insert(
+        "https://api.example/repos/o/r/releases/latest".into(),
+        r.to_string().into_bytes(),
+    );
+    assert!(
+        github(web.clone(), Track::Stable, ours.keys())
+            .newest(APP)
+            .is_err(),
+        "another key"
+    );
+    // Its signature gone from the release.
+    let name = livtk_update::manifest::release_name(
+        "liv",
+        Platform::this().unwrap(),
+        Arch::this().unwrap(),
+    );
+    web.remove(&format!("{DL}/v1/{}", signature_name(&name)));
+    assert!(
+        github(web, Track::Stable, theirs.keys())
+            .newest(APP)
+            .is_err(),
+        "no signature"
+    );
+}
+
+#[test]
+fn no_release_or_none_for_this_platform_offers_nothing() {
+    let ours = Signer::new();
+    assert!(
+        github(HashMap::new(), Track::Stable, ours.keys())
+            .newest(APP)
+            .unwrap()
+            .is_none()
+    );
+    let mut web = HashMap::new();
+    web.insert(
+        "https://api.example/repos/o/r/releases/latest".into(),
+        serde_json::json!({"draft": false, "assets": [
+            {"name": "liv-plan9-mips.json", "browser_download_url": "x"}
+        ]})
+        .to_string()
+        .into_bytes(),
+    );
+    assert!(
+        github(web, Track::Stable, ours.keys())
+            .newest(APP)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_downloaded_artifact_is_checked_as_a_local_one_is() {
+    let ours = Signer::new();
+    let body = b"the packed app".to_vec();
+    let hash = {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &body).unwrap();
+        sha256_of(tmp.path()).unwrap()
+    };
+    let mut web = HashMap::new();
+    let r = release(
+        &mut web,
+        "v1",
+        &manifest(10, "liv-10.zip", &hash, body.len() as u64),
+        &ours,
+        false,
+        false,
+    );
+    web.insert(format!("{DL}/v1/liv-10.zip"), body.clone());
+    web.insert(
+        "https://api.example/repos/o/r/releases/latest".into(),
+        r.to_string().into_bytes(),
+    );
+    let source = github(web.clone(), Track::Stable, ours.keys());
+    let found = source.newest(APP).unwrap().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        stage(&found, dir.path()).is_err(),
+        "a URL is downloaded before staging"
+    );
+    let here = livtk_update::fetch::download(&found, &Web(web.clone()), dir.path()).unwrap();
+    assert_eq!(here.artifact, Artifact::File(dir.path().join("liv-10.zip")));
+    verify(&here).unwrap();
+    // A body changed on the way is caught by the hash the signed manifest holds.
+    web.insert(format!("{DL}/v1/liv-10.zip"), b"the packed apq".to_vec());
+    let bent = livtk_update::fetch::download(&found, &Web(web), dir.path()).unwrap();
+    assert!(verify(&bent).is_err());
 }

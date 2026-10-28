@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         "fixture" => fixture::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         "liv" => liv::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         _ => bail!(
-            "usage: cargo xtask icons | fixture --events N --out DIR | liv [--install] [--release [NOTES]]"
+            "usage: cargo xtask icons | fixture --events N --out DIR | liv [--install] [--publish [NOTES]] [--profile quick|release]"
         ),
     }
 }

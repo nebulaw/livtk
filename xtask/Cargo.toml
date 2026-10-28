@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 livtk-update.workspace = true
+minisign.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
 # Already in the tree through GPUI: the same version, PNG only.

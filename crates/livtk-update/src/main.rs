@@ -11,13 +11,10 @@
 //! network code, and never will: finding and checking updates is the app's.
 
 use std::path::PathBuf;
-use std::process::{Command, ExitCode};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::process::ExitCode;
+use std::time::Duration;
 
-use std::path::Path;
-
-use livtk_update::swap::{Launcher, Outcome, Swap, swap};
+use livtk_update::swap::{Open, Outcome, Swap, exited, swap};
 
 /// The variable a started app reads to know where to say it started.
 const HEALTH_VAR: &str = "LIVTK_UPDATE_HEALTH";
@@ -54,7 +51,10 @@ fn main() -> ExitCode {
         build,
         wait,
     };
-    let mut launcher = Open;
+    let mut launcher = Open {
+        program: "livtk-app".into(),
+        health_var: HEALTH_VAR.into(),
+    };
     match swap(&s, &mut launcher) {
         Ok(Outcome::Updated) => {
             eprintln!("livtk-update: updated to build {build}");
@@ -68,55 +68,5 @@ fn main() -> ExitCode {
             eprintln!("livtk-update: {e}");
             ExitCode::FAILURE
         }
-    }
-}
-
-/// Apps started and stopped as macOS does: `open`, and a signal to the app's own program.
-struct Open;
-
-impl Launcher for Open {
-    fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
-        let mut open = Command::new("open");
-        // A new instance: never just bring forward one that may still be running.
-        open.arg("-n");
-        if let Some(health) = health {
-            let mut env = std::ffi::OsString::from(format!("{HEALTH_VAR}="));
-            env.push(health);
-            open.arg("--env").arg(env);
-        }
-        if open.arg("-a").arg(app).status()?.success() {
-            Ok(())
-        } else {
-            Err(livtk_update::Error::Failed(format!(
-                "open {}",
-                app.display()
-            )))
-        }
-    }
-
-    fn stop(&mut self, app: &Path) {
-        let program = app.join("Contents/MacOS/livtk-app");
-        let _ = Command::new("pkill").arg("-f").arg(&program).status();
-        // Given a moment to go before its bundle is moved.
-        sleep(Duration::from_millis(500));
-    }
-}
-
-/// Whether process `pid` has exited within `wait`.
-fn exited(pid: u32, wait: Duration) -> bool {
-    let until = Instant::now() + wait;
-    loop {
-        let alive = Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .status()
-            .is_ok_and(|s| s.success());
-        if !alive {
-            return true;
-        }
-        if Instant::now() >= until {
-            return false;
-        }
-        sleep(Duration::from_millis(100));
     }
 }

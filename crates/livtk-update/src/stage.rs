@@ -8,7 +8,15 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
-use crate::{Error, Found, Manifest, Result};
+use crate::{Artifact, Error, Found, Manifest, Result};
+
+/// `found`'s artifact as a file: staging needs it here (`fetch::download` brings a URL's).
+fn file_of(found: &Found) -> Result<&Path> {
+    match &found.artifact {
+        Artifact::File(p) => Ok(p),
+        Artifact::Url(u) => Err(Error::Failed(format!("{u}: download it before staging"))),
+    }
+}
 
 /// A build ready to install: its manifest and the unpacked app.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,14 +47,15 @@ pub fn sha256_of(path: &Path) -> Result<String> {
 /// Check `found`'s artifact against its manifest: its size, then its hash.
 pub fn verify(found: &Found) -> Result<()> {
     let m = &found.manifest;
-    let size = std::fs::metadata(&found.artifact)?.len();
+    let file = file_of(found)?;
+    let size = std::fs::metadata(file)?.len();
     if size != m.size {
         return Err(Error::Mismatch(format!(
             "{} bytes, the manifest says {}",
             size, m.size
         )));
     }
-    let hash = sha256_of(&found.artifact)?;
+    let hash = sha256_of(file)?;
     if !hash.eq_ignore_ascii_case(&m.sha256) {
         return Err(Error::Mismatch(format!(
             "its SHA-256 is {hash}, the manifest says {}",
@@ -66,7 +75,7 @@ pub fn stage(found: &Found, staging: &Path) -> Result<Staged> {
         std::fs::remove_dir_all(&dir)?;
     }
     std::fs::create_dir_all(&dir)?;
-    unpack(&found.artifact, &dir)?;
+    unpack(file_of(found)?, &dir)?;
     let app = find_app(&dir)?;
     let (id, build) = identity(&app)?;
     if id != m.app || build != m.build {

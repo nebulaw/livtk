@@ -18,8 +18,10 @@ gpui-kit.workspace = true
 jiff.workspace = true
 livtk-build.workspace = true
 livtk-ui.workspace = true
-livtk-update.workspace = true
+livtk-update = { workspace = true, features = ["http"] }
 log.workspace = true
+serde.workspace = true
+toml.workspace = true
 
 # How the app is bundled, read by `cargo bundle` (`cargo xtask liv`). Its identifier and name are
 # held equal to `src/identity.rs` by a test.
@@ -45,6 +47,9 @@ mime_types = ["x-scheme-handler/liv"]
 [dev-dependencies]
 etcetera.workspace = true
 livtk-core.workspace = true
+minisign.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 
 [lints]

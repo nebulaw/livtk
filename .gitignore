@@ -1,2 +1,4 @@
 /target
 .DS_Store
+# Liv's local signing key (cargo xtask liv): this machine only, never committed.
+/.liv-dev

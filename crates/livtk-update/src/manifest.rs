@@ -17,6 +17,15 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// Its name, as manifests write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Platform::Macos => "macos",
+            Platform::Windows => "windows",
+            Platform::Linux => "linux",
+        }
+    }
+
     /// The platform this program was built for.
     pub fn this() -> Option<Platform> {
         if cfg!(target_os = "macos") {
@@ -39,6 +48,15 @@ pub enum Arch {
 }
 
 impl Arch {
+    /// Its name, as manifests write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Arch::Aarch64 => "aarch64",
+            Arch::X86_64 => "x86_64",
+        }
+    }
+
+    /// The architecture this program was built for.
     pub fn this() -> Option<Arch> {
         if cfg!(target_arch = "aarch64") {
             Some(Arch::Aarch64)
@@ -48,6 +66,13 @@ impl Arch {
             None
         }
     }
+}
+
+/// The name of an app's manifest for `platform` and `arch` among a release's assets, where one
+/// release holds every platform's: `<prefix>-<platform>-<arch>.json` (`liv-macos-aarch64.json`).
+/// Its signature is beside it (`sign::signature_name`).
+pub fn release_name(prefix: &str, platform: Platform, arch: Arch) -> String {
+    format!("{prefix}-{}-{}.json", platform.name(), arch.name())
 }
 
 /// One build of the app, as an update describes it.
@@ -61,7 +86,8 @@ pub struct Manifest {
     pub commit: String,
     pub platform: Platform,
     pub arch: Arch,
-    /// The packed app: a path relative to the manifest (later, a URL).
+    /// The packed app: its file name, beside the manifest (in a folder, or among a release's
+    /// assets).
     pub artifact: String,
     /// The artifact's SHA-256, lowercase hex, and its size in bytes.
     pub sha256: String,
@@ -69,9 +95,6 @@ pub struct Manifest {
     /// What changed, shown once after the update.
     #[serde(default)]
     pub notes: String,
-    /// Reserved for a signature (ed25519) once updates come from beyond this machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
 }
 
 impl Manifest {

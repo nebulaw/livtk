@@ -4,10 +4,11 @@
 //! folder, so the installed app is never half there.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use crate::Result;
+use crate::{Error, Result};
 
 /// One swap: the app installed now, the staged build to put in its place, the file the new app
 /// writes its build number to once it has started, that build, and how long to wait for it.
@@ -133,5 +134,57 @@ fn remove_file(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
         _ => Ok(()),
+    }
+}
+
+/// Apps started and stopped as macOS does: `open`, and a signal to the app's own program.
+pub struct Open {
+    /// The app's program inside its bundle: `Contents/MacOS/<program>`.
+    pub program: String,
+    /// The variable a started app reads to know where to say it started.
+    pub health_var: String,
+}
+
+impl Launcher for Open {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> Result<()> {
+        let mut open = Command::new("open");
+        // A new instance: never just bring forward one that may still be running.
+        open.arg("-n");
+        if let Some(health) = health {
+            let mut env = std::ffi::OsString::from(format!("{}=", self.health_var));
+            env.push(health);
+            open.arg("--env").arg(env);
+        }
+        if open.arg("-a").arg(app).status()?.success() {
+            Ok(())
+        } else {
+            Err(Error::Failed(format!("open {}", app.display())))
+        }
+    }
+
+    fn stop(&mut self, app: &Path) {
+        let program = app.join("Contents/MacOS").join(&self.program);
+        let _ = Command::new("pkill").arg("-f").arg(&program).status();
+        // Given a moment to go before its bundle is moved.
+        sleep(Duration::from_millis(500));
+    }
+}
+
+/// Whether process `pid` has exited within `wait`.
+pub fn exited(pid: u32, wait: Duration) -> bool {
+    let until = Instant::now() + wait;
+    loop {
+        let alive = Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !alive {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        sleep(Duration::from_millis(100));
     }
 }

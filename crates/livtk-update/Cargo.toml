@@ -12,13 +12,20 @@ publish = false
 name = "livtk-update"
 path = "src/main.rs"
 
+[features]
+# The real HTTPS client for updates from GitHub Releases (Liv); livtk.app does without.
+http = ["dep:ureq"]
+
 [dependencies]
+minisign-verify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
 thiserror.workspace = true
+ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
+minisign.workspace = true
 tempfile.workspace = true
 
 [lints]

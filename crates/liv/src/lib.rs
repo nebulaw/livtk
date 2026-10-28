@@ -3,3 +3,5 @@
 
 pub mod identity;
 pub mod log_file;
+pub mod settings;
+pub mod updates;

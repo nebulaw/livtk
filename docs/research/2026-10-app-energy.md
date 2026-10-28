@@ -17,6 +17,14 @@ and `sample` (macOS's stack sampler).
 After TAS-120, a change written from outside (the CLI) reaches the app in 0.27 s, through the
 OS's file events alone.
 
+**The wakeups in that column were measured with the windows not visible (FND-11).** Build 295,
+measured 15 s after start with its window visible, takes 0.4–0.6% CPU and about 14 wakeups a
+second. The app's own loop wakes 6 times in 15 s then, and draws 6 frames. The rest comes from
+GPUI's display link (CVDisplayLink): it runs while the window is visible and pokes the main
+thread on every tick, even when no frame is wanted. Covered, minimised or hidden, it stops. Bringing
+a visible idle window to near 0 wakeups means stopping the display link when nothing is
+invalidated, which is a change in GPUI.
+
 Your own app, as you used it (a task open), measured 28–35% CPU idle before the fix.
 
 ## What it was, by share
@@ -87,7 +95,9 @@ DEC "The app waits on events, not timers".
 ## How to measure
 
 - `scripts/energy`: idle CPU and wakeups per second of a separate app copy on a test project, in
-  three states, and CLI call times. `--budget PCT` fails over it.
+  three states, and CLI call times. `--budget PCT` fails over it. `--settle SECS` (15 by
+  default) waits past start-up first. Its window is visible, so the display link's wakeups
+  count (FND-11).
 - `scripts/check --energy`: builds a quick bundle and checks the budget (opens windows for
   about half a minute, so it's asked for, not run every time).
 - `sample <pid> 5`: the stacks, to see where the time goes. `LIVTK_OPEN=KEY` opens a node's

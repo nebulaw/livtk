@@ -74,6 +74,14 @@ const PROJECT: Spec = Spec {
     empty_id: "empty-new-project",
 };
 
+/// What the form's menus offer that comes from the store: worked out once per change of the
+/// log (DEC-7).
+#[derive(Clone, Debug, Default)]
+pub struct Choices {
+    projects: Vec<(String, String)>,
+    owners: Vec<String>,
+}
+
 /// A property the form sets with a chip: what a kind offers, in its order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Prop {
@@ -212,27 +220,41 @@ impl Draft {
 impl Model {
     /// The projects a new one may be part of: every one not done or dropped, by key and title.
     pub fn project_choices(&self) -> Vec<(String, String)> {
-        self.project()
-            .and_then(|p| p.ws.projects().ok())
-            .unwrap_or_default()
-            .into_iter()
+        self.form_choices().projects
+    }
+
+    /// The owners the project's projects have, each once, in order: the form offers them.
+    pub fn owner_choices(&self) -> Vec<String> {
+        self.form_choices().owners
+    }
+
+    /// The form's choices, worked out once per change of the log.
+    fn form_choices(&self) -> Choices {
+        if let Some(c) = self.choices.borrow().as_ref() {
+            return c.clone();
+        }
+        let c = self.work_out_choices();
+        *self.choices.borrow_mut() = Some(c.clone());
+        c
+    }
+
+    fn work_out_choices(&self) -> Choices {
+        let Some(p) = self.project() else {
+            return Choices::default();
+        };
+        let all = p.ws.projects().unwrap_or_default();
+        let projects = all
+            .iter()
             .filter(|s| {
                 !matches!(
                     s.state,
                     livtk_core::State::Done | livtk_core::State::Dropped
                 )
             })
-            .map(|s| (s.key, s.title))
-            .collect()
-    }
-
-    /// The owners the project's projects have, each once, in order: the form offers them.
-    pub fn owner_choices(&self) -> Vec<String> {
-        let Some(p) = self.project() else {
-            return Vec::new();
-        };
-        let mut out: Vec<String> = Vec::new();
-        for s in p.ws.projects().unwrap_or_default() {
+            .map(|s| (s.key.clone(), s.title.clone()))
+            .collect();
+        let mut owners: Vec<String> = Vec::new();
+        for s in &all {
             let owner =
                 p.ws.node(&s.key)
                     .ok()
@@ -243,12 +265,12 @@ impl Model {
                             .map(str::to_owned)
                     })
                     .filter(|o| !o.trim().is_empty());
-            if let Some(o) = owner.filter(|o| !out.contains(o)) {
-                out.push(o);
+            if let Some(o) = owner.filter(|o| !owners.contains(o)) {
+                owners.push(o);
             }
         }
-        out.sort();
-        out
+        owners.sort();
+        Choices { projects, owners }
     }
 
     /// Start the form making a node of kind `making`; one already open stays as it is.

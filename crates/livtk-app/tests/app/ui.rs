@@ -7317,3 +7317,83 @@ fn the_panels_jumps_follow_your_note_and_keep_clear_of_the_composer(cx: &mut Tes
     redraw(cx);
     assert!(!shown(cx, "jump-latest"), "at the end");
 }
+
+/// Drawing only reads what the model has worked out (DEC-7): no view queries the store while it
+/// is drawn, however often. Each view is drawn several times with nothing changing.
+#[gpui_kit::test]
+fn drawing_a_view_queries_nothing(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    resize(cx, 1400., 900.);
+    let mut queried = Vec::new();
+    for (name, view) in [
+        ("tasks", View::Tasks),
+        ("inbox", View::Inbox),
+        ("projects", View::Projects),
+        ("lessons", View::Lessons),
+        ("graph", View::Graph),
+        ("activity", View::Activity),
+        ("sessions", View::Sessions),
+        ("docs", View::Docs),
+    ] {
+        app.update(cx, |a, _| a.model_mut().set_view(view));
+        settle(cx);
+        redraw(cx);
+        let before = livtk_core::statements_run();
+        for _ in 0..5 {
+            redraw(cx);
+        }
+        let n = livtk_core::statements_run() - before;
+        if n > 0 {
+            queried.push(format!("{name}: {n}"));
+        }
+    }
+    // A task open, its panel drawn again and again. Opening it reads the store, as it should:
+    // which also shows the counter counts.
+    let opening = livtk_core::statements_run();
+    app.update(cx, |a, _| {
+        a.model_mut().set_view(View::Tasks);
+        a.model_mut().go_to("LIV-1");
+    });
+    settle(cx);
+    assert!(
+        livtk_core::statements_run() > opening,
+        "opening a task reads the store: the counter counts"
+    );
+    redraw(cx);
+    let before = livtk_core::statements_run();
+    for _ in 0..5 {
+        redraw(cx);
+    }
+    let n = livtk_core::statements_run() - before;
+    if n > 0 {
+        queried.push(format!("a task's panel: {n}"));
+    }
+    // The new-node form with each chip's menu open: their choices come from the model too.
+    app.update(cx, |a, _| a.model_mut().close_detail());
+    settle(cx);
+    for (form, chips) in [
+        ("n", &["prop-project", "prop-agent"][..]),
+        ("p", &["prop-owner", "prop-part-of", "prop-target"][..]),
+    ] {
+        cx.simulate_keystrokes(form);
+        settle(cx);
+        for &chip in chips {
+            click_on(cx, chip);
+            redraw(cx);
+            let before = livtk_core::statements_run();
+            for _ in 0..5 {
+                redraw(cx);
+            }
+            let n = livtk_core::statements_run() - before;
+            if n > 0 {
+                queried.push(format!("{chip}'s menu: {n}"));
+            }
+            cx.simulate_keystrokes("escape");
+        }
+        cx.simulate_keystrokes("escape");
+        settle(cx);
+    }
+    assert!(queried.is_empty(), "drawing queried the store: {queried:?}");
+}

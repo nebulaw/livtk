@@ -53,7 +53,8 @@ model2vec-rs = { version = "0.3.0", default-features = false, features = ["local
 tokenizers = { version = "=0.21.4", default-features = false, features = ["fancy-regex"] }
 unicode-normalization-alignments = "=0.1.12"
 unicode_categories = "=0.1.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# `trace`: debug builds count the statements run, so tests can hold "render only reads" (DEC-7).
+rusqlite = { version = "0.40.2", features = ["bundled", "trace"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"

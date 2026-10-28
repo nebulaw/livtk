@@ -713,6 +713,9 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The new-node form's draft, while it is open.
     pub draft: Option<making::Draft>,
+    /// The projects and owners its menus offer, as last worked out: kept until the log changes,
+    /// so a draw never queries the store (DEC-7).
+    choices: std::cell::RefCell<Option<making::Choices>>,
     /// The activity feed's events, newest first, as far as its pages are loaded.
     pub activity: Vec<livtk_core::Activity>,
     /// Agents and Sessions: the agent files, and the sessions.
@@ -947,6 +950,7 @@ impl Model {
             arrivals: Vec::new(),
             palette: None,
             draft: None,
+            choices: Default::default(),
             activity: Vec::new(),
             agents: agents::AgentsPlace::default(),
             flow: None,
@@ -2534,6 +2538,7 @@ impl Model {
     fn reload(&mut self) {
         // The log changed: what is worked out from it, worked out again.
         self.agents.forget_rows();
+        self.choices.borrow_mut().take();
         self.load_grid();
         // The panes first: the feed, looked at, marks what it shows seen before it is counted.
         for i in 0..self.panes.len() {

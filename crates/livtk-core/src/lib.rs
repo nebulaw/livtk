@@ -30,7 +30,10 @@ pub use error::{Error, Result};
 pub use event::{Event, Op};
 pub use model::{Actor, Health, Kind, KindSpec, Rel, RelSpec, State};
 pub use search::Hit;
-pub use store::{Brief, DayEvents, Node, SessionSummary, SessionUse, Snapshot, Summary, Unclaimed};
+pub use store::{
+    Brief, DayEvents, Node, SessionSummary, SessionUse, Snapshot, Summary, Unclaimed,
+    statements_run,
+};
 pub use workspace::{
     ACTIVE_AT_ONCE, Activity, BUILDS_AT_ONCE, BUILDS_MAX, Command, Config, DIR_NAME, Flow, Gate,
     Gates, HOOK_NAMES, Hooks, Lead, Links, Memory, NewProject, PROMPT_SECTIONS, Progress, Queue,

@@ -109,13 +109,48 @@ pub(super) struct Rail {
 
 pub(super) type RailState = Rc<RefCell<Rail>>;
 
+/// What a node's timeline is worked out from: its node, how far its history goes, its state,
+/// and which folds are open.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct TimelineKey {
+    node: Uuid,
+    events: usize,
+    latest: Option<Uuid>,
+    state: livtk_core::State,
+    unfolded: Vec<Uuid>,
+}
+
 impl LivtkApp {
+    /// The open node's timeline: worked out once per change of what it comes from, never on
+    /// every draw (DEC-7). The rows and the rows stuck to the edges share it.
+    fn node_timeline(&self, d: &Detail) -> Rc<crate::model::timeline::Timeline> {
+        let mut unfolded: Vec<Uuid> = self.unfolded.iter().copied().collect();
+        unfolded.sort();
+        let key = TimelineKey {
+            node: d.node.id,
+            events: d.history.len(),
+            latest: d.history.last().map(|e| e.id),
+            state: d.node.state,
+            unfolded,
+        };
+        if let Some((k, t)) = self.timeline_kept.borrow().as_ref()
+            && *k == key
+        {
+            return t.clone();
+        }
+        let open = &self.unfolded;
+        let t = Rc::new(timeline(&d.history, d.node.kind, d.node.state, |k| {
+            open.contains(&k)
+        }));
+        *self.timeline_kept.borrow_mut() = Some((key, t.clone()));
+        t
+    }
+
     /// The node's activity on its rail, oldest first, the note composer at the rail's next
     /// point.
     pub(super) fn timeline_view(&mut self, d: &Detail, cx: &mut Context<Self>) -> Div {
         let n = &d.node;
-        let unfolded = &self.unfolded;
-        let t = timeline(&d.history, n.kind, n.state, |k| unfolded.contains(&k));
+        let t = self.node_timeline(d);
         let now = t.now();
         // A new event since the last frame sends the dot on, from where it was.
         let latest = d.history.last().map(|e| e.id);
@@ -353,8 +388,7 @@ impl LivtkApp {
                 r.composer,
             )
         };
-        let unfolded = &self.unfolded;
-        let t = timeline(&d.history, n.kind, n.state, |k| unfolded.contains(&k));
+        let t = self.node_timeline(d);
         let stuck_row =
             |order: usize, this: &mut Self, cx: &mut Context<Self>| -> Option<Stateful<Div>> {
                 let (mark, content) = if Some(order) == composer {

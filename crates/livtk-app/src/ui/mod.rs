@@ -863,6 +863,9 @@ pub struct LivtkApp {
     rail: timeline::RailState,
     /// The timeline's folds opened, by their key.
     unfolded: std::collections::HashSet<Uuid>,
+    /// The open node's timeline as last worked out, and what from (DEC-7).
+    timeline_kept:
+        std::cell::RefCell<Option<(timeline::TimelineKey, Rc<crate::model::timeline::Timeline>)>>,
     /// Each block of a body as last drawn, to read where a click fell in its source.
     block_views: text::BlockViews,
     /// The detail panel's last frame while open, kept to animate it out after it closes.
@@ -1139,6 +1142,7 @@ impl LivtkApp {
             block_views: text::BlockViews::default(),
             rail: timeline::RailState::default(),
             unfolded: std::collections::HashSet::new(),
+            timeline_kept: Default::default(),
             last_detail: None,
             detail_leaving: None,
             detail_epoch: 0,

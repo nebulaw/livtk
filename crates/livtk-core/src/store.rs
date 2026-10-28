@@ -227,6 +227,23 @@ pub struct Snapshot {
     pub edges: Vec<(Uuid, Rel, Uuid)>,
 }
 
+thread_local! {
+    /// Statements run on this thread, by any store, counted in debug builds only: per thread, so
+    /// tests running side by side never count each other's.
+    static STATEMENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+fn count_statement(_: rusqlite::trace::TraceEvent<'_>) {
+    STATEMENTS.with(|n| n.set(n.get() + 1));
+}
+
+/// How many statements stores have run on this thread: in debug builds, for tests that hold that
+/// drawing queries nothing (DEC-7); always 0 in release builds.
+pub fn statements_run() -> u64 {
+    STATEMENTS.with(std::cell::Cell::get)
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -234,6 +251,12 @@ pub struct Store {
 impl Store {
     pub fn open(path: &std::path::Path) -> Result<Store> {
         let conn = Connection::open(path)?;
+        // Debug builds count each statement run, for tests that hold that a draw queries nothing.
+        #[cfg(debug_assertions)]
+        conn.trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(count_statement),
+        );
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         Ok(Store { conn })

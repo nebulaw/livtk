@@ -264,9 +264,17 @@ fn main() {
         let w = welcome.clone();
         cx.on_action(move |_: &RestartToUpdate, cx| w.update(cx, |w, cx| w.restart_to_update(cx)));
         if installed {
-            // Once at start, then every few hours, quietly.
+            // What an earlier run left in staging goes first, then a check at start, then one
+            // every few hours, quietly; in that order, so nothing is cleared under a check.
             let w = welcome.downgrade();
             cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .spawn(async {
+                        if let Some(f) = Folders::here() {
+                            updates::tidy(&f);
+                        }
+                    })
+                    .await;
                 loop {
                     if w.update(cx, |w, cx| w.check(false, cx)).is_err() {
                         break;

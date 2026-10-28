@@ -225,12 +225,39 @@ fn publish(app: &Path, id: &Identity, notes: String, key: &DevKey) -> Result<()>
         key.sign(body.as_bytes())?,
     )?;
     std::fs::write(channel.join(&name), body)?;
+    prune(&channel, KEEP)?;
     println!(
         "published Liv build {} ({}) to {}",
         id.build,
         id.commit,
         channel.display()
     );
+    Ok(())
+}
+
+/// How many builds the local channel keeps: the newest, and a couple to go back to.
+const KEEP: usize = 3;
+
+/// Keep only the newest `keep` builds in `channel`: each older build's manifest, signature and
+/// artifact go together.
+fn prune(channel: &Path, keep: usize) -> Result<()> {
+    let mut builds: Vec<u64> = std::fs::read_dir(channel)?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|n| n.strip_prefix("liv-")?.strip_suffix(".json")?.parse().ok())
+        .collect();
+    builds.sort_unstable_by(|a, b| b.cmp(a));
+    for build in builds.into_iter().skip(keep) {
+        for name in [
+            format!("liv-{build}.json"),
+            livtk_update::sign::signature_name(&format!("liv-{build}.json")),
+            format!("liv-{build}.zip"),
+        ] {
+            match std::fs::remove_file(channel.join(&name)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+    }
     Ok(())
 }
 
@@ -375,5 +402,37 @@ mod tests {
         let staging = tempfile::tempdir().unwrap();
         let staged = livtk_update::stage::stage(&found, staging.path()).unwrap();
         assert!(staged.app.join("Contents/MacOS/liv").exists());
+    }
+
+    #[test]
+    fn the_channel_keeps_its_newest_builds_and_drops_the_rest_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        for b in [7, 9, 10, 8] {
+            for ext in ["json", "json.minisig", "zip"] {
+                std::fs::write(dir.path().join(format!("liv-{b}.{ext}")), "").unwrap();
+            }
+        }
+        std::fs::write(dir.path().join("other.txt"), "").unwrap();
+        prune(dir.path(), 3).unwrap();
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "liv-10.json",
+                "liv-10.json.minisig",
+                "liv-10.zip",
+                "liv-8.json",
+                "liv-8.json.minisig",
+                "liv-8.zip",
+                "liv-9.json",
+                "liv-9.json.minisig",
+                "liv-9.zip",
+                "other.txt",
+            ]
+        );
     }
 }

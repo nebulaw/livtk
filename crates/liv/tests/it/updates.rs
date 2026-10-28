@@ -331,6 +331,66 @@ fn a_build_already_ready_is_kept_as_it_is() {
     );
 }
 
+/// A source that offers one build by URL, and the web that serves it.
+struct ByUrl(livtk_update::Found);
+
+impl livtk_update::Source for ByUrl {
+    fn newest(&self, _: &str) -> livtk_update::Result<Option<livtk_update::Found>> {
+        Ok(Some(self.0.clone()))
+    }
+}
+
+struct Serves(Vec<u8>);
+
+impl livtk_update::fetch::Fetch for Serves {
+    fn get(&self, _: &str) -> livtk_update::Result<Option<Vec<u8>>> {
+        Ok(Some(self.0.clone()))
+    }
+}
+
+/// A download is only the way in: once its build is staged, it is gone; and what a check left
+/// is cleared at the next start.
+#[cfg(target_os = "macos")]
+#[test]
+fn downloads_and_staged_builds_don_t_pile_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = folders(dir.path());
+    let app = liv_app(&dir.path().join("src"), "Liv.app", 9);
+    let zip = dir.path().join("liv-9.zip");
+    assert!(
+        std::process::Command::new("ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(&app)
+            .arg(&zip)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let body = std::fs::read(&zip).unwrap();
+    let sha = livtk_update::stage::sha256_of(&zip).unwrap();
+    let found = livtk_update::Found {
+        manifest: manifest(9, "liv-9.zip", &sha, body.len() as u64),
+        artifact: livtk_update::Artifact::Url("https://example/liv-9.zip".into()),
+    };
+    let staged = updates::check(&ByUrl(found), &Serves(body), &f, 8, None)
+        .unwrap()
+        .unwrap();
+    assert!(staged.app.exists());
+    let downloads = f.cache.join("downloads");
+    assert_eq!(
+        std::fs::read_dir(&downloads).unwrap().count(),
+        0,
+        "the download is gone"
+    );
+
+    updates::tidy(&f);
+    assert!(
+        !f.cache.join("staging").exists() && !downloads.exists(),
+        "cleared at start"
+    );
+    updates::tidy(&f); // and nothing to clear is fine
+}
+
 /// A launcher that records what it starts.
 #[derive(Default)]
 struct Starts(Vec<PathBuf>);

@@ -109,8 +109,37 @@ pub fn check(
     if let Some(r) = ready.filter(|r| r.manifest.build == found.manifest.build) {
         return Ok(Some(r.clone()));
     }
-    let here = livtk_update::fetch::download(&found, fetch, &folders.cache.join("downloads"))?;
-    stage(&here, &folders.cache.join("staging")).map(Some)
+    let here = livtk_update::fetch::download(&found, fetch, &downloads(folders))?;
+    let staged = stage(&here, &staging(folders));
+    // A download is only the way in: once unpacked (or refused), it goes.
+    if here.artifact != found.artifact
+        && let livtk_update::Artifact::File(file) = &here.artifact
+    {
+        let _ = std::fs::remove_file(file);
+    }
+    staged.map(Some)
+}
+
+fn downloads(folders: &Folders) -> PathBuf {
+    folders.cache.join("downloads")
+}
+
+fn staging(folders: &Folders) -> PathBuf {
+    folders.cache.join("staging")
+}
+
+/// Clear what an earlier check left: staged builds (the one installed was moved out of its folder,
+/// others were never taken) and downloads. At start, before any check: a build ready in an
+/// earlier run is staged again if it's still the newest.
+pub fn tidy(folders: &Folders) {
+    for dir in [staging(folders), downloads(folders)] {
+        match std::fs::remove_dir_all(&dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                log::warn!("{}: not cleared: {e}", dir.display());
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The app bundle program `exe` runs from: `…/Liv.app` for `…/Liv.app/Contents/MacOS/liv`.

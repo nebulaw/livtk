@@ -26,15 +26,10 @@ pub fn base_with(env: Env) -> Option<PathBuf> {
     env("LIVTK_UPDATES_DIR").or_else(|| data_dir_with("livtk", env))
 }
 
-/// The folder an app named `app` keeps its own data in, beside livtk's and never inside it: on
-/// macOS `~/Library/Application Support/<app>`, on Linux `$XDG_DATA_HOME/<app>` (else
+/// The folder an app named `app` keeps its data in, in the environment `env`: on macOS
+/// `~/Library/Application Support/<app>`, on Linux `$XDG_DATA_HOME/<app>` (else
 /// `~/.local/share/<app>`), on Windows `%LOCALAPPDATA%\<app>`.
-pub fn data_dir(app: &str) -> Option<PathBuf> {
-    data_dir_with(app, &process_env)
-}
-
-/// [`data_dir`], in the environment `env`.
-pub fn data_dir_with(app: &str, env: Env) -> Option<PathBuf> {
+fn data_dir_with(app: &str, env: Env) -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         env("HOME").map(|h| h.join("Library/Application Support").join(app))
     } else if cfg!(target_os = "windows") {

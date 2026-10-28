@@ -36,7 +36,13 @@ first.
 - **Liv never imports gpui-component.** It reaches it only through `livtk-ui`, so that crate's
   API changes stop there.
 - **Liv and livtk.app share nothing they write.** Each has its own identifier, settings, state,
-  log and update channel (`crates/liv/src/identity.rs`). Both read the same projects.
+  log and update channel. Liv's folders follow each platform's convention through `etcetera`
+  (on macOS `~/Library/Application Support/com.github.nebulaw.liv`, its logs in
+  `~/Library/Logs/com.github.nebulaw.liv`), and are set in `crates/liv/src/identity.rs`. Both
+  apps read the same projects.
+- **Liv's identity is written once.** `identity.rs` holds it; a test holds the bundle metadata
+  (`[package.metadata.bundle]` in `crates/liv/Cargo.toml`) equal to it, and `cargo xtask liv`
+  reads it from the built binary (`liv --identity`).
 - **A view never queries the store** while drawing (DEC-7). It reads what its store worked out
   on change.
 - **Nothing polls** (DEC-8). The apps wake on file events, and draw nothing while idle (DEC-6).
@@ -46,5 +52,7 @@ first.
 - `scripts/check`: format, lint, every test, the benchmarks.
 - **The app in use:** `scripts/release --quick` builds `livtk.app` and puts it in livtk's
   update channel.
-- **Liv:** `cargo xtask liv` builds `Liv.app`. `--install` puts it in ~/Applications;
-  `--release` publishes it to Liv's own channel.
+- **Liv:** `cargo xtask liv` bundles it with `cargo bundle` (install it once:
+  `cargo install --locked cargo-bundle`), from the metadata in `crates/liv/Cargo.toml`, and signs
+  it ad hoc. `--install` puts it in ~/Applications; `--release` publishes it to Liv's own
+  channel.

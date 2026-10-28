@@ -1,14 +1,14 @@
-//! `liv`: Liv as a macOS app bundle, `Liv.app`, beside livtk.app and never in its place
-//! (proposal 0003 §5).
+//! `liv`: Liv as an app bundle, beside livtk.app and never in its place (proposal 0003 §5).
 //!
-//!   cargo xtask liv                     build Liv.app in the target folder (the quick profile)
-//!   cargo xtask liv --install           then move it to ~/Applications
+//!   cargo xtask liv                     bundle Liv (the quick profile)
+//!   cargo xtask liv --install           then move Liv.app to ~/Applications
 //!   cargo xtask liv --release [NOTES]   from a release build, and publish it to Liv's own update
-//!                                       channel (`~/Library/Application Support/liv/updates`)
+//!                                       channel
 //!
-//! Its identifier, name and channel are Liv's own (`crates/liv/src/identity.rs`), read from the
-//! built `liv --identity`, so they are written in one place and building, installing or releasing
-//! it never touches livtk.app.
+//! The bundle is made by `cargo bundle` from `[package.metadata.bundle]` in `crates/liv`: no
+//! Info.plist or file copying of ours. What cargo-bundle leaves to us is here: the ad-hoc
+//! signature (until Developer ID signing, TAS-143), installing, and publishing. Liv's identity
+//! and channel are read from the built `liv --identity`, so they are written in one place.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,30 +38,33 @@ pub fn run(args: &[String]) -> Result<()> {
     } else {
         "quick"
     };
-    run_ok(Command::new("cargo").current_dir(&root).args([
-        "build",
-        "-q",
-        "--locked",
-        "--profile",
-        profile,
-        "-p",
-        "liv",
-    ]))?;
-    let built = target.join(profile).join("liv");
+    // From the crate's folder: cargo-bundle reads the metadata's paths (the icon) from where it
+    // runs, and skips what it can't find without a word.
+    run_ok(
+        Command::new("cargo")
+            .current_dir(root.join("crates/liv"))
+            .args([
+                "bundle",
+                "--package",
+                "liv",
+                "--profile",
+                profile,
+                "--format",
+                "osx",
+            ]),
+    )?;
+    let app = target.join(profile).join("bundle/osx/Liv.app");
+    let plist = std::fs::read_to_string(app.join("Contents/Info.plist"))?;
+    if !plist.contains("<key>CFBundleIconFile</key>") {
+        bail!(
+            "{} has no icon: check `icon` in crates/liv's bundle metadata",
+            app.display()
+        );
+    }
+    let built = app.join("Contents/MacOS/liv");
     let identity = output(Command::new(&built).arg("--version"))?;
     let mut id = Identity::parse(&identity)?;
     id.who(&output(Command::new(&built).arg("--identity"))?)?;
-
-    let app = target.join("Liv.app");
-    let _ = std::fs::remove_dir_all(&app);
-    std::fs::create_dir_all(app.join("Contents/MacOS"))?;
-    std::fs::create_dir_all(app.join("Contents/Resources"))?;
-    std::fs::copy(&built, app.join("Contents/MacOS/liv"))?;
-    std::fs::copy(
-        root.join("assets/brand/livtk.icns"),
-        app.join("Contents/Resources/liv.icns"),
-    )?;
-    std::fs::write(app.join("Contents/Info.plist"), id.plist())?;
     // Signed ad hoc, as macOS asks of every app on Apple silicon; nothing leaves this machine.
     run_ok(
         Command::new("codesign")
@@ -137,31 +140,6 @@ impl Identity {
             bail!("`liv --identity` names no app id or name: {said}");
         }
         Ok(())
-    }
-
-    fn plist(&self) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleIdentifier</key><string>{}</string>
-  <key>CFBundleName</key><string>{}</string>
-  <key>CFBundleDisplayName</key><string>{}</string>
-  <key>CFBundleExecutable</key><string>liv</string>
-  <key>CFBundleIconFile</key><string>liv</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>{}</string>
-  <key>CFBundleVersion</key><string>{}</string>
-  <key>LivtkCommit</key><string>{}</string>
-  <key>LivtkModified</key><{}/>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-"#,
-            self.app_id, self.name, self.name, self.version, self.build, self.commit, self.modified
-        )
     }
 }
 
@@ -264,13 +242,11 @@ mod tests {
             "only Liv's"
         );
 
-        // Who it is comes from the binary, and goes into the bundle as it says.
+        // Who it is, and its channel, come from the binary.
         assert!(id.who("updates=/x").is_err(), "an id and a name are needed");
         id.who("app_id=com.example.liv\nname=Liv\nupdates=/s/liv/updates")
             .unwrap();
+        assert_eq!(id.app_id, "com.example.liv");
         assert_eq!(id.updates.as_deref(), Some(Path::new("/s/liv/updates")));
-        let plist = id.plist();
-        assert!(plist.contains("<string>com.example.liv</string>"));
-        assert!(plist.contains("<key>CFBundleName</key><string>Liv</string>"));
     }
 }

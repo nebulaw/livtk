@@ -67,7 +67,7 @@ fn main() {
             MenuItem::action("Quit Liv", Quit),
         ])]);
         let options = WindowOptions {
-            app_id: Some(identity::DIR.into()),
+            app_id: Some(identity::SHORT.into()),
             titlebar: Some(TitlebarOptions {
                 title: Some(identity::NAME.into()),
                 ..Default::default()

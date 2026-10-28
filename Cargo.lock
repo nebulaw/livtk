@@ -1878,6 +1878,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "etcetera"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de48cc4d1c1d97a20fd819def54b890cadde72ed3ad0c614822a0a433361be96"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "euclid"
 version = "0.22.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4008,12 +4018,15 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 name = "liv"
 version = "0.4.0"
 dependencies = [
+ "etcetera",
  "gpui-kit",
  "jiff",
  "livtk-build",
+ "livtk-core",
  "livtk-ui",
  "livtk-update",
  "log",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]

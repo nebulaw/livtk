@@ -13,6 +13,7 @@ name = "liv"
 path = "src/main.rs"
 
 [dependencies]
+etcetera.workspace = true
 gpui-kit.workspace = true
 jiff.workspace = true
 livtk-build.workspace = true
@@ -20,8 +21,31 @@ livtk-ui.workspace = true
 livtk-update.workspace = true
 log.workspace = true
 
+# How the app is bundled, read by `cargo bundle` (`cargo xtask liv`). Its identifier and name are
+# held equal to `src/identity.rs` by a test.
+[package.metadata.bundle]
+name = "Liv"
+identifier = "com.github.nebulaw.liv"
+# One icon file: cargo-bundle uses it on macOS and unpacks its sizes into the Linux icon theme.
+icon = ["../../assets/brand/livtk.icns"]
+category = "Developer Tool"
+short_description = "Where a human and AI agents build a product together"
+copyright = "Copyright © 2026 nebulaw. MIT License."
+
+[package.metadata.bundle.osx]
+minimum_system_version = "11.0"
+# Reserved now, handled by TAS-142.
+url_schemes = ["liv"]
+
+[package.metadata.bundle.linux]
+# The window's app id (Wayland) and class (X11): the desktop file is `liv.desktop`.
+startup_wm_class = "liv"
+mime_types = ["x-scheme-handler/liv"]
+
 [dev-dependencies]
+etcetera.workspace = true
 livtk-core.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

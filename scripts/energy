@@ -5,6 +5,13 @@
 #   scripts/energy                 measure target/livtk.app (scripts/release --quick builds it)
 #   scripts/energy --app PATH      measure another livtk.app
 #   scripts/energy --budget PCT    fail when any idle state's CPU is over PCT (default: report only)
+#   scripts/energy --wakeups N     fail when any idle state wakes more than N times a second
+#   scripts/energy --seconds N     measure each state for N seconds (default 10)
+#   scripts/energy --gate          the project's budgets, as the check and a release apply them:
+#                                  1% CPU and 40 wakeups a second (ENERGY_BUDGET, ENERGY_WAKEUPS
+#                                  override), 20 seconds a state. The wakeups' floor is GPUI's
+#                                  display link, about 15-25 a second while the window shows (FND-11)
+#   scripts/energy --record FILE   add this run's numbers to FILE, one line per state, to see a trend
 #   scripts/energy --settle SECS   wait this long after start before measuring (default 15: start-up
 #                                  surveys, loads and indexes, and is not idle)
 set -euo pipefail
@@ -12,12 +19,19 @@ cd "$(dirname "$0")/.."
 
 app=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)/livtk.app
 budget=""
+wakeups=""
+seconds=10
+record=""
 settle=15
 while [ $# -gt 0 ]; do
   case "$1" in
     --app) app=$2; shift 2 ;;
     --budget) budget=$2; shift 2 ;;
     --settle) settle=$2; shift 2 ;;
+    --wakeups) wakeups=$2; shift 2 ;;
+    --seconds) seconds=$2; shift 2 ;;
+    --record) record=$2; shift 2 ;;
+    --gate) budget=${ENERGY_BUDGET:-1}; wakeups=${ENERGY_WAKEUPS:-40}; seconds=20; shift ;;
     *) echo "energy: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -50,9 +64,9 @@ measure() {
   fi
   pid=$!
   sleep "$settle"
-  # Ten one-second samples; the first is top's own warm-up.
+  # One-second samples; the first is top's own warm-up.
   local out
-  out=$(top -l 11 -s 1 -pid "$pid" -stats cpu,idlew 2>/dev/null | awk 'NF==2 && $1 ~ /^[0-9.]+$/' | tail -10)
+  out=$(top -l $((seconds + 1)) -s 1 -pid "$pid" -stats cpu,idlew 2>/dev/null | awk 'NF==2 && $1 ~ /^[0-9.]+$/' | tail -"$seconds")
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   pid=""
@@ -60,7 +74,7 @@ measure() {
   cpu=$(echo "$out" | awk '{s+=$1} END {printf "%.1f", s/NR}')
   wake=$(echo "$out" | awk '{gsub(/\+/,"",$2); w[NR]=$2} END {printf "%.0f", (w[NR]-w[1])/(NR-1)}')
   printf '%-22s %7s%% CPU  %6s wakeups/s\n' "$state" "$cpu" "$wake"
-  echo "$state $cpu" >>"$work/results"
+  printf '%s\t%s\t%s\n' "$state" "$cpu" "$wake" >>"$work/results"
 }
 
 echo "livtk.app at idle ($(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist" 2>/dev/null || echo '?')):"
@@ -76,11 +90,28 @@ for args in "list" "show TST-1" "sessions"; do
   printf '  livtk %-18s %5s ms\n' "$args" "$((end - start))"
 done
 
+build=$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist" 2>/dev/null || echo '?')
+commit=$(plutil -extract LivtkCommit raw "$app/Contents/Info.plist" 2>/dev/null || echo '?')
+if [ -n "$record" ]; then
+  [ -s "$record" ] || printf 'date\tbuild\tcommit\tstate\tcpu %%\twakeups/s\n' >"$record"
+  awk -F'\t' -v d="$(date -u +%Y-%m-%dT%H:%MZ)" -v b="$build" -v c="$commit" \
+    '{printf "%s\t%s\t%s\t%s\t%s\t%s\n", d, b, c, $1, $2, $3}' "$work/results" >>"$record"
+fi
+failed=0
 if [ -n "$budget" ]; then
-  over=$(awk -v b="$budget" '$NF+0 > b+0 {print}' "$work/results")
+  over=$(awk -F'\t' -v b="$budget" '$2+0 > b+0 {print "  " $1 ": " $2 "% CPU"}' "$work/results")
   if [ -n "$over" ]; then
     echo "energy: over the idle budget of ${budget}% CPU:" >&2
     echo "$over" >&2
-    exit 1
+    failed=1
   fi
 fi
+if [ -n "$wakeups" ]; then
+  over=$(awk -F'\t' -v b="$wakeups" '$3+0 > b+0 {print "  " $1 ": " $3 " wakeups/s"}' "$work/results")
+  if [ -n "$over" ]; then
+    echo "energy: over the idle budget of $wakeups wakeups a second:" >&2
+    echo "$over" >&2
+    failed=1
+  fi
+fi
+exit "$failed"

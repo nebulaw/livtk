@@ -61,7 +61,7 @@ step "benchmarks and model tests: CLI (release)" \
 # An idle app draws nothing and costs next to no CPU: a quick build, left alone in each state.
 if [ "${1:-}" = "--energy" ] && [ "$(uname)" = Darwin ]; then
   step "bundle (quick) for energy" scripts/bundle-app --quick
-  step "energy: idle under ${ENERGY_BUDGET:-2}% CPU" scripts/energy --budget "${ENERGY_BUDGET:-2}"
+  step "energy: idle within its budgets" scripts/energy --gate
 fi
 if [ "${1:-}" = "--install" ]; then
   if [ "$(uname)" = Darwin ]; then

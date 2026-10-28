@@ -3,7 +3,10 @@
 # Update": the bundle built from a release build, zipped as macOS zips apps, and a manifest
 # (format 1) beside it, with its build number, commit, SHA-256 and size.
 #   scripts/release [--quick] [notes]
-#     --quick  from the quick profile (seconds, not minutes): for trying an update locally
+#     --quick  from the quick profile (seconds, not minutes): for trying an update locally. A
+#              full release first holds the app to its idle energy budgets (scripts/energy
+#              --gate, about two minutes of windows) and adds its numbers to
+#              docs/research/energy-trend.tsv
 #     notes    what changed, shown once after the update
 # The source is ~/Library/Application Support/livtk/updates, or $LIVTK_UPDATES_DIR/updates.
 # A build number comes from the commits on HEAD: commit before releasing, so a release is newer
@@ -27,6 +30,13 @@ target=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_di
 
 scripts/bundle-app "${quick[@]}"
 app=$target/livtk.app
+# An app that burns the laptop at idle is not released: what TAS-119 found went unseen for weeks.
+if [ ${#quick[@]} -eq 0 ]; then
+  scripts/energy --app "$app" --gate --record docs/research/energy-trend.tsv || {
+    echo "release: not released: over the idle energy budget (scripts/energy --gate)" >&2
+    exit 1
+  }
+fi
 plist=$app/Contents/Info.plist
 read_key() { plutil -extract "$1" raw -o - "$plist"; }
 id=$(read_key CFBundleIdentifier)

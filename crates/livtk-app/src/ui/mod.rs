@@ -428,6 +428,18 @@ const SHORTCUTS: &[(&str, &[&str], &str)] = &[
     ("Display", &[keys::MOD, "+", "?"], "These shortcuts"),
 ];
 
+thread_local! {
+    /// The window's draws on this thread, counted in debug builds only: per thread, so tests
+    /// running side by side never count each other's.
+    static FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the app's window was drawn on this thread: in debug builds, for tests that
+/// hold an idle view draws nothing (DEC-6); always 0 in release builds.
+pub fn frames_drawn() -> u64 {
+    FRAMES.with(std::cell::Cell::get)
+}
+
 /// Open the app on `dirs`. `quiet`: why the system posts none of its notifications where it
 /// runs (a bare binary on macOS), which it tells the human.
 pub fn run(dirs: Vec<PathBuf>, quiet: Option<Quiet>) {
@@ -2882,6 +2894,8 @@ impl LivtkApp {
 
 impl Render for LivtkApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        FRAMES.with(|n| n.set(n.get() + 1));
         cx.set_global(KeyHints(!self.model.prefs.hide_key_hints));
         if Self::window_width(window) >= RAIL_BELOW {
             self.sidebar_peek = false;

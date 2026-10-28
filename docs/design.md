@@ -215,3 +215,10 @@ same generator.
 
 Quiet and brief, and none when less motion is asked for: the highlight glides, panels and bars
 slide, a new doc fades in, anchors scroll smoothly.
+
+**Every animation ends (DEC-6).** GPUI draws the whole window for each frame of any animation,
+however small, so one that never ends costs a laptop a quarter of its CPU (TAS-119). An effect
+that's only felt (the state graph's breath, a glow) plays while the pointer is on it, or for a
+moment after a change, never forever. `.repeat()` is for those only, and is gated on hover.
+`an_idle_view_draws_nothing` (tests/app/ui.rs) leaves every view idle, with motion on, and fails
+on any frame drawn.

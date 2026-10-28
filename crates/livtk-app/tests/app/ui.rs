@@ -7432,3 +7432,65 @@ fn drawing_a_view_queries_nothing(cx: &mut TestAppContext) {
     }
     assert!(queried.is_empty(), "drawing queried the store: {queried:?}");
 }
+
+/// How many frames are drawn over two seconds of the app left alone.
+fn idle_frames(cx: &mut gpui_kit::VisualTestContext) -> u64 {
+    settle(cx);
+    settle(cx);
+    let before = livtk_app::ui::frames_drawn();
+    for _ in 0..20 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(100));
+        cx.run_until_parked();
+    }
+    livtk_app::ui::frames_drawn() - before
+}
+
+/// An idle app draws nothing (DEC-6): every view, left alone with motion on, as most people
+/// have it, draws no frame. An animation that never ends draws on and on, the whole window each
+/// time (TAS-119).
+#[gpui_kit::test]
+fn an_idle_view_draws_nothing(cx: &mut TestAppContext) {
+    let dir = project();
+    let (app, cx) = open_app(cx, dir.path());
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    resize(cx, 1400., 900.);
+    let mut drew = Vec::new();
+    // The terminal runs a shell on a thread of its own, which GPUI's test scheduler allows not.
+    for view in View::ALL.into_iter().filter(|v| *v != View::Terminal) {
+        app.update(cx, |a, _| a.model_mut().set_view(view));
+        let n = idle_frames(cx);
+        if n > 0 {
+            drew.push(format!("{view:?}: {n}"));
+        }
+    }
+    let shown = livtk_app::ui::frames_drawn();
+    app.update(cx, |a, _| {
+        a.model_mut().set_view(View::Tasks);
+        a.model_mut().set_layout(livtk_app::model::Layout::Board);
+    });
+    let n = idle_frames(cx);
+    assert!(livtk_app::ui::frames_drawn() > shown, "the counter counts");
+    if n > 0 {
+        drew.push(format!("the board: {n}"));
+    }
+    app.update(cx, |a, _| {
+        a.model_mut().set_layout(livtk_app::model::Layout::List);
+        a.model_mut().go_to("LIV-1");
+    });
+    let n = idle_frames(cx);
+    assert!(
+        cx.debug_bounds("detail-panel").is_some(),
+        "a task's panel is drawn"
+    );
+    if n > 0 {
+        drew.push(format!("a task's panel: {n}"));
+    }
+    cx.simulate_keystrokes("secondary-,");
+    let n = idle_frames(cx);
+    assert!(cx.debug_bounds("settings-page").is_some());
+    if n > 0 {
+        drew.push(format!("the settings: {n}"));
+    }
+    assert!(drew.is_empty(), "drawn while idle: {drew:?}");
+}

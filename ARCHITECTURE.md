@@ -54,5 +54,9 @@ first.
   update channel.
 - **Liv:** `cargo xtask liv` bundles it with `cargo bundle` (install it once:
   `cargo install --locked cargo-bundle`), from the metadata in `crates/liv/Cargo.toml`, and signs
-  it ad hoc. `--install` puts it in ~/Applications; `--release` publishes it to Liv's own
-  channel.
+  it ad hoc. `--install` puts it in ~/Applications; `--publish [notes]` puts it, signed with
+  this machine's own key (`.liv-dev/`, never committed), in Liv's local update channel, where
+  the installed Liv finds it. Builds use the quick profile unless `--profile release`.
+- **Liv's updates** (`crates/liv/src/updates.rs`, over `livtk-update`): every channel is signed
+  (minisign), and Liv trusts only the keys built into it. Stable and preview come from GitHub
+  Releases; local from this machine. A staged build finishes its own update once Liv quits.

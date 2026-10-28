@@ -298,36 +298,64 @@ fn a_leftover_that_can_t_be_cleared_leaves_the_current_app_in_place_and_started(
     );
 }
 
-/// When the failed build can be neither moved out nor wholly removed, the old app is started
-/// from where it was moved aside: never what's left of the new build.
+/// When the failed build's usual spot is blocked, it moves to a free one: the old app goes back
+/// in place and starts from there, never what's left of the new build.
 #[cfg(unix)]
 #[test]
-fn a_new_build_that_can_t_be_cleared_away_is_never_started_unchecked() {
+fn a_failed_build_whose_spot_is_blocked_still_makes_way_for_the_old_one() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let s = setup(dir.path(), 12, Duration::from_millis(300));
-    // Inside the new build, a folder whose contents can't be removed.
+    // Inside the new build, a folder whose contents can't be removed; and its usual spot taken.
     let locked = s.staged.join("Contents/locked");
     std::fs::create_dir_all(&locked).unwrap();
     std::fs::write(locked.join("x"), "").unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-    // And where it would be moved out, something in the way.
     std::fs::write(dir.path().join(".livtk.app-failed"), "in the way").unwrap();
 
     let mut fake = Fake::new(); // the new build never says it started
     let outcome = swap(&s, &mut fake);
-    let locked_now = s.installed.join("Contents/locked");
-    if locked_now.exists() {
-        std::fs::set_permissions(&locked_now, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let moved = dir.path().join(".livtk.app-failed-2");
+    let _ = std::fs::set_permissions(
+        moved.join("Contents/locked"),
+        std::fs::Permissions::from_mode(0o755),
+    );
     assert_eq!(outcome.unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&s.installed), "old", "the old app back in place");
+    assert_eq!(mark(&moved), "new", "the failed build moved to a free spot");
     assert_eq!(
         fake.started,
         vec![("new".to_owned(), true), ("old".to_owned(), false)],
         "the new build tried once with its health check, then the old one, once"
     );
+}
+
+/// An earlier swap interrupted with the old app moved aside: it goes back first, before anything
+/// that could fail, so it's started even when the rest can't go on.
+#[cfg(unix)]
+#[test]
+fn an_interrupted_swap_s_old_app_is_put_back_before_anything_can_fail() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 12, Duration::from_secs(1));
     let aside = dir.path().join(".livtk.app-previous");
-    assert_eq!(mark(&aside), "old", "started from where it was moved aside");
+    std::fs::rename(&s.installed, &aside).unwrap();
+    // The interrupted swap also left an incoming copy that can't be removed.
+    let locked = dir.path().join(".livtk.app-incoming/Contents/locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("x"), "").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let mut fake = Fake::new();
+    let outcome = swap(&s, &mut fake);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(outcome.is_err());
+    assert_eq!(mark(&s.installed), "old", "back in place");
+    assert_eq!(
+        fake.started,
+        vec![("old".to_owned(), false)],
+        "and started, once"
+    );
 }
 
 #[test]

@@ -74,11 +74,7 @@ pub fn swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
 fn put_back(s: &Swap) -> PathBuf {
     let previous = beside(&s.installed, "previous");
     if s.installed.exists() {
-        let failed = beside(&s.installed, "failed");
-        let _ = remove(&failed);
-        if std::fs::rename(&s.installed, &failed).is_err() {
-            let _ = remove(&s.installed);
-        }
+        clear_away(&s.installed);
     }
     if !s.installed.exists() && std::fs::rename(&previous, &s.installed).is_ok() {
         s.installed.clone()
@@ -87,16 +83,38 @@ fn put_back(s: &Swap) -> PathBuf {
     }
 }
 
+/// Move what stands at `installed` (a failed new build) out of the way: to `.failed`, or, when
+/// that spot is blocked, the next free `.failed-N`; removed only when it can't be moved at all.
+/// A rename within one folder fails only when the folder itself can't be written.
+fn clear_away(installed: &Path) {
+    let failed = beside(installed, "failed");
+    let _ = remove(&failed);
+    if std::fs::rename(installed, &failed).is_ok() {
+        return;
+    }
+    for n in 2..100 {
+        let spot = beside(installed, &format!("failed-{n}"));
+        if !spot.exists() && std::fs::rename(installed, &spot).is_ok() {
+            return;
+        }
+    }
+    let _ = remove(installed);
+}
+
 /// The swap's moves, up to the new build's health check; `aside` is set once the old app has
 /// been moved aside. It never starts the old app: `swap` does, once, after putting it back.
 fn try_swap(s: &Swap, launcher: &mut dyn Launcher, aside: &mut bool) -> Result<Outcome> {
     let previous = beside(&s.installed, "previous");
     let incoming = beside(&s.installed, "incoming");
-    remove(&incoming)?;
     if !s.installed.exists() && previous.exists() {
-        // An earlier swap was interrupted with the old app moved aside: it goes back first.
+        // An earlier swap was interrupted with the old app moved aside: it goes back first,
+        // before anything else is touched. Until it is back, it counts as moved aside, so a
+        // failure here still starts it, from where it stands.
+        *aside = true;
         std::fs::rename(&previous, &s.installed)?;
+        *aside = false;
     }
+    remove(&incoming)?;
     remove(&previous)?;
     // The staged build next to the installed one first: staging may be on another volume.
     move_or_copy(&s.staged, &incoming)?;

@@ -7323,6 +7323,19 @@ fn the_panels_jumps_follow_your_note_and_keep_clear_of_the_composer(cx: &mut Tes
 #[gpui_kit::test]
 fn drawing_a_view_queries_nothing(cx: &mut TestAppContext) {
     let dir = project();
+    // A session the log knows, for the Sessions panel.
+    {
+        let mut ws = Workspace::open(dir.path()).unwrap();
+        ws.set_session(Some("sess-d".into()));
+        ws.execute(
+            Command::Note {
+                node: "LIV-1".into(),
+                text: "from a session".into(),
+            },
+            &CLAUDE,
+        )
+        .unwrap();
+    }
     let (app, cx) = open_app(cx, dir.path());
     cx.update(|_, cx| cx.set_reduce_motion(true));
     resize(cx, 1400., 900.);
@@ -7348,6 +7361,28 @@ fn drawing_a_view_queries_nothing(cx: &mut TestAppContext) {
         if n > 0 {
             queried.push(format!("{name}: {n}"));
         }
+    }
+    // A session picked, its panel drawn again and again: what it worked on and did.
+    app.update(cx, |a, _| {
+        a.model_mut().set_view(View::Sessions);
+        a.model_mut()
+            .pick_agent(Some(livtk_app::model::agents::Pick::Session(
+                "sess-d".into(),
+            )));
+    });
+    settle(cx);
+    redraw(cx);
+    assert!(
+        cx.debug_bounds("session-page").is_some(),
+        "the session's panel is drawn"
+    );
+    let before = livtk_core::statements_run();
+    for _ in 0..5 {
+        redraw(cx);
+    }
+    let n = livtk_core::statements_run() - before;
+    if n > 0 {
+        queried.push(format!("a session's panel: {n}"));
     }
     // A task open, its panel drawn again and again. Opening it reads the store, as it should:
     // which also shows the counter counts.

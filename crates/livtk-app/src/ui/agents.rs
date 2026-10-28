@@ -535,7 +535,10 @@ impl LivtkApp {
             )));
         }
         page = page.child(actions);
-        let nodes = self.model.session_nodes(&row.id);
+        let crate::model::agents::SessionPage {
+            nodes,
+            activity: seen,
+        } = self.model.session_page(&row.id);
         if !nodes.is_empty() {
             page = page.child(section_label("Worked on"));
             for b in &nodes {
@@ -551,7 +554,6 @@ impl LivtkApp {
                 ));
             }
         }
-        let seen = self.model.session_activity(&row.id);
         page = page.child(section_label("What it did in livtk"));
         if seen.is_empty() {
             page = page.child(

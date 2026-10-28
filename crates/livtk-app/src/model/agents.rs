@@ -31,13 +31,24 @@ pub struct AgentsPlace {
     /// The session rows as last worked out: kept until the log, the transcripts or Claude
     /// Code's live list change, so a draw never queries the store (TAS-119).
     rows: std::cell::RefCell<Option<Vec<SessionRow>>>,
+    /// The picked session's page as last worked out, by its id: kept with the rows.
+    page: std::cell::RefCell<Option<(String, SessionPage)>>,
 }
 
 impl AgentsPlace {
     /// What the session rows were worked out from has changed: work them out again when asked.
     pub fn forget_rows(&self) {
         self.rows.borrow_mut().take();
+        self.page.borrow_mut().take();
     }
+}
+
+/// What a session's panel shows from the log: the nodes it wrote to, in the order it first
+/// did, and what it did, newest first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionPage {
+    pub nodes: Vec<livtk_core::Brief>,
+    pub activity: Vec<Activity>,
 }
 
 /// A session as the list shows it: from its transcript, Claude Code's live list and the log,
@@ -533,17 +544,22 @@ impl Model {
         }
     }
 
-    /// What session `id` did in livtk, newest first: as the log records it.
-    pub fn session_activity(&self, id: &str) -> Vec<Activity> {
-        self.project()
-            .and_then(|p| p.ws.session_activity(id, 30).ok())
-            .unwrap_or_default()
-    }
-
-    /// The nodes session `id` wrote to, in the order it first did.
-    pub fn session_nodes(&self, id: &str) -> Vec<livtk_core::Brief> {
-        self.project()
-            .and_then(|p| p.ws.session_nodes(id).ok())
-            .unwrap_or_default()
+    /// What session `id`'s panel shows from the log: worked out once, and kept until the log
+    /// changes, so a draw never queries the store (DEC-7).
+    pub fn session_page(&self, id: &str) -> SessionPage {
+        if let Some((kept, page)) = self.agents.page.borrow().as_ref()
+            && kept == id
+        {
+            return page.clone();
+        }
+        let page = self
+            .project()
+            .map(|p| SessionPage {
+                nodes: p.ws.session_nodes(id).unwrap_or_default(),
+                activity: p.ws.session_activity(id, 30).unwrap_or_default(),
+            })
+            .unwrap_or_default();
+        *self.agents.page.borrow_mut() = Some((id.to_owned(), page.clone()));
+        page
     }
 }

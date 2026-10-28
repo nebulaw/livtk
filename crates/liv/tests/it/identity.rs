@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use liv::identity::{self, Folders, Platform};
+use liv::identity::{self, Bases, Folders, Os, Platform};
 
 /// An environment holding only `vars`.
 fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<PathBuf> {
@@ -97,6 +97,67 @@ fn each_platform_s_folders_are_exactly_its_convention() {
     }
 }
 
+/// What the app runs: each OS picks its own convention from the machine's base folders. A wrong
+/// branch (macOS named the XDG way, Windows' folders swapped) fails here.
+#[test]
+fn each_os_names_its_folders_its_own_way() {
+    let b = Bases {
+        home: "/home".into(),
+        config: "/config".into(),
+        data: "/data".into(),
+        cache: "/cache".into(),
+        state: Some("/state".into()),
+    };
+    assert_eq!(
+        Platform::on(Os::MacOs, &b),
+        Platform::apple(Path::new("/home"))
+    );
+    assert_eq!(
+        Platform::on(Os::Windows, &b),
+        Platform::windows(Path::new("/data"), Path::new("/cache")),
+        "roaming is the data folder, local the cache"
+    );
+    assert_eq!(
+        Platform::on(Os::Unix, &b),
+        Platform::xdg(
+            Path::new("/config"),
+            Path::new("/state"),
+            Path::new("/cache")
+        )
+    );
+    let no_state = Bases { state: None, ..b };
+    assert_eq!(
+        Platform::on(Os::Unix, &no_state).state,
+        Path::new("/data/liv"),
+        "without a state folder, state goes in data"
+    );
+}
+
+/// The OS is the one Liv was built for, and this machine's base folders are etcetera's.
+#[test]
+fn here_is_this_machine() {
+    let expected = if cfg!(target_os = "macos") {
+        Os::MacOs
+    } else if cfg!(target_os = "windows") {
+        Os::Windows
+    } else {
+        Os::Unix
+    };
+    assert_eq!(Os::current(), expected);
+    use etcetera::BaseStrategy;
+    let b = etcetera::choose_base_strategy().unwrap();
+    let here = Bases::here().unwrap();
+    assert_eq!(here.home, b.home_dir());
+    assert_eq!(
+        (here.config, here.data, here.cache, here.state),
+        (b.config_dir(), b.data_dir(), b.cache_dir(), b.state_dir())
+    );
+    assert_eq!(
+        Platform::here(),
+        Some(Platform::on(Os::current(), &Bases::here().unwrap()))
+    );
+}
+
 /// Liv's folders are named as etcetera's app strategies name an app's, on the same base folders.
 #[test]
 fn the_naming_is_etcetera_s() {
@@ -148,6 +209,8 @@ fn liv_writes_nothing_of_livtk_app_s() {
         livtk_core::registry::config_dir_with(&e).unwrap(),
         livtk_update::paths::base_with(&e).unwrap(),
         livtk_update::paths::source_with(&e).unwrap(),
+        // livtk.app's log folder: livtk-app's `applog`, typed here so Liv's tests don't build
+        // the old app.
         PathBuf::from("/h/Library/Logs/livtk"),
     ];
     for (what, p) in [

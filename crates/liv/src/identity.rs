@@ -35,6 +35,55 @@ pub fn strategy_args() -> AppStrategyArgs {
     }
 }
 
+/// The kind of system Liv runs on, as far as its folders go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    MacOs,
+    Windows,
+    /// Linux and the other Unix systems, which follow XDG.
+    Unix,
+}
+
+impl Os {
+    /// The one Liv was built for.
+    pub fn current() -> Os {
+        if cfg!(target_os = "macos") {
+            Os::MacOs
+        } else if cfg!(target_os = "windows") {
+            Os::Windows
+        } else {
+            Os::Unix
+        }
+    }
+}
+
+/// A machine's base folders, before any app's name: the home folder, and the system's folders for
+/// settings, data, what can be made again, and state. On Windows `data` is the roaming folder
+/// (`%APPDATA%`) and `cache` the local one (`%LOCALAPPDATA%`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bases {
+    pub home: PathBuf,
+    pub config: PathBuf,
+    pub data: PathBuf,
+    pub cache: PathBuf,
+    pub state: Option<PathBuf>,
+}
+
+impl Bases {
+    /// This machine's, as etcetera finds them (XDG's on macOS and Linux, the known folders on
+    /// Windows). None without a home folder.
+    pub fn here() -> Option<Bases> {
+        let b = etcetera::choose_base_strategy().ok()?;
+        Some(Bases {
+            home: b.home_dir().to_path_buf(),
+            config: b.config_dir(),
+            data: b.data_dir(),
+            cache: b.cache_dir(),
+            state: b.state_dir(),
+        })
+    }
+}
+
 /// Liv's folders by the platform's convention.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Platform {
@@ -49,17 +98,18 @@ pub struct Platform {
 }
 
 impl Platform {
-    /// This machine's, from the base folders etcetera finds here.
+    /// This machine's: its base folders, as etcetera finds them, named the way this OS names an
+    /// app's.
     pub fn here() -> Option<Platform> {
-        if cfg!(target_os = "macos") {
-            Some(Platform::apple(&etcetera::home_dir().ok()?))
-        } else if cfg!(target_os = "windows") {
-            let base = etcetera::base_strategy::Windows::new().ok()?;
-            Some(Platform::windows(&base.data_dir(), &base.cache_dir()))
-        } else {
-            let base = etcetera::base_strategy::Xdg::new().ok()?;
-            let state = base.state_dir().unwrap_or_else(|| base.data_dir());
-            Some(Platform::xdg(&base.config_dir(), &state, &base.cache_dir()))
+        Some(Platform::on(Os::current(), &Bases::here()?))
+    }
+
+    /// Liv's folders on `os`, from its base folders `b`.
+    pub fn on(os: Os, b: &Bases) -> Platform {
+        match os {
+            Os::MacOs => Platform::apple(&b.home),
+            Os::Windows => Platform::windows(&b.data, &b.cache),
+            Os::Unix => Platform::xdg(&b.config, b.state.as_ref().unwrap_or(&b.data), &b.cache),
         }
     }
 

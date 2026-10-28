@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted by the human, 2026-10-28; tracked as a livtk project (Ember) |
+| **Status** | Accepted by the human, 2026-10-28; tracked as a livtk project (Liv) |
 | **Written** | 2026-10-28, by Claude, from the human's brief of the same day |
 | **Part of** | Proposal 0002, step 2 of §10 (the UI comes first) |
 | **Folds in** | TAS-126 (dark, light and system themes) |
@@ -110,16 +110,16 @@ human, before any view uses it.
 selects, Reduce Motion asks for no frame), plus the contrast test over every token pair. No
 tests of looks: those are judged in the gallery.
 
-## 5. The new app: Ember, from scratch
+## 5. The new app: Liv, from scratch
 
-**Ember** is the new app's name while it is built: the ember accent, the Spark flame. It never
+**Liv** is the new app (the human's name for it, 2026-10-28). It never
 touches the app in use: the current `livtk-app` stays where it is, shipping as `livtk.app`, and
-the human keeps using it every day. Ember is its own crate (`crates/livtk-ember`), its own bundle
-(`Ember.app`, identifier `com.github.nebulaw.livtk.ember`), its own settings and state folders,
+the human keeps using it every day. Liv is its own crate (`crates/liv`), its own bundle
+(`Liv.app`, identifier `com.github.nebulaw.liv`), its own settings and state folders,
 and its own update channel, so the two install side by side and never overwrite each other. Both
 read the same projects. Nothing is copied from the old app; ideas that worked are rebuilt on
-`livtk-ui`. When Ember covers the core (milestone 5), the old app is deleted and Ember becomes
-livtk.
+`livtk-ui`. When Liv covers the core (milestone 5), the old app is deleted and Liv is the one app livtk
+ships.
 
 **The shell** (Raycast's command bar on Things' calm):
 
@@ -172,10 +172,10 @@ Each is a task to acknowledge. Each ends with something the human can open and j
 
 1. **Foundation.** `livtk-ui` with scales, tokens and a theme that switches between light, dark and system (TAS-126), plus typography, motion tokens and the bridge to gpui-component. The gallery shows the tokens: colour scales, type, spacing and motion. *Judge:* the palette and type in both appearances.
 2. **Components v1** (§4), each in the gallery, with behaviour and contrast tests. *Judge:* every component alone.
-3. **The shell.** Ember (`livtk-ember`) with the workspace, sidebar, inspector, command bar, action bar, keymap and `Section`, on fake data. *Judge:* the whole app's feel, with nothing real behind it.
+3. **The shell.** Liv (`liv`) with the workspace, sidebar, inspector, command bar, action bar, keymap and `Section`, on fake data. *Judge:* the whole app's feel, with nothing real behind it.
 4. **Tasks, for real.** The `Tasks` store over the real `Source`, the list and board, the inspector, and the create form. The new app becomes the one you use day to day.
-5. **Inbox, Memory, Activity, Settings,** one task each. Then the old app is deleted and Ember
-   becomes livtk.
+5. **Inbox, Memory, Activity, Settings,** one task each. Then the old app is deleted and Liv is
+   the one app livtk ships.
 
 ## 8. Decisions for the human
 

@@ -71,6 +71,13 @@ measure() {
   wait "$pid" 2>/dev/null || true
   pid=""
   local cpu wake
+  # No samples: the app was gone (it crashed, or never started). Nothing measured passes no
+  # budget.
+  if [ -z "$out" ]; then
+    echo "energy: $state: no samples; the app was not running" >&2
+    printf '%s\tnone\tnone\n' "$state" >>"$work/results"
+    return
+  fi
   cpu=$(echo "$out" | awk '{s+=$1} END {printf "%.1f", s/NR}')
   wake=$(echo "$out" | awk '{gsub(/\+/,"",$2); w[NR]=$2} END {printf "%.0f", (w[NR]-w[1])/(NR-1)}')
   printf '%-22s %7s%% CPU  %6s wakeups/s\n' "$state" "$cpu" "$wake"
@@ -98,6 +105,10 @@ if [ -n "$record" ]; then
     '{printf "%s\t%s\t%s\t%s\t%s\t%s\n", d, b, c, $1, $2, $3}' "$work/results" >>"$record"
 fi
 failed=0
+if grep -q $'\tnone' "$work/results"; then
+  echo "energy: a state was not measured" >&2
+  failed=1
+fi
 if [ -n "$budget" ]; then
   over=$(awk -F'\t' -v b="$budget" '$2+0 > b+0 {print "  " $1 ": " $2 "% CPU"}' "$work/results")
   if [ -n "$over" ]; then

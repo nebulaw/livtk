@@ -1,0 +1,4 @@
+date	build	commit	state	cpu %	wakeups/s
+2026-10-28T05:59Z	301	f8f284b	tasks, list	0.0	0
+2026-10-28T05:59Z	301	f8f284b	tasks, board	0.0	0
+2026-10-28T05:59Z	301	f8f284b	a task open	0.0	0

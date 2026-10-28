@@ -29,6 +29,10 @@ pub const RELEASE_KEY: &str = "";
 /// The variable a Liv started by an update reads to know where to say it started.
 pub const HEALTH_VAR: &str = "LIV_UPDATE_HEALTH";
 
+/// How long a freshly installed build has to say it started well (its window open) before the
+/// old one comes back.
+pub const HEALTH_WAIT: Duration = Duration::from_secs(20);
+
 /// How often Liv looks for an update while it runs, beside once at start: no event says a
 /// release was made, so this one timer is kept (DEC-8).
 pub const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
@@ -106,6 +110,10 @@ pub fn check(
     let Some(found) = newer(source, identity::APP_ID, this_build)? else {
         return Ok(None);
     };
+    // A build that was installed and didn't start well is not offered again; a newer one is.
+    if rolled_back(folders) == Some(found.manifest.build) {
+        return Ok(None);
+    }
     if let Some(r) = ready.filter(|r| r.manifest.build == found.manifest.build) {
         return Ok(Some(r.clone()));
     }
@@ -159,6 +167,20 @@ fn notes_file(folders: &Folders) -> PathBuf {
     folders.state.join("updated.txt")
 }
 
+/// Where the build an update had to roll back is recorded: `rolled_back(folders)`.
+fn rolled_back_file(folders: &Folders) -> PathBuf {
+    folders.state.join("rolled-back")
+}
+
+/// The build an update installed and had to roll back, which checks pass over.
+pub fn rolled_back(folders: &Folders) -> Option<u64> {
+    std::fs::read_to_string(rolled_back_file(folders))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// The file a freshly installed Liv writes its build number to once it has started.
 fn health_file(folders: &Folders) -> PathBuf {
     folders.state.join("healthy")
@@ -187,6 +209,7 @@ pub fn install(staged: &Staged, exe: &Path, folders: &Folders) -> Result<(), Str
                 installed,
                 staged: staged.app.clone(),
                 health: health_file(folders),
+                rolled_back: rolled_back_file(folders),
                 build: staged.manifest.build,
             }
             .args(),
@@ -202,13 +225,15 @@ pub fn install(staged: &Staged, exe: &Path, folders: &Folders) -> Result<(), Str
 }
 
 /// How a staged Liv is asked to finish an update: `liv --finish-update --pid … --installed …
-/// --staged … --health … --build …`.
+/// --staged … --health … --rolled-back … --build …`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finish {
     pub pid: u32,
     pub installed: PathBuf,
     pub staged: PathBuf,
     pub health: PathBuf,
+    /// Where to record this build if it has to be rolled back, so it isn't offered again.
+    pub rolled_back: PathBuf,
     pub build: u64,
 }
 
@@ -222,6 +247,7 @@ impl Finish {
             ("--installed", self.installed.clone().into_os_string()),
             ("--staged", self.staged.clone().into_os_string()),
             ("--health", self.health.clone().into_os_string()),
+            ("--rolled-back", self.rolled_back.clone().into_os_string()),
             ("--build", self.build.to_string().into()),
         ] {
             a.push(k.into());
@@ -246,6 +272,7 @@ impl Finish {
             installed: value("--installed")?.into(),
             staged: value("--staged")?.into(),
             health: value("--health")?.into(),
+            rolled_back: value("--rolled-back")?.into(),
             build: value("--build")?.to_str()?.parse().ok()?,
         })
     }
@@ -254,14 +281,18 @@ impl Finish {
     /// swap it in, start it, and roll back if it doesn't say it started well. Whatever fails once
     /// the old Liv has quit, a Liv is left running. Runs without a window.
     pub fn run(&self) -> Result<Outcome, String> {
-        self.run_with(&mut Open {
-            program: identity::SHORT.into(),
-            health_var: HEALTH_VAR.into(),
-        })
+        self.run_with(
+            &mut Open {
+                program: identity::SHORT.into(),
+                health_var: HEALTH_VAR.into(),
+            },
+            HEALTH_WAIT,
+        )
     }
 
-    /// [`Finish::run`], starting apps with `launcher`.
-    pub fn run_with(&self, launcher: &mut dyn Launcher) -> Result<Outcome, String> {
+    /// [`Finish::run`], starting apps with `launcher` and giving the new build `wait` to say it
+    /// started well.
+    pub fn run_with(&self, launcher: &mut dyn Launcher, wait: Duration) -> Result<Outcome, String> {
         if !exited(self.pid, Duration::from_secs(30)) {
             // It never quit: it runs as it was, and nothing changed.
             return Err(format!(
@@ -279,17 +310,23 @@ impl Finish {
                 ));
             }
         }
-        swap(
+        let outcome = swap(
             &Swap {
                 installed: self.installed.clone(),
                 staged: self.staged.clone(),
                 health: self.health.clone(),
                 build: self.build,
-                wait: Duration::from_secs(20),
+                wait,
             },
             launcher,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        if outcome == Outcome::RolledBack
+            && let Err(e) = std::fs::write(&self.rolled_back, self.build.to_string())
+        {
+            log::warn!("{}: not recorded: {e}", self.rolled_back.display());
+        }
+        Ok(outcome)
     }
 }
 
@@ -310,4 +347,40 @@ pub fn notes_after_update(folders: &Folders, build: u64) -> Option<String> {
     let _ = std::fs::remove_file(&path);
     let (first, notes) = text.split_once('\n').unwrap_or((&text, ""));
     (first.trim().parse::<u64>().ok()? == build).then(|| notes.trim().to_owned())
+}
+
+/// Where updating stands, as Liv tells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Status {
+    Quiet,
+    Checking,
+    UpToDate,
+    Ready(Box<Staged>),
+    Failed(String),
+    /// This start followed an update: to build N, with its notes.
+    Updated(u64, String),
+}
+
+/// What a finished check makes of where updating stands, given the build that was `ready` before
+/// it and whether the person asked (`told`): `None` leaves it as it was. A build ready stays ready
+/// unless a newer one replaces it, whatever the check found or failed at; "up to date" and
+/// failures are said only when asked.
+pub fn after_check(
+    found: Result<Option<Staged>, String>,
+    ready: Option<Staged>,
+    told: bool,
+) -> Option<Status> {
+    match (found, ready) {
+        (Ok(Some(staged)), _) => Some(Status::Ready(Box::new(staged))),
+        (Ok(None), Some(r)) => Some(Status::Ready(Box::new(r))),
+        (Err(e), Some(r)) => {
+            log::warn!("update check: {e}");
+            Some(Status::Ready(Box::new(r)))
+        }
+        (Ok(None), None) => told.then_some(Status::UpToDate),
+        (Err(e), None) => {
+            log::warn!("update check: {e}");
+            told.then_some(Status::Failed(e))
+        }
+    }
 }

@@ -240,6 +240,43 @@ fn a_swap_that_fails_before_anything_starts_leaves_the_old_app_started() {
 }
 
 #[test]
+fn a_swap_failing_once_the_new_build_is_in_place_starts_only_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 12, Duration::from_secs(1));
+    // The health file can't be cleared (a folder with something in it stands there).
+    std::fs::create_dir_all(s.health.join("x")).unwrap();
+    let mut fake = Fake::new();
+    assert!(swap(&s, &mut fake).is_err());
+    assert_eq!(mark(&s.installed), "old", "the old app is back in place");
+    assert_eq!(
+        fake.started,
+        vec![("old".to_owned(), false)],
+        "only it is started, once; the new build never unchecked"
+    );
+    assert_eq!(
+        hidden(dir.path()),
+        vec![".livtk.app-failed"],
+        "the new build moved out"
+    );
+}
+
+#[test]
+fn a_rollback_that_can_t_move_the_failed_build_aside_still_puts_the_old_one_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 12, Duration::from_millis(300));
+    // Where the failed build would go, a file that can't be cleared as a folder.
+    std::fs::write(dir.path().join(".livtk.app-failed"), "in the way").unwrap();
+    let mut fake = Fake::new(); // the new build never says it started
+    assert_eq!(swap(&s, &mut fake).unwrap(), Outcome::RolledBack);
+    assert_eq!(mark(&s.installed), "old");
+    assert_eq!(
+        fake.started,
+        vec![("new".to_owned(), true), ("old".to_owned(), false)],
+        "the new build tried once, then the old one started once"
+    );
+}
+
+#[test]
 fn the_swap_puts_the_new_build_in_place_once_it_starts_well() {
     let dir = tempfile::tempdir().unwrap();
     let s = setup(dir.path(), 12, Duration::from_secs(2));

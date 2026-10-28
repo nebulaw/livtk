@@ -10,25 +10,14 @@ use gpui_kit::*;
 use liv::identity::{self, Folders};
 use liv::settings::{self, Settings};
 use liv::updates::{self, Finish};
-use livtk_update::stage::Staged;
 
 /// livtk's mark, made from the logo by `cargo xtask icons`.
 const MARK: &[u8] = include_bytes!("../../../assets/brand/livtk-256.png");
 
 actions!(liv, [Quit, Hide, CheckForUpdates, RestartToUpdate]);
 
-/// Where updating stands, as the window says it in one line until the shell's notice replaces
-/// it (TAS-131).
-#[derive(Clone, Debug)]
-enum Update {
-    Quiet,
-    Checking,
-    UpToDate,
-    Ready(Box<Staged>),
-    Failed(String),
-    /// This start followed an update: to build N, with its notes.
-    Updated(u64, String),
-}
+/// Where updating stands, said in one line until the shell's notice replaces it (TAS-131).
+use updates::Status as Update;
 
 /// What Liv shows until its shell exists (TAS-131): its mark, its name, and where updating stands.
 struct Welcome {
@@ -49,14 +38,17 @@ impl Welcome {
             return;
         }
         self.checking = true;
-        if told {
-            self.update = Update::Checking;
-            cx.notify();
-        }
+        // What is ready now, read before the line says "checking": a check keeps it as it is,
+        // and only a newer build replaces it.
         let ready = match &self.update {
             Update::Ready(staged) => Some((**staged).clone()),
             _ => None,
         };
+        if told && ready.is_none() {
+            self.update = Update::Checking;
+            cx.notify();
+        }
+        let asked = ready.clone();
         let found = cx.background_executor().spawn(async move {
             let folders = Folders::here().ok_or("no folders for Liv on this system")?;
             let settings = Settings::load(&settings::path_in(&folders.config));
@@ -67,7 +59,7 @@ impl Welcome {
                 &updates::http(),
                 &folders,
                 livtk_build::BUILD,
-                ready.as_ref(),
+                asked.as_ref(),
             )
             .map_err(|e| e.to_string())
         });
@@ -76,16 +68,11 @@ impl Welcome {
             let _ = this.update(cx, |w, cx| {
                 w.checking = false;
                 let restart = std::mem::take(&mut w.restart_after_check);
-                w.update = match (found, told || restart) {
-                    (Ok(Some(staged)), _) => Update::Ready(Box::new(staged)),
-                    (Ok(None), true) => Update::UpToDate,
-                    (Err(e), true) => Update::Failed(e),
-                    (Err(e), false) => {
-                        log::warn!("update check: {e}");
-                        return;
-                    }
-                    (Ok(None), false) => return,
-                };
+                // A check the person is waiting on (asked, or a Restart waiting) says what it found.
+                match updates::after_check(found, ready, told || restart) {
+                    Some(status) => w.update = status,
+                    None => return,
+                }
                 if restart {
                     w.restart_to_update(cx);
                 }

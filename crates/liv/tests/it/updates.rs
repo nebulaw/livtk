@@ -165,6 +165,7 @@ fn a_hand_over_is_asked_and_read_back_whole() {
         installed: "/Applications/Liv.app".into(),
         staged: "/c/staging/build-7/Liv.app".into(),
         health: "/s/healthy".into(),
+        rolled_back: "/s/rolled-back".into(),
         build: 7,
     };
     assert_eq!(Finish::parse(&f.args()), Some(f.clone()));
@@ -422,13 +423,18 @@ fn a_hand_over_that_can_t_finish_starts_the_installed_liv() {
         installed: installed.clone(),
         staged,
         health: dir.path().join("healthy"),
+        rolled_back: dir.path().join("rolled-back"),
         build: 9,
     };
 
     // The staged app is another build than the one asked for.
     let wrong = liv_app(&dir.path().join("staging"), "Liv.app", 7);
     let mut starts = Starts::default();
-    assert!(request(wrong).run_with(&mut starts).is_err());
+    assert!(
+        request(wrong)
+            .run_with(&mut starts, std::time::Duration::from_millis(200))
+            .is_err()
+    );
     assert_eq!(
         starts.0,
         vec![installed.clone()],
@@ -439,7 +445,7 @@ fn a_hand_over_that_can_t_finish_starts_the_installed_liv() {
     let mut starts = Starts::default();
     assert!(
         request(dir.path().join("nowhere/Liv.app"))
-            .run_with(&mut starts)
+            .run_with(&mut starts, std::time::Duration::from_millis(200))
             .is_err()
     );
     assert_eq!(starts.0, vec![installed.clone()]);
@@ -455,6 +461,124 @@ fn github_s_channels_trust_the_release_key_only() {
             "no other key on {c:?}"
         );
     }
+}
+
+/// Publish a signed Liv.app of `build` on `f`'s local channel, as `cargo xtask liv --publish` does.
+#[cfg(target_os = "macos")]
+fn publish_app(f: &Folders, by: &Signer, build: u64) {
+    let src = f.cache.parent().unwrap().join(format!("src-{build}"));
+    let app = liv_app(&src, "Liv.app", build);
+    std::fs::create_dir_all(&f.updates).unwrap();
+    let zip = f.updates.join(format!("liv-{build}.zip"));
+    assert!(
+        std::process::Command::new("ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(&app)
+            .arg(&zip)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let sha = livtk_update::stage::sha256_of(&zip).unwrap();
+    let size = std::fs::metadata(&zip).unwrap().len();
+    let name = format!("liv-{build}.json");
+    by.publish(
+        &f.updates,
+        &name,
+        &manifest(build, &format!("liv-{build}.zip"), &sha, size),
+    );
+}
+
+/// A build that was installed and rolled back isn't offered again; a newer one is.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_rolled_back_build_is_not_offered_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = folders(dir.path());
+    let ours = Signer::new();
+    publish_app(&f, &ours, 9);
+    std::fs::create_dir_all(&f.state).unwrap();
+    std::fs::write(f.state.join("rolled-back"), "9").unwrap();
+    assert_eq!(updates::rolled_back(&f), Some(9));
+    let source = LocalFolder::trusting(&f.updates, ours.keys());
+    assert!(
+        updates::check(&source, &NoNetwork, &f, 8, None)
+            .unwrap()
+            .is_none()
+    );
+    publish_app(&f, &ours, 10);
+    let staged = updates::check(&source, &NoNetwork, &f, 8, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(staged.manifest.build, 10, "a newer build is offered");
+}
+
+/// A build that doesn't say it started well is rolled back, and recorded so it isn't offered
+/// again.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_rollback_records_the_build_that_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let installed = liv_app(&dir.path().join("Applications"), "Liv.app", 8);
+    let staged = liv_app(&dir.path().join("staging"), "Liv.app", 9);
+    let record = dir.path().join("rolled-back");
+    let finish = Finish {
+        pid: gone_pid(),
+        installed: installed.clone(),
+        staged,
+        health: dir.path().join("healthy"),
+        rolled_back: record.clone(),
+        build: 9,
+    };
+    let mut starts = Starts::default(); // the new build never says it started
+    let outcome = finish
+        .run_with(&mut starts, std::time::Duration::from_millis(300))
+        .unwrap();
+    assert_eq!(outcome, livtk_update::swap::Outcome::RolledBack);
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), "9");
+    assert_eq!(
+        starts.0.len(),
+        2,
+        "the new build tried once, the old one started once"
+    );
+}
+
+fn staged(build: u64) -> livtk_update::stage::Staged {
+    livtk_update::stage::Staged {
+        manifest: manifest(build, "z.zip", HASH, 1),
+        app: format!("/c/staging/build-{build}/Liv.app").into(),
+    }
+}
+
+#[test]
+fn a_ready_build_stays_ready_until_a_newer_one_replaces_it() {
+    use updates::{Status, after_check};
+    let ready = || Some(staged(9));
+    for told in [false, true] {
+        assert_eq!(
+            after_check(Ok(None), ready(), told),
+            Some(Status::Ready(Box::new(staged(9)))),
+            "nothing newer: still ready"
+        );
+        assert_eq!(
+            after_check(Err("offline".into()), ready(), told),
+            Some(Status::Ready(Box::new(staged(9)))),
+            "a failed check: still ready, so a waiting Restart goes ahead"
+        );
+        assert_eq!(
+            after_check(Ok(Some(staged(10))), ready(), told),
+            Some(Status::Ready(Box::new(staged(10)))),
+            "a newer build replaces it"
+        );
+    }
+    // Nothing ready: what was found is said only when asked.
+    assert_eq!(after_check(Ok(None), None, false), None);
+    assert_eq!(after_check(Ok(None), None, true), Some(Status::UpToDate));
+    assert_eq!(after_check(Err("x".into()), None, false), None);
+    assert_eq!(
+        after_check(Err("x".into()), None, true),
+        Some(Status::Failed("x".into()))
+    );
 }
 
 /// The local channel never goes to the network.

@@ -310,7 +310,13 @@ impl Finish {
                 ));
             }
         }
-        let outcome = swap(
+        // Whether the new build was started at all: if it was and isn't kept, however the swap
+        // ended, it's recorded so it isn't offered again.
+        let mut seen = Seen {
+            inner: launcher,
+            tried_new: false,
+        };
+        let result = swap(
             &Swap {
                 installed: self.installed.clone(),
                 staged: self.staged.clone(),
@@ -318,15 +324,33 @@ impl Finish {
                 build: self.build,
                 wait,
             },
-            launcher,
-        )
-        .map_err(|e| e.to_string())?;
-        if outcome == Outcome::RolledBack
+            &mut seen,
+        );
+        if seen.tried_new
+            && !matches!(result, Ok(Outcome::Updated))
             && let Err(e) = std::fs::write(&self.rolled_back, self.build.to_string())
         {
             log::warn!("{}: not recorded: {e}", self.rolled_back.display());
         }
+        let outcome = result.map_err(|e| e.to_string())?;
         Ok(outcome)
+    }
+}
+
+/// A launcher that notes whether the new build (the one asked to report its health) was started.
+struct Seen<'a> {
+    inner: &'a mut dyn Launcher,
+    tried_new: bool,
+}
+
+impl Launcher for Seen<'_> {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
+        self.tried_new |= health.is_some();
+        self.inner.start(app, health)
+    }
+
+    fn stop(&mut self, app: &Path) {
+        self.inner.stop(app);
     }
 }
 
@@ -371,6 +395,10 @@ pub fn after_check(
     told: bool,
 ) -> Option<Status> {
     match (found, ready) {
+        // Only a newer build replaces one ready (the channel may have changed to an older line).
+        (Ok(Some(staged)), Some(r)) if staged.manifest.build <= r.manifest.build => {
+            Some(Status::Ready(Box::new(r)))
+        }
         (Ok(Some(staged)), _) => Some(Status::Ready(Box::new(staged))),
         (Ok(None), Some(r)) => Some(Status::Ready(Box::new(r))),
         (Err(e), Some(r)) => {

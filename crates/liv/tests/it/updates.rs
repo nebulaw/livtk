@@ -543,6 +543,45 @@ fn a_rollback_records_the_build_that_failed() {
     );
 }
 
+/// A launcher whose start of the old app fails, after the new build was tried.
+#[derive(Default)]
+struct OldWontStart(Vec<PathBuf>);
+
+impl livtk_update::swap::Launcher for OldWontStart {
+    fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
+        self.0.push(app.to_path_buf());
+        if health.is_none() {
+            return Err(livtk_update::Error::Failed("open failed".into()));
+        }
+        Ok(())
+    }
+    fn stop(&mut self, _: &Path) {}
+}
+
+/// A build that was tried and isn't kept is recorded, even when the old app then won't start.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_tried_build_is_recorded_even_when_the_rollback_can_t_start_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let installed = liv_app(&dir.path().join("Applications"), "Liv.app", 8);
+    let record = dir.path().join("rolled-back");
+    let finish = Finish {
+        pid: gone_pid(),
+        installed,
+        staged: liv_app(&dir.path().join("staging"), "Liv.app", 9),
+        health: dir.path().join("healthy"),
+        rolled_back: record.clone(),
+        build: 9,
+    };
+    let mut launcher = OldWontStart::default();
+    assert!(
+        finish
+            .run_with(&mut launcher, std::time::Duration::from_millis(300))
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), "9");
+}
+
 fn staged(build: u64) -> livtk_update::stage::Staged {
     livtk_update::stage::Staged {
         manifest: manifest(build, "z.zip", HASH, 1),
@@ -569,6 +608,11 @@ fn a_ready_build_stays_ready_until_a_newer_one_replaces_it() {
             after_check(Ok(Some(staged(10))), ready(), told),
             Some(Status::Ready(Box::new(staged(10)))),
             "a newer build replaces it"
+        );
+        assert_eq!(
+            after_check(Ok(Some(staged(8))), ready(), told),
+            Some(Status::Ready(Box::new(staged(9)))),
+            "an older one (another channel) doesn't"
         );
     }
     // Nothing ready: what was found is said only when asked.

@@ -44,31 +44,35 @@ pub trait Launcher {
     fn stop(&mut self, app: &Path);
 }
 
-/// Make the swap. Whatever happens, one app is left in place and started once: the new build,
-/// once it says it started well; else the old one, put back (it is never lost) and started again,
+/// Make the swap. Whatever happens, one app is left running, started once: the new build, once it
+/// says it started well; else the old one, put back (it is never lost) and started again,
 /// whichever step failed, and never the new build unchecked.
 pub fn swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
-    let result = try_swap(s, launcher);
+    let mut aside = false;
+    let result = try_swap(s, launcher, &mut aside);
     if matches!(result, Ok(Outcome::Updated)) {
         return result;
     }
-    // Rolled back, or a step failed: wherever it stopped, the old app goes back in place (the new
-    // build moved out, or removed when it can't be), then it alone is started.
-    put_back(s);
-    let started = launcher.start(&s.installed, None);
+    // Rolled back, or a step failed. Only if this swap moved the old app aside is anything put
+    // back: until then it stands where it was, untouched (a leftover from an earlier swap is
+    // never taken for it).
+    let old = if aside {
+        put_back(s)
+    } else {
+        s.installed.clone()
+    };
+    let started = launcher.start(&old, None);
     match result {
         Ok(outcome) => started.map(|()| outcome),
         Err(e) => Err(e),
     }
 }
 
-/// The old app back in place, if it was moved aside: what stands there now (the new build) out
-/// first.
-fn put_back(s: &Swap) {
+/// The old app, moved aside by this swap, back in place: whatever stands there now (the new
+/// build, or part of it) moved out first, or removed. Where the old app is to be started from:
+/// in place, or, when the place can't be cleared, where it was moved aside.
+fn put_back(s: &Swap) -> PathBuf {
     let previous = beside(&s.installed, "previous");
-    if !previous.exists() {
-        return;
-    }
     if s.installed.exists() {
         let failed = beside(&s.installed, "failed");
         let _ = remove(&failed);
@@ -76,12 +80,16 @@ fn put_back(s: &Swap) {
             let _ = remove(&s.installed);
         }
     }
-    let _ = std::fs::rename(&previous, &s.installed);
+    if !s.installed.exists() && std::fs::rename(&previous, &s.installed).is_ok() {
+        s.installed.clone()
+    } else {
+        previous
+    }
 }
 
-/// The swap's moves, up to the new build's health check. It never starts the old app: `swap`
-/// does, once, after putting it back.
-fn try_swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
+/// The swap's moves, up to the new build's health check; `aside` is set once the old app has
+/// been moved aside. It never starts the old app: `swap` does, once, after putting it back.
+fn try_swap(s: &Swap, launcher: &mut dyn Launcher, aside: &mut bool) -> Result<Outcome> {
     let previous = beside(&s.installed, "previous");
     let incoming = beside(&s.installed, "incoming");
     remove(&incoming)?;
@@ -93,6 +101,7 @@ fn try_swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
     // The staged build next to the installed one first: staging may be on another volume.
     move_or_copy(&s.staged, &incoming)?;
     std::fs::rename(&s.installed, &previous)?;
+    *aside = true;
     std::fs::rename(&incoming, &s.installed)?;
     remove_file(&s.health)?;
     let started_well = launcher.start(&s.installed, Some(&s.health)).is_ok()

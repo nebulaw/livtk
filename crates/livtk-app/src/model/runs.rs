@@ -189,16 +189,14 @@ impl Model {
             .collect()
     }
 
-    /// Whether the runs are due to be surveyed.
     /// How long the app's loop may wait for the next file change before it must look anyway: a
     /// moment while something moves on time, a run's beat while a turn goes (its process may end
     /// without a word), else only the idle safety net.
-    pub fn next_wake(&self) -> Duration {
+    pub fn next_wake(&self, now: Instant, notice_fade: Duration) -> Duration {
         let moving = !self.flashed.is_empty()
             || !self.leaving().is_empty()
-            || !self.toasts().is_empty()
             || self.projects.iter().any(|p| p.catching_up);
-        if moving {
+        let wait = if moving {
             WAKE_MOVING
         } else if self.runs.surveyed.is_none()
             || !self.runs.going.is_empty()
@@ -207,7 +205,12 @@ impl Model {
             RUNS_EVERY
         } else {
             WAKE_IDLE
-        }
+        };
+        // A notice wakes the app when its time is up, not on a beat: an error that stays, or
+        // one the pointer holds, wakes nothing.
+        self.toasts()
+            .next_change(now, notice_fade)
+            .map_or(wait, |due| wait.min(due))
     }
 
     /// The folders whose changes wake the app: each project's log and config, runs and docs.
@@ -221,6 +224,7 @@ impl Model {
             .collect()
     }
 
+    /// Whether the runs are due to be surveyed.
     pub fn runs_due(&self, now: Instant) -> bool {
         !self.runs.surveying
             && self

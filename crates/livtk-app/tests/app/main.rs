@@ -23,3 +23,4 @@ mod style;
 mod terminal;
 mod timeline;
 mod ui;
+mod wake;

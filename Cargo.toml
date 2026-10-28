@@ -25,7 +25,7 @@ license = "MIT"
 repository = "https://github.com/nebulaw/tasks"
 
 [workspace.dependencies]
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["fs", "process"] }
 livtk-build = { path = "crates/livtk-build" }
 livtk-core = { path = "crates/livtk-core" }
 livtk-update = { path = "crates/livtk-update" }

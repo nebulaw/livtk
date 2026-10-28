@@ -4022,6 +4022,7 @@ dependencies = [
  "log",
  "mermaid-rs-renderer",
  "notify",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

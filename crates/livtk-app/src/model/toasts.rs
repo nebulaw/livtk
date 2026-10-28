@@ -267,6 +267,22 @@ impl Toasts {
         }
     }
 
+    /// How long from `now` until `age` would change something: a shown one's time is up, or a
+    /// leaving one is gone `fade` after it began to leave. None while nothing will on its own:
+    /// none shown, or only errors and held ones, which stay until closed.
+    pub fn next_change(&self, now: Instant, fade: Duration) -> Option<Duration> {
+        let below = self.list.len().saturating_sub(SHOWN);
+        self.list[below..]
+            .iter()
+            .filter(|t| !t.held)
+            .filter_map(|t| match t.leaving {
+                Some(at) => Some(at + fade),
+                None => t.level.stays().map(|stays| t.since + stays),
+            })
+            .min()
+            .map(|at| at.saturating_duration_since(now))
+    }
+
     /// Let time pass to `now`: each shown whose time is up starts to leave, unless held, and is
     /// gone `fade` after; one waiting below the shown ones is not seen yet, so its time waits.
     /// Whether anything changed, so the view repaints only then.

@@ -16,17 +16,42 @@ fn ignored(path: &Path) -> bool {
 }
 
 /// The folders watched for each project: its `.livtk/` (the log, its config), its runs, and its
-/// docs.
+/// docs. One not made yet is waited for on the nearest folder above it that is, so its making
+/// wakes the app, which then watches it.
 pub fn folders(root: &Path, docs: &Path) -> Vec<(PathBuf, RecursiveMode)> {
     let livtk = root.join(livtk_core::DIR_NAME);
-    [
+    let mut out: Vec<(PathBuf, RecursiveMode)> = Vec::new();
+    for (p, mode) in [
         (livtk.clone(), RecursiveMode::NonRecursive),
         (livtk.join(livtk_core::run::RUNS), RecursiveMode::Recursive),
         (docs.to_path_buf(), RecursiveMode::Recursive),
-    ]
-    .into_iter()
-    .filter(|(p, _)| p.is_dir())
-    .collect()
+    ] {
+        let at = if p.is_dir() {
+            (p, mode)
+        } else if let Some(up) = p.ancestors().skip(1).find(|a| a.is_dir()) {
+            (up.to_path_buf(), RecursiveMode::NonRecursive)
+        } else {
+            continue;
+        };
+        if !out.iter().any(|(o, _)| *o == at.0) {
+            out.push(at);
+        }
+    }
+    out
+}
+
+/// Whether the OS tells of changes in `folder`: a network or other non-local volume may take
+/// the watch and never say a word.
+#[cfg(target_os = "macos")]
+fn local(folder: &Path) -> bool {
+    // MNT_LOCAL, from <sys/mount.h>.
+    const MNT_LOCAL: u32 = 0x0000_1000;
+    rustix::fs::statfs(folder).map_or(true, |fs| fs.f_flags & MNT_LOCAL != 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn local(_: &Path) -> bool {
+    true
 }
 
 /// The watches, and the channel they wake the app on: one wake however many files changed, as
@@ -34,6 +59,11 @@ pub fn folders(root: &Path, docs: &Path) -> Vec<(PathBuf, RecursiveMode)> {
 pub struct Watch {
     watcher: Option<RecommendedWatcher>,
     watched: Vec<(PathBuf, RecursiveMode)>,
+    /// The folders whose watch failed, tried again on each wake.
+    failed: Vec<PathBuf>,
+    /// A folder is on a non-local volume (a network share), which may take the watch and never
+    /// say a word.
+    remote: bool,
     /// Kept so the channel stays open with no watcher: a closed one would answer every wait at
     /// once, and the app's loop would spin.
     _wake: Sender<()>,
@@ -50,6 +80,8 @@ impl Watch {
             Watch {
                 watcher,
                 watched: Vec::new(),
+                failed: Vec::new(),
+                remote: false,
                 _wake: tx,
             },
             rx,
@@ -71,15 +103,16 @@ impl Watch {
         match made {
             Ok(w) => Some(w),
             Err(e) => {
-                log::warn!("watch: cannot watch files, the app will look every minute: {e}");
+                log::warn!("watch: cannot watch files, the app will look on its old beat: {e}");
                 None
             }
         }
     }
 
-    /// Watch exactly `folders`: new ones are added, gone ones dropped. Cheap when unchanged.
+    /// Watch exactly `folders`: new ones are added, gone ones dropped, failed ones tried again.
+    /// Cheap when unchanged.
     pub fn follow(&mut self, folders: Vec<(PathBuf, RecursiveMode)>) {
-        if folders == self.watched {
+        if folders == self.watched && self.failed.is_empty() {
             return;
         }
         let Some(w) = self.watcher.as_mut() else {
@@ -88,16 +121,25 @@ impl Watch {
         for (p, _) in self.watched.iter().filter(|f| !folders.contains(f)) {
             let _ = w.unwatch(p);
         }
-        for (p, mode) in folders.iter().filter(|f| !self.watched.contains(f)) {
+        let new = folders
+            .iter()
+            .filter(|f| !self.watched.contains(f) || self.failed.contains(&f.0));
+        let mut failed = Vec::new();
+        for (p, mode) in new {
             if let Err(e) = w.watch(p, *mode) {
-                log::warn!("watch: {}: {e}", p.display());
+                if !self.failed.contains(p) {
+                    log::warn!("watch: {}: {e}; looking on the old beat", p.display());
+                }
+                failed.push(p.clone());
             }
         }
+        self.failed = failed;
+        self.remote = folders.iter().any(|(p, _)| !local(p));
         self.watched = folders;
     }
 
-    /// Whether the OS tells it of changes at all; if not, the app looks every minute.
+    /// Whether the OS tells it of every change; if not, the app looks on its old beat.
     pub fn working(&self) -> bool {
-        self.watcher.is_some()
+        self.watcher.is_some() && self.failed.is_empty() && !self.remote
     }
 }

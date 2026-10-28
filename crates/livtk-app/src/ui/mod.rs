@@ -917,7 +917,13 @@ impl LivtkApp {
         let reader = docs::Reader::new(window, cx);
         let settings = settings::Settings::new(window, cx);
         let agent_form = agents::AgentForm::new(window, cx);
+        // The app changed under the human's hand (a notice raised, a project added, a survey back):
+        // the loop below works out its wait again, so nothing waits on the minute's safety net.
+        let (changed_tx, changed) = async_channel::bounded::<()>(1);
         let subscriptions = vec![
+            cx.observe_self(move |_, _| {
+                let _ = changed_tx.try_send(());
+            }),
             cx.subscribe_in(&note, window, Self::on_note),
             cx.subscribe_in(&filter, window, Self::on_filter),
             cx.subscribe_in(&palette_input, window, Self::on_palette_input),
@@ -974,25 +980,43 @@ impl LivtkApp {
         // something moves on time, while a run's turn goes, or, as a safety net, once a minute.
         let (mut watch, woken) = crate::watch::Watch::new(!cx.background_executor().is_test());
         let poll = cx.spawn(async move |this, cx| {
+            let mut looked = Instant::now();
             loop {
                 let Ok((folders, wait)) = this.update(cx, |app, _| {
-                    (app.model.watched_folders(), app.model.next_wake())
+                    let wait = app.model.next_wake(Instant::now(), NOTICE_FADE);
+                    (app.model.watched_folders(), wait)
                 }) else {
                     break;
                 };
                 watch.follow(folders);
                 // Without the OS's file events, the app looks as often as it used to.
                 let wait = if watch.working() { wait } else { POLL };
-                let timer = cx.background_executor().timer(wait);
-                futures_lite::future::or(
+                let timer = cx
+                    .background_executor()
+                    .timer((looked + wait).saturating_duration_since(Instant::now()));
+                let only_changed = futures_lite::future::or(
                     async {
                         let _ = woken.recv().await;
+                        false
                     },
-                    async {
-                        timer.await;
-                    },
+                    futures_lite::future::or(
+                        async {
+                            let _ = changed.recv().await;
+                            true
+                        },
+                        async {
+                            timer.await;
+                            false
+                        },
+                    ),
                 )
                 .await;
+                // The app changed: only the wait may have, so it is worked out again, and the
+                // look below waits for its time (an animation changes the app on every frame).
+                if only_changed {
+                    continue;
+                }
+                looked = Instant::now();
                 let alive = this.update(cx, |app, cx| {
                     // Whatever below tells the human something (a tick, a write that failed),
                     // or lets a notice go, shows now: a notice is drawn only when painted.
@@ -1058,6 +1082,8 @@ impl LivtkApp {
                 if alive.is_err() {
                     break;
                 }
+                // The look's own repaint is no change to wait on.
+                while changed.try_recv().is_ok() {}
             }
         });
         nav.focus(window, cx);

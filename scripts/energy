@@ -5,15 +5,19 @@
 #   scripts/energy                 measure target/livtk.app (scripts/release --quick builds it)
 #   scripts/energy --app PATH      measure another livtk.app
 #   scripts/energy --budget PCT    fail when any idle state's CPU is over PCT (default: report only)
+#   scripts/energy --settle SECS   wait this long after start before measuring (default 15: start-up
+#                                  surveys, loads and indexes, and is not idle)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 app=$(cargo metadata --no-deps --format-version 1 | plutil -extract target_directory raw -o - -)/livtk.app
 budget=""
+settle=15
 while [ $# -gt 0 ]; do
   case "$1" in
     --app) app=$2; shift 2 ;;
     --budget) budget=$2; shift 2 ;;
+    --settle) settle=$2; shift 2 ;;
     *) echo "energy: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -45,7 +49,7 @@ measure() {
     "$bin" "$proj" >/dev/null 2>&1 &
   fi
   pid=$!
-  sleep 6
+  sleep "$settle"
   # Ten one-second samples; the first is top's own warm-up.
   local out
   out=$(top -l 11 -s 1 -pid "$pid" -stats cpu,idlew 2>/dev/null | awk 'NF==2 && $1 ~ /^[0-9.]+$/' | tail -10)

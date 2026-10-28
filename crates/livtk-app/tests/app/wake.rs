@@ -156,3 +156,25 @@ fn a_folder_that_cannot_be_watched_brings_the_old_beat_back() {
     watch.follow(Vec::new());
     assert!(watch.working(), "and once it is gone, the events are again");
 }
+
+#[test]
+fn a_notice_that_comes_up_from_below_gets_its_whole_time() {
+    let mut t = Toasts::default();
+    t.raise(Toast::info("waits below"));
+    let errors: Vec<u64> = (0..3)
+        .map(|i| t.raise(Toast::error(format!("error {i}"))))
+        .collect();
+    assert_eq!(
+        t.next_change(Instant::now(), FADE),
+        None,
+        "only errors shown"
+    );
+
+    // It waited unseen while nothing looked; closing an error brings it up with all its time.
+    std::thread::sleep(Duration::from_millis(100));
+    t.dismiss(errors[0]);
+    let due = t
+        .next_change(Instant::now(), FADE)
+        .expect("it is shown now");
+    assert!(due > Duration::from_millis(5_950), "{due:?}");
+}

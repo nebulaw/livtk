@@ -81,6 +81,8 @@ pub struct Toast {
     pub leaving: Option<Instant>,
     since: Instant,
     held: bool,
+    /// Below the shown ones, not seen yet: its time starts when it comes up.
+    waiting: bool,
 }
 
 impl Toast {
@@ -104,6 +106,7 @@ impl Toast {
             leaving: None,
             since: Instant::now(),
             held: false,
+            waiting: false,
         }
     }
 
@@ -205,6 +208,7 @@ impl Toasts {
             old.actions = t.actions;
             let id = old.id;
             self.list.push(old);
+            self.surface(Instant::now());
             return id;
         }
         self.raised += 1;
@@ -212,7 +216,22 @@ impl Toasts {
         self.list.push(t);
         let over = self.list.len().saturating_sub(KEPT);
         self.list.drain(..over);
+        self.surface(Instant::now());
         self.raised
+    }
+
+    /// Mark the ones pushed below the shown as waiting, and start the time of each that came up
+    /// at `now`: one shown only now gets its whole time, however long it waited.
+    fn surface(&mut self, now: Instant) {
+        let below = self.list.len().saturating_sub(SHOWN);
+        for (i, t) in self.list.iter_mut().enumerate() {
+            if i < below {
+                t.waiting = true;
+            } else if t.waiting {
+                t.waiting = false;
+                t.since = now;
+            }
+        }
     }
 
     /// Whether notification `id` is still there.
@@ -223,6 +242,7 @@ impl Toasts {
     /// Take back what `source` raised: what it told of no longer holds.
     pub fn clear_source(&mut self, source: &str) {
         self.list.retain(|t| t.source.as_deref() != Some(source));
+        self.surface(Instant::now());
     }
 
     /// The ones shown, newest first, and how many more there are.
@@ -243,6 +263,7 @@ impl Toasts {
 
     pub fn dismiss(&mut self, id: u64) {
         self.list.retain(|t| t.id != id);
+        self.surface(Instant::now());
     }
 
     pub fn dismiss_all(&mut self) {
@@ -252,6 +273,7 @@ impl Toasts {
     /// Close the errors: what they told of no longer holds (a move was made after all).
     pub fn clear_errors(&mut self) {
         self.list.retain(|t| !t.is_error());
+        self.surface(Instant::now());
     }
 
     /// The pointer came over notification `id` (`held`), which keeps it, a leaving one
@@ -289,11 +311,6 @@ impl Toasts {
     pub fn age(&mut self, now: Instant, fade: Duration) -> bool {
         let mut changed = false;
         let below = self.list.len().saturating_sub(SHOWN);
-        for t in &mut self.list[..below] {
-            if t.leaving.is_none() {
-                t.since = now;
-            }
-        }
         for t in &mut self.list[below..] {
             let Some(stays) = t.level.stays() else {
                 continue;
@@ -311,6 +328,7 @@ impl Toasts {
             t.leaving
                 .is_none_or(|at| t.held || now.duration_since(at) < fade)
         });
+        self.surface(now);
         changed || self.list.len() != before
     }
 }

@@ -3,6 +3,7 @@
 //! at what changed as it always has. Nothing is polled while nothing changes.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use async_channel::{Receiver, Sender};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -14,6 +15,9 @@ fn ignored(path: &Path) -> bool {
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.starts_with("livtk.db") || n == "lock" || n.starts_with(".DS_Store"))
 }
+
+/// How often a folder whose watch failed is tried again: each try starts the OS's watch anew.
+const RETRY: Duration = Duration::from_secs(5);
 
 /// The folders watched for each project: its `.livtk/` (the log, its config), its runs, and its
 /// docs. One not made yet is waited for on the nearest folder above it that is, so its making
@@ -59,8 +63,10 @@ fn local(_: &Path) -> bool {
 pub struct Watch {
     watcher: Option<RecommendedWatcher>,
     watched: Vec<(PathBuf, RecursiveMode)>,
-    /// The folders whose watch failed, tried again on each wake.
+    /// The folders whose watch failed, tried again every `RETRY`.
     failed: Vec<PathBuf>,
+    /// When they were last tried.
+    tried: Instant,
     /// A folder is on a non-local volume (a network share), which may take the watch and never
     /// say a word.
     remote: bool,
@@ -81,6 +87,7 @@ impl Watch {
                 watcher,
                 watched: Vec::new(),
                 failed: Vec::new(),
+                tried: Instant::now(),
                 remote: false,
                 _wake: tx,
             },
@@ -109,11 +116,15 @@ impl Watch {
         }
     }
 
-    /// Watch exactly `folders`: new ones are added, gone ones dropped, failed ones tried again.
-    /// Cheap when unchanged.
+    /// Watch exactly `folders`: new ones are added, gone ones dropped, failed ones tried again
+    /// now and then. Cheap when unchanged.
     pub fn follow(&mut self, folders: Vec<(PathBuf, RecursiveMode)>) {
-        if folders == self.watched && self.failed.is_empty() {
+        let retry = !self.failed.is_empty() && self.tried.elapsed() >= RETRY;
+        if folders == self.watched && !retry {
             return;
+        }
+        if retry {
+            self.tried = Instant::now();
         }
         let Some(w) = self.watcher.as_mut() else {
             return;
@@ -123,14 +134,26 @@ impl Watch {
         }
         let new = folders
             .iter()
-            .filter(|f| !self.watched.contains(f) || self.failed.contains(&f.0));
-        let mut failed = Vec::new();
+            .filter(|f| !self.watched.contains(f) || (retry && self.failed.contains(&f.0)));
+        // Failed ones not tried this time stay failed.
+        let mut failed: Vec<PathBuf> = if retry {
+            Vec::new()
+        } else {
+            self.failed
+                .iter()
+                .filter(|p| folders.iter().any(|(f, _)| f == *p))
+                .cloned()
+                .collect()
+        };
         for (p, mode) in new {
             if let Err(e) = w.watch(p, *mode) {
                 if !self.failed.contains(p) {
                     log::warn!("watch: {}: {e}; looking on the old beat", p.display());
+                    self.tried = Instant::now();
                 }
-                failed.push(p.clone());
+                if !failed.contains(p) {
+                    failed.push(p.clone());
+                }
             }
         }
         self.failed = failed;

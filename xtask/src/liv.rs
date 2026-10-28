@@ -38,6 +38,20 @@ pub fn run(args: &[String]) -> Result<()> {
     } else {
         "quick"
     };
+    // Built here, locked to Cargo.lock; cargo-bundle then bundles that very binary.
+    run_ok(Command::new("cargo").current_dir(&root).args([
+        "build",
+        "-q",
+        "--locked",
+        "--profile",
+        profile,
+        "-p",
+        "liv",
+    ]))?;
+    let built = target.join(profile).join("liv");
+    let identity = output(Command::new(&built).arg("--version"))?;
+    let mut id = Identity::parse(&identity)?;
+    id.who(&output(Command::new(&built).arg("--identity"))?)?;
     // From the crate's folder: cargo-bundle reads the metadata's paths (the icon) from where it
     // runs, and skips what it can't find without a word.
     run_ok(
@@ -51,20 +65,35 @@ pub fn run(args: &[String]) -> Result<()> {
                 profile,
                 "--format",
                 "osx",
-            ]),
+                "--binary-path",
+            ])
+            .arg(&built),
     )?;
     let app = target.join(profile).join("bundle/osx/Liv.app");
-    let plist = std::fs::read_to_string(app.join("Contents/Info.plist"))?;
-    if !plist.contains("<key>CFBundleIconFile</key>") {
+    let plist = app.join("Contents/Info.plist");
+    if !std::fs::read_to_string(&plist)?.contains("<key>CFBundleIconFile</key>") {
         bail!(
             "{} has no icon: check `icon` in crates/liv's bundle metadata",
             app.display()
         );
     }
-    let built = app.join("Contents/MacOS/liv");
-    let identity = output(Command::new(&built).arg("--version"))?;
-    let mut id = Identity::parse(&identity)?;
-    id.who(&output(Command::new(&built).arg("--identity"))?)?;
+    // cargo-bundle stamps CFBundleVersion with the time; the updater orders and checks builds
+    // by their number, so the bundle carries the binary's.
+    run_ok(
+        Command::new("plutil")
+            .args(["-replace", "CFBundleVersion", "-string"])
+            .arg(id.build.to_string())
+            .arg(&plist),
+    )?;
+    // The bundle as the updater will read it: what it would refuse is never signed or published.
+    let (app_id, build) = livtk_update::stage::identity(&app)?;
+    if app_id != id.app_id || build != id.build {
+        bail!(
+            "the bundle says {app_id} build {build}, the binary {} build {}",
+            id.app_id,
+            id.build
+        );
+    }
     // Signed ad hoc, as macOS asks of every app on Apple silicon; nothing leaves this machine.
     run_ok(
         Command::new("codesign")
@@ -248,5 +277,31 @@ mod tests {
             .unwrap();
         assert_eq!(id.app_id, "com.example.liv");
         assert_eq!(id.updates.as_deref(), Some(Path::new("/s/liv/updates")));
+    }
+
+    /// A build published to a channel stages as the updater stages it: found, verified,
+    /// unpacked, and its identity matching its manifest. Run after a release, with `LIV_CHANNEL`
+    /// naming the channel: `LIV_CHANNEL=… cargo test -p xtask -- --ignored a_published_build`.
+    #[test]
+    #[ignore = "needs a published build: LIV_CHANNEL"]
+    fn a_published_build_stages() {
+        use livtk_update::Source;
+        let channel = PathBuf::from(std::env::var_os("LIV_CHANNEL").expect("LIV_CHANNEL"));
+        // Liv's identifier, from its bundle metadata (held equal to its code by crates/liv's tests).
+        let manifest = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/liv/Cargo.toml"),
+        )
+        .unwrap();
+        let doc: toml::Table = toml::from_str(&manifest).unwrap();
+        let app = doc["package"]["metadata"]["bundle"]["identifier"]
+            .as_str()
+            .unwrap();
+        let found = livtk_update::LocalFolder::new(&channel)
+            .newest(app)
+            .unwrap()
+            .expect("a build in the channel");
+        let staging = tempfile::tempdir().unwrap();
+        let staged = livtk_update::stage::stage(&found, staging.path()).unwrap();
+        assert!(staged.app.join("Contents/MacOS/liv").exists());
     }
 }

@@ -1,15 +1,17 @@
 //! Who Liv is to the system, and where it keeps what it writes. Each is its own, so Liv and the
 //! app in use (`livtk.app`) install side by side and never read or overwrite each other's files.
 //!
-//! Two layers:
-//! - [`Platform`]: Liv's folders by each platform's own convention, worked out by `etcetera`.
+//! Two layers, both pure, so tests fix every path exactly:
+//! - [`Platform`]: Liv's folders by each platform's convention, from that platform's base folders
+//!   (`etcetera` finds them on this machine: Apple's under the home folder, XDG's, Windows' known
+//!   folders).
 //! - [`Folders`]: Liv's own overrides (`LIV_CONFIG_DIR`, `LIV_STATE_DIR`) over them, in a given
-//!   environment, so tests never depend on the machine.
+//!   environment.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use etcetera::AppStrategy;
-use etcetera::app_strategy::{AppStrategyArgs, Apple, Windows, Xdg};
+use etcetera::BaseStrategy;
+use etcetera::app_strategy::AppStrategyArgs;
 use livtk_update::paths::{Env, process_env};
 
 /// The bundle identifier, and the app identity GPUI gives notifications. It is also the name of
@@ -19,12 +21,16 @@ pub const APP_ID: &str = "com.github.nebulaw.liv";
 pub const NAME: &str = "Liv";
 /// Liv's name in folders and file names where a short one is the convention (Linux).
 pub const SHORT: &str = "liv";
+/// Liv's publisher: in its identifier, and its folder on Windows (`<author>\<app>`).
+pub const AUTHOR: &str = "nebulaw";
 
 /// Who Liv is, as `etcetera` names an app: its identifier is `top_level_domain.author.app_name`.
+/// Liv's folders are named as etcetera's app strategies name them (`tests/it/identity.rs` holds
+/// the two together).
 pub fn strategy_args() -> AppStrategyArgs {
     AppStrategyArgs {
         top_level_domain: "com.github".into(),
-        author: "nebulaw".into(),
+        author: AUTHOR.into(),
         app_name: SHORT.into(),
     }
 }
@@ -43,52 +49,57 @@ pub struct Platform {
 }
 
 impl Platform {
-    /// This machine's.
+    /// This machine's, from the base folders etcetera finds here.
     pub fn here() -> Option<Platform> {
-        let args = strategy_args();
         if cfg!(target_os = "macos") {
-            Apple::new(args).ok().map(|s| Platform::apple(&s))
+            Some(Platform::apple(&etcetera::home_dir().ok()?))
         } else if cfg!(target_os = "windows") {
-            Windows::new(args).ok().map(|s| Platform::windows(&s))
+            let base = etcetera::base_strategy::Windows::new().ok()?;
+            Some(Platform::windows(&base.data_dir(), &base.cache_dir()))
         } else {
-            Xdg::new(args).ok().map(|s| Platform::xdg(&s))
+            let base = etcetera::base_strategy::Xdg::new().ok()?;
+            let state = base.state_dir().unwrap_or_else(|| base.data_dir());
+            Some(Platform::xdg(&base.config_dir(), &state, &base.cache_dir()))
         }
     }
 
-    /// macOS: everything Liv keeps in `~/Library/Application Support/<identifier>` (settings
-    /// included: `~/Library/Preferences` is the system's, for its defaults files), what can be
-    /// made again in `~/Library/Caches/<identifier>`, logs in `~/Library/Logs/<identifier>`.
-    pub fn apple(s: &Apple) -> Platform {
-        let data = s.data_dir();
+    /// macOS, under the home folder `home`: everything Liv keeps in
+    /// `~/Library/Application Support/<identifier>` (settings included: `~/Library/Preferences` is
+    /// the system's, for its defaults files), what can be made again in
+    /// `~/Library/Caches/<identifier>`, logs in `~/Library/Logs/<identifier>`.
+    pub fn apple(home: &Path) -> Platform {
+        let library = home.join("Library");
+        let support = library.join("Application Support").join(APP_ID);
         Platform {
-            config: data.clone(),
-            state: data,
-            cache: s.cache_dir(),
-            logs: s.home_dir().join("Library/Logs").join(APP_ID),
+            config: support.clone(),
+            state: support,
+            cache: library.join("Caches").join(APP_ID),
+            logs: library.join("Logs").join(APP_ID),
         }
     }
 
-    /// Linux and other Unix: XDG, `~/.config/liv`, `~/.local/state/liv` (logs in it), `~/.cache/liv`.
-    pub fn xdg(s: &Xdg) -> Platform {
-        let state = s.state_dir().unwrap_or_else(|| s.data_dir());
+    /// Linux and other Unix, from the XDG base folders (`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`,
+    /// `$XDG_CACHE_HOME`): `liv` in each, logs in its state folder.
+    pub fn xdg(config: &Path, state: &Path, cache: &Path) -> Platform {
+        let state = state.join(SHORT);
         Platform {
-            config: s.config_dir(),
+            config: config.join(SHORT),
             logs: state.join("logs"),
             state,
-            cache: s.cache_dir(),
+            cache: cache.join(SHORT),
         }
     }
 
-    /// Windows: preferences roam (`%APPDATA%\nebulaw\liv\config`); what Liv remembers, its
-    /// updates and logs stay on this machine, beside its cache in `%LOCALAPPDATA%\nebulaw\liv`.
-    pub fn windows(s: &Windows) -> Platform {
-        let cache = s.cache_dir();
-        let local = cache.parent().map_or_else(|| cache.clone(), PathBuf::from);
+    /// Windows, from the roaming (`%APPDATA%`) and local (`%LOCALAPPDATA%`) folders: preferences
+    /// roam (`nebulaw\liv\config`); what Liv remembers, its updates, logs and cache stay on this
+    /// machine (`nebulaw\liv\…` in the local folder).
+    pub fn windows(roaming: &Path, local: &Path) -> Platform {
+        let local = local.join(AUTHOR).join(SHORT);
         Platform {
-            config: s.config_dir(),
+            config: roaming.join(AUTHOR).join(SHORT).join("config"),
             state: local.join("state"),
             logs: local.join("logs"),
-            cache,
+            cache: local.join("cache"),
         }
     }
 }

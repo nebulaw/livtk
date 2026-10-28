@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use etcetera::app_strategy::{Apple, Windows, Xdg};
 use liv::identity::{self, Folders, Platform};
 
 /// An environment holding only `vars`.
@@ -46,54 +45,130 @@ fn the_bundle_s_metadata_agrees_with_liv_s_identity() {
     );
 }
 
-/// livtk.app's folders on this machine, from its own functions.
-fn livtk_folders() -> Vec<PathBuf> {
-    let home = etcetera::home_dir().unwrap();
-    [
-        livtk_core::registry::config_dir(),
-        livtk_update::paths::base(),
-        livtk_update::paths::source(),
-        Some(home.join("Library/Logs/livtk")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+/// Each platform's folders, exactly: which folder holds what.
+#[test]
+fn each_platform_s_folders_are_exactly_its_convention() {
+    let mac = Platform::apple(Path::new("/Users/u"));
+    assert_eq!(
+        mac.config,
+        Path::new("/Users/u/Library/Application Support/com.github.nebulaw.liv")
+    );
+    assert_eq!(
+        mac.state, mac.config,
+        "settings beside state, not in ~/Library/Preferences"
+    );
+    assert_eq!(
+        mac.cache,
+        Path::new("/Users/u/Library/Caches/com.github.nebulaw.liv")
+    );
+    assert_eq!(
+        mac.logs,
+        Path::new("/Users/u/Library/Logs/com.github.nebulaw.liv")
+    );
+
+    let linux = Platform::xdg(
+        Path::new("/h/.config"),
+        Path::new("/h/.local/state"),
+        Path::new("/h/.cache"),
+    );
+    assert_eq!(linux.config, Path::new("/h/.config/liv"));
+    assert_eq!(linux.state, Path::new("/h/.local/state/liv"));
+    assert_eq!(linux.cache, Path::new("/h/.cache/liv"));
+    assert_eq!(linux.logs, Path::new("/h/.local/state/liv/logs"));
+
+    let roaming = Path::new("C:/Users/u/AppData/Roaming");
+    let local = Path::new("C:/Users/u/AppData/Local");
+    let win = Platform::windows(roaming, local);
+    assert_eq!(
+        win.config,
+        roaming.join("nebulaw").join("liv").join("config"),
+        "preferences roam"
+    );
+    for (what, dir, name) in [
+        ("state", &win.state, "state"),
+        ("logs", &win.logs, "logs"),
+        ("cache", &win.cache, "cache"),
+    ] {
+        assert_eq!(
+            *dir,
+            local.join("nebulaw").join("liv").join(name),
+            "{what} stays on this machine"
+        );
+    }
 }
 
-/// Each platform's convention, worked out here: every folder is named for Liv and none is in
-/// livtk.app's.
+/// Liv's folders are named as etcetera's app strategies name an app's, on the same base folders.
 #[test]
-fn every_platform_s_folders_are_liv_s_own() {
+fn the_naming_is_etcetera_s() {
+    use etcetera::AppStrategy;
+    use etcetera::BaseStrategy;
+    use etcetera::app_strategy::{Apple, Windows, Xdg};
     let args = identity::strategy_args;
-    let platforms = [
-        ("macOS", Platform::apple(&Apple::new(args()).unwrap())),
-        ("Linux", Platform::xdg(&Xdg::new(args()).unwrap())),
-        ("Windows", Platform::windows(&Windows::new(args()).unwrap())),
+
+    let apple = Apple::new(args()).unwrap();
+    let mac = Platform::apple(apple.home_dir());
+    assert_eq!(mac.state, apple.data_dir());
+    assert_eq!(mac.cache, apple.cache_dir());
+
+    let xdg = Xdg::new(args()).unwrap();
+    let base = etcetera::base_strategy::Xdg::new().unwrap();
+    let linux = Platform::xdg(
+        &base.config_dir(),
+        &base.state_dir().unwrap(),
+        &base.cache_dir(),
+    );
+    assert_eq!(linux.config, xdg.config_dir());
+    assert_eq!(Some(linux.state.clone()), xdg.state_dir());
+    assert_eq!(linux.cache, xdg.cache_dir());
+
+    let windows = Windows::new(args()).unwrap();
+    let base = etcetera::base_strategy::Windows::new().unwrap();
+    let win = Platform::windows(&base.data_dir(), &base.cache_dir());
+    assert_eq!(win.config, windows.config_dir());
+    assert_eq!(win.cache, windows.cache_dir());
+}
+
+/// On this platform, in a fixed environment: every folder Liv writes is outside every folder
+/// livtk.app writes, worked out by livtk.app's own functions in that environment.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn liv_writes_nothing_of_livtk_app_s() {
+    let e = env(&[("HOME", "/h")]);
+    let platform = if cfg!(target_os = "macos") {
+        Platform::apple(Path::new("/h"))
+    } else {
+        Platform::xdg(
+            Path::new("/h/.config"),
+            Path::new("/h/.local/state"),
+            Path::new("/h/.cache"),
+        )
+    };
+    let liv = Folders::of(&e, platform);
+    let livtk = [
+        livtk_core::registry::config_dir_with(&e).unwrap(),
+        livtk_update::paths::base_with(&e).unwrap(),
+        livtk_update::paths::source_with(&e).unwrap(),
+        PathBuf::from("/h/Library/Logs/livtk"),
     ];
-    let livtk = livtk_folders();
-    for (os, p) in platforms {
-        for (what, dir) in [
-            ("config", &p.config),
-            ("state", &p.state),
-            ("cache", &p.cache),
-            ("logs", &p.logs),
-        ] {
+    for (what, p) in [
+        ("config", &liv.config),
+        ("state", &liv.state),
+        ("cache", &liv.cache),
+        ("updates", &liv.updates),
+        ("log", &liv.log),
+    ] {
+        for of in &livtk {
             assert!(
-                dir.components().any(|c| {
-                    let c = c.as_os_str();
-                    c == identity::APP_ID || c == identity::SHORT
-                }),
-                "{os}'s {what} ({}) is named for Liv",
-                dir.display()
+                !p.starts_with(of),
+                "Liv's {what} ({}) is in livtk.app's {}",
+                p.display(),
+                of.display()
             );
-            for of in &livtk {
-                assert!(
-                    !dir.starts_with(of),
-                    "{os}'s {what} ({}) is in livtk.app's {}",
-                    dir.display(),
-                    of.display()
-                );
-            }
+            assert!(
+                !of.starts_with(p),
+                "livtk.app's {} is in Liv's {what}",
+                of.display()
+            );
         }
     }
 }

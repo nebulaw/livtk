@@ -16,5 +16,9 @@ sha2 = "0.10.9"
 # Already in the tree through GPUI: the same version, PNG only.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+toml.workspace = true
+
 [lints]
 workspace = true

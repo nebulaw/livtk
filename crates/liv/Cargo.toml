@@ -1,0 +1,26 @@
+[package]
+name = "liv"
+description = "Liv: livtk's app, built on livtk-ui (proposal 0003)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "liv"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+jiff.workspace = true
+livtk-build.workspace = true
+livtk-ui.workspace = true
+livtk-update.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

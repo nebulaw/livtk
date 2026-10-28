@@ -4005,6 +4005,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
+name = "liv"
+version = "0.4.0"
+dependencies = [
+ "gpui-kit",
+ "jiff",
+ "livtk-build",
+ "livtk-ui",
+ "livtk-update",
+ "log",
+]
+
+[[package]]
 name = "livtk-app"
 version = "0.4.0"
 dependencies = [
@@ -4069,6 +4081,13 @@ dependencies = [
  "unicode-normalization-alignments",
  "unicode_categories",
  "uuid",
+]
+
+[[package]]
+name = "livtk-ui"
+version = "0.4.0"
+dependencies = [
+ "gpui-kit",
 ]
 
 [[package]]
@@ -9205,6 +9224,9 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "image",
+ "livtk-update",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

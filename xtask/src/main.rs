@@ -4,6 +4,9 @@
 //! by hand: change the master (or a setting below) and run it again. What it writes is committed,
 //! so a build never needs it; a test fails when the committed files no longer match the master.
 //!
+//! `liv`: Liv, the new app, as `Liv.app` beside livtk.app, installed or released to its own
+//! channel (see `liv.rs`).
+//!
 //! `fixture`: a project of any number of events, made from a real log, to measure how livtk holds
 //! as projects grow (see `fixture.rs`).
 //!
@@ -15,6 +18,7 @@
 //!   `com.github.nebulaw.livtk.png`, with a `com.github.nebulaw.livtk.desktop` beside them.
 
 mod fixture;
+mod liv;
 
 use std::path::{Path, PathBuf};
 
@@ -34,8 +38,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         "fixture" => fixture::run(&std::env::args().skip(2).collect::<Vec<_>>()),
+        "liv" => liv::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         _ => bail!(
-            "usage: cargo xtask icons | fixture --events N --out DIR"
+            "usage: cargo xtask icons | fixture --events N --out DIR | liv [--install] [--release [NOTES]]"
         ),
     }
 }

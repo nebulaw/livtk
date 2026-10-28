@@ -6,9 +6,11 @@ members = [
     "crates/livtk-cli",
     "crates/livtk-update",
     "crates/livtk-app",
+    "crates/livtk-ui",
+    "crates/liv",
     "xtask",
 ]
-# The app pulls in a whole UI stack; plain `cargo build` and `cargo test` leave it out.
+# The apps pull in a whole UI stack; plain `cargo build` and `cargo test` leave them out.
 default-members = [
     "crates/livtk-build",
     "crates/livtk-core",
@@ -29,6 +31,7 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 livtk-build = { path = "crates/livtk-build" }
 livtk-core = { path = "crates/livtk-core" }
 livtk-update = { path = "crates/livtk-update" }
+livtk-ui = { path = "crates/livtk-ui" }
 alacritty_terminal = "0.26.0"
 anyhow = "1.0.104"
 # The terminal's events to the window; already in the tree through GPUI.

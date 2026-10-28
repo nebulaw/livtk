@@ -12,17 +12,26 @@ pub fn base() -> Option<PathBuf> {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     };
-    if let Some(dir) = env("LIVTK_UPDATES_DIR") {
-        return Some(dir);
-    }
+    env("LIVTK_UPDATES_DIR").or_else(|| data_dir("livtk"))
+}
+
+/// The folder an app named `app` keeps its own data in, beside livtk's and never inside it: on
+/// macOS `~/Library/Application Support/<app>`, on Linux `$XDG_DATA_HOME/<app>` (else
+/// `~/.local/share/<app>`), on Windows `%LOCALAPPDATA%\<app>`.
+pub fn data_dir(app: &str) -> Option<PathBuf> {
+    let env = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     if cfg!(target_os = "macos") {
-        env("HOME").map(|h| h.join("Library/Application Support/livtk"))
+        env("HOME").map(|h| h.join("Library/Application Support").join(app))
     } else if cfg!(target_os = "windows") {
-        env("LOCALAPPDATA").map(|d| d.join("livtk"))
+        env("LOCALAPPDATA").map(|d| d.join(app))
     } else {
         env("XDG_DATA_HOME")
-            .map(|d| d.join("livtk"))
-            .or_else(|| env("HOME").map(|h| h.join(".local/share/livtk")))
+            .map(|d| d.join(app))
+            .or_else(|| env("HOME").map(|h| h.join(".local/share").join(app)))
     }
 }
 

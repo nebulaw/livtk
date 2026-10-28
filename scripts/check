@@ -46,6 +46,7 @@ else
 fi
 step "tests: core, CLI and updater" cargo test -q
 step "tests: the app, with UI tests" cargo test -q -p livtk-app
+step "tests: Liv and livtk-ui" cargo test -q -p liv -p livtk-ui
 if [ -d "$models/potion-retrieval-32M" ]; then
   with_models=(env LIVTK_TEST_MODELS="$models")
   skip=()

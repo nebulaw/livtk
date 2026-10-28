@@ -966,10 +966,30 @@ impl LivtkApp {
                 cx.notify();
             });
         });
-        // Claude, the CLI and git change the log from outside; look every 200 ms.
+        // Claude, the CLI and git change the log from outside: the OS says when a watched file
+        // changes, and only then does the app look (DEC-8). It looks on a timer only while
+        // something moves on time, while a run's turn goes, or, as a safety net, once a minute.
+        let (mut watch, woken) = crate::watch::Watch::new(!cx.background_executor().is_test());
         let poll = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(POLL).await;
+                let Ok((folders, wait)) = this.update(cx, |app, _| {
+                    (app.model.watched_folders(), app.model.next_wake())
+                }) else {
+                    break;
+                };
+                watch.follow(folders);
+                // Without the OS's file events, the app looks as often as it used to.
+                let wait = if watch.working() { wait } else { POLL };
+                let timer = cx.background_executor().timer(wait);
+                futures_lite::future::or(
+                    async {
+                        let _ = woken.recv().await;
+                    },
+                    async {
+                        timer.await;
+                    },
+                )
+                .await;
                 let alive = this.update(cx, |app, cx| {
                     // Whatever below tells the human something (a tick, a write that failed),
                     // or lets a notice go, shows now: a notice is drawn only when painted.

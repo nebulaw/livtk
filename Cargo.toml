@@ -33,6 +33,11 @@ alacritty_terminal = "0.26.0"
 anyhow = "1.0.104"
 # The terminal's events to the window; already in the tree through GPUI.
 async-channel = "2.5.0"
+# Waiting on two things at once (a wake or a deadline); already in the tree through GPUI.
+futures-lite = "2.6.1"
+# The OS's file events (FSEvents, inotify): the app waits on them instead of polling (DEC-8);
+# already in the tree through GPUI.
+notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # Mermaid diagrams in docs, drawn to SVG in pure Rust; no CLI, no PNG.
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }

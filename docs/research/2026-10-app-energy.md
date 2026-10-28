@@ -7,12 +7,15 @@ and `sample` (macOS's stack sampler).
 
 ## Before and after
 
-| State, at idle         | Build 290 (before) | After TAS-119 |
-|------------------------|--------------------|---------------|
-| Tasks, list            | 1.5% CPU           | 0.8–1.1% CPU  |
-| Tasks, board           | 1.0% CPU           | 0.8% CPU      |
-| **A task open**        | **27.5% CPU**      | 1.2–1.4% CPU  |
-| The CLI (`list`, `show`, `sessions`) | 9–11 ms | 9–12 ms   |
+| State, at idle         | Build 290 (before) | After TAS-119 | After TAS-120 (file events) |
+|------------------------|--------------------|---------------|-----------------------------|
+| Tasks, list            | 1.5% CPU           | 0.8–1.1% CPU  | 0.3% CPU, 0 wakeups/s       |
+| Tasks, board           | 1.0% CPU           | 0.8% CPU      | 0.3% CPU, 0 wakeups/s       |
+| **A task open**        | **27.5% CPU**      | 1.2–1.4% CPU  | 0.3% CPU, 0 wakeups/s       |
+| The CLI (`list`, `show`, `sessions`) | 9–11 ms | 9–12 ms   | 9–11 ms                     |
+
+After TAS-120, a change written from outside (the CLI) reaches the app in 0.27 s, through the
+OS's file events alone.
 
 Your own app, as you used it (a task open), measured 28–35% CPU idle before the fix.
 
@@ -30,11 +33,14 @@ Your own app, as you used it (a task open), measured 28–35% CPU idle before th
    even *wrote to disk* while idle. In one 8-second sample of an open panel, 940 of 1,137
    samples of drawing were this. The fix: session rows are worked out once, and kept until the
    log, the transcripts or Claude Code's live list change.
-3. **Polling: the floor that remains, about 1%.** Every 200 ms the app checks the log for
+3. **Polling: the floor that remained, about 1% (fixed by TAS-120).** Every 200 ms the app checks the log for
    changes (`tick`), the docs, the menus, runs hooks and catch-ups, and saves its state if it
    changed. Every 2 seconds it surveys runs: it settles each project and asks `ps` about live
-   turns. Each is cheap, but together they wake the app 5–30 times a second forever. This isn't
-   fixed here; it's the first follow-up below.
+   turns. Each is cheap, but together they woke the app 5–30 times a second forever. TAS-120 replaced
+   the poll with the OS's file events (FSEvents through the `notify` crate) on each project's
+   `.livtk/`, its runs and its docs. The loop wakes on a change, every 200 ms only while
+   something on screen moves on time, every 2 s while a run's turn goes, and otherwise once a
+   minute as a safety net.
 
 Also found along the way:
 - **The endless animation was hiding bugs.** Three app tests passed only because it kept the

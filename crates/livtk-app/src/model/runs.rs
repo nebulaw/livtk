@@ -13,6 +13,12 @@ use super::Model;
 
 /// How often the runs are settled and looked at.
 pub const RUNS_EVERY: Duration = Duration::from_secs(2);
+/// How soon the app looks again while something on screen moves on time: a row's flash, a notice
+/// fading, a project catching up.
+pub const WAKE_MOVING: Duration = Duration::from_millis(200);
+/// How long the app may wait, nothing moving, for a change the OS has not told it of: a safety
+/// net, not a poll (DEC-8).
+pub const WAKE_IDLE: Duration = Duration::from_secs(60);
 
 /// A run, as the app names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +190,37 @@ impl Model {
     }
 
     /// Whether the runs are due to be surveyed.
+    /// How long the app's loop may wait for the next file change before it must look anyway: a
+    /// moment while something moves on time, a run's beat while a turn goes (its process may end
+    /// without a word), else only the idle safety net.
+    pub fn next_wake(&self) -> Duration {
+        let moving = !self.flashed.is_empty()
+            || !self.leaving().is_empty()
+            || !self.toasts().is_empty()
+            || self.projects.iter().any(|p| p.catching_up);
+        if moving {
+            WAKE_MOVING
+        } else if self.runs.surveyed.is_none()
+            || !self.runs.going.is_empty()
+            || !self.runs.queued.is_empty()
+        {
+            RUNS_EVERY
+        } else {
+            WAKE_IDLE
+        }
+    }
+
+    /// The folders whose changes wake the app: each project's log and config, runs and docs.
+    pub fn watched_folders(&self) -> Vec<(PathBuf, notify::RecursiveMode)> {
+        self.projects
+            .iter()
+            .flat_map(|p| {
+                let root = p.ws.root();
+                crate::watch::folders(root, &root.join(p.ws.docs_dir()))
+            })
+            .collect()
+    }
+
     pub fn runs_due(&self, now: Instant) -> bool {
         !self.runs.surveying
             && self

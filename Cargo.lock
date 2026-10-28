@@ -4010,6 +4010,7 @@ version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
+ "futures-lite",
  "gpui-component",
  "gpui-kit",
  "gpui-pre",
@@ -4020,6 +4021,7 @@ dependencies = [
  "livtk-update",
  "log",
  "mermaid-rs-renderer",
+ "notify",
  "serde",
  "serde_json",
  "tempfile",

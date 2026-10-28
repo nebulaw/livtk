@@ -19,6 +19,8 @@ livtk-update.workspace = true
 # The terminal view: Alacritty's emulation, scrollback, selection and PTY (Zed's is built on it).
 alacritty_terminal.workspace = true
 async-channel.workspace = true
+futures-lite.workspace = true
+notify.workspace = true
 mermaid-rs-renderer.workspace = true
 gpui-kit.workspace = true
 # Code blocks in descriptions and notes coloured by language: the tree-sitter grammars of the

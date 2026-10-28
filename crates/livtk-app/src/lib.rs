@@ -9,3 +9,4 @@ pub mod system;
 pub mod terminal;
 pub mod ui;
 pub mod updates;
+pub mod watch;

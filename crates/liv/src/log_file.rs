@@ -41,7 +41,7 @@ impl log::Log for FileLog {
 
 /// Start logging to Liv's file. Without one (no home folder), Liv runs unlogged.
 pub fn init() {
-    let Some(path) = crate::identity::log_file() else {
+    let Some(path) = crate::identity::Folders::here().map(|f| f.log) else {
         return;
     };
     if let Some(dir) = path.parent() {

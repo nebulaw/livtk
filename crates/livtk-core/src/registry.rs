@@ -17,11 +17,15 @@ struct File {
 /// livtk's config directory: `$LIVTK_CONFIG_DIR`, else `$XDG_CONFIG_HOME/livtk`, else
 /// `~/.config/livtk`.
 pub fn config_dir() -> Option<PathBuf> {
-    let env = |k: &str| {
+    config_dir_with(&|k| {
         std::env::var_os(k)
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-    };
+    })
+}
+
+/// [`config_dir`], in the environment `env` (a fixed one in tests).
+pub fn config_dir_with(env: &dyn Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
     env("LIVTK_CONFIG_DIR")
         .or_else(|| env("XDG_CONFIG_HOME").map(|d| d.join("livtk")))
         .or_else(|| env("HOME").map(|d| d.join(".config/livtk")))

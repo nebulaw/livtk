@@ -21,6 +21,7 @@ livtk-update.workspace = true
 log.workspace = true
 
 [dev-dependencies]
+livtk-core.workspace = true
 
 [lints]
 workspace = true

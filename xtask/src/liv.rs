@@ -6,8 +6,9 @@
 //!   cargo xtask liv --release [NOTES]   from a release build, and publish it to Liv's own update
 //!                                       channel (`~/Library/Application Support/liv/updates`)
 //!
-//! Its identifier, folders and channel are Liv's own (`crates/liv/src/identity.rs`), so building,
-//! installing or releasing it never touches livtk.app.
+//! Its identifier, name and channel are Liv's own (`crates/liv/src/identity.rs`), read from the
+//! built `liv --identity`, so they are written in one place and building, installing or releasing
+//! it never touches livtk.app.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,11 +16,6 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use livtk_update::{Arch, FORMAT, Manifest, Platform};
 use sha2::{Digest, Sha256};
-
-/// Liv's identifier and folder name, as `liv::identity` has them; a test in `crates/liv` holds
-/// that they are not livtk.app's.
-const APP_ID: &str = "com.github.nebulaw.liv";
-const DIR: &str = "liv";
 
 pub fn run(args: &[String]) -> Result<()> {
     if !cfg!(target_os = "macos") {
@@ -53,7 +49,8 @@ pub fn run(args: &[String]) -> Result<()> {
     ]))?;
     let built = target.join(profile).join("liv");
     let identity = output(Command::new(&built).arg("--version"))?;
-    let id = Identity::parse(&identity)?;
+    let mut id = Identity::parse(&identity)?;
+    id.who(&output(Command::new(&built).arg("--identity"))?)?;
 
     let app = target.join("Liv.app");
     let _ = std::fs::remove_dir_all(&app);
@@ -95,6 +92,10 @@ struct Identity {
     build: u64,
     commit: String,
     modified: bool,
+    /// From `liv --identity`: who Liv is to the system, and its update channel.
+    app_id: String,
+    name: String,
+    updates: Option<PathBuf>,
 }
 
 impl Identity {
@@ -116,7 +117,26 @@ impl Identity {
             build,
             commit,
             modified: parts.any(|p| p == "modified"),
+            app_id: String::new(),
+            name: String::new(),
+            updates: None,
         })
+    }
+
+    /// Take who Liv is from `liv --identity`: `key=value`, a line each.
+    fn who(&mut self, said: &str) -> Result<()> {
+        for line in said.lines() {
+            match line.split_once('=') {
+                Some(("app_id", v)) => self.app_id = v.to_owned(),
+                Some(("name", v)) => self.name = v.to_owned(),
+                Some(("updates", v)) => self.updates = Some(PathBuf::from(v)),
+                _ => {}
+            }
+        }
+        if self.app_id.is_empty() || self.name.is_empty() {
+            bail!("`liv --identity` names no app id or name: {said}");
+        }
+        Ok(())
     }
 
     fn plist(&self) -> String {
@@ -125,9 +145,9 @@ impl Identity {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>{APP_ID}</string>
-  <key>CFBundleName</key><string>Liv</string>
-  <key>CFBundleDisplayName</key><string>Liv</string>
+  <key>CFBundleIdentifier</key><string>{}</string>
+  <key>CFBundleName</key><string>{}</string>
+  <key>CFBundleDisplayName</key><string>{}</string>
   <key>CFBundleExecutable</key><string>liv</string>
   <key>CFBundleIconFile</key><string>liv</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -140,7 +160,7 @@ impl Identity {
 </dict>
 </plist>
 "#,
-            self.version, self.build, self.commit, self.modified
+            self.app_id, self.name, self.name, self.version, self.build, self.commit, self.modified
         )
     }
 }
@@ -154,11 +174,7 @@ fn publish(app: &Path, id: &Identity, notes: String) -> Result<()> {
             id.build
         );
     }
-    let channel = std::env::var_os("LIV_STATE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| livtk_update::paths::data_dir(DIR))
-        .context("Liv's state folder")?
-        .join("updates");
+    let channel = id.updates.clone().context("Liv's update channel")?;
     std::fs::create_dir_all(&channel)?;
     let zip = format!("liv-{}.zip", id.build);
     let _ = std::fs::remove_file(channel.join(&zip));
@@ -171,7 +187,7 @@ fn publish(app: &Path, id: &Identity, notes: String) -> Result<()> {
     let bytes = std::fs::read(channel.join(&zip))?;
     let manifest = Manifest {
         format: FORMAT,
-        app: APP_ID.to_owned(),
+        app: id.app_id.clone(),
         version: id.version.clone(),
         build: id.build,
         commit: id.commit.clone(),
@@ -232,7 +248,7 @@ mod tests {
 
     #[test]
     fn a_version_line_gives_the_build_its_commit_and_whether_it_was_modified() {
-        let id = Identity::parse("liv 0.4.0 (build 87, abc1234)").unwrap();
+        let mut id = Identity::parse("liv 0.4.0 (build 87, abc1234)").unwrap();
         assert_eq!(
             (id.version.as_str(), id.build, id.commit.as_str()),
             ("0.4.0", 87, "abc1234")
@@ -247,6 +263,14 @@ mod tests {
             Identity::parse("livtk-app 0.4.0 (build 1, a)").is_err(),
             "only Liv's"
         );
-        assert!(id.plist().contains(APP_ID));
+
+        // Who it is comes from the binary, and goes into the bundle as it says.
+        assert!(id.who("updates=/x").is_err(), "an id and a name are needed");
+        id.who("app_id=com.example.liv\nname=Liv\nupdates=/s/liv/updates")
+            .unwrap();
+        assert_eq!(id.updates.as_deref(), Some(Path::new("/s/liv/updates")));
+        let plist = id.plist();
+        assert!(plist.contains("<string>com.example.liv</string>"));
+        assert!(plist.contains("<key>CFBundleName</key><string>Liv</string>"));
     }
 }

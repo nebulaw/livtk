@@ -1,4 +1,6 @@
-//! `liv`: open Liv. `--version` says which build this is.
+//! `liv`: open Liv. `--version` says which build this is; `--identity` says who Liv is to the system
+//! and where its update channel is, one `key=value` a line, for `cargo xtask liv` to build and
+//! release it by (so Liv's identity is written in one place).
 
 use std::sync::Arc;
 
@@ -30,9 +32,20 @@ impl Render for Welcome {
 }
 
 fn main() {
-    if std::env::args_os().nth(1).is_some_and(|a| a == "--version") {
-        println!("liv {}", livtk_build::DESCRIBE);
-        return;
+    match std::env::args_os().nth(1).as_ref().and_then(|a| a.to_str()) {
+        Some("--version") => {
+            println!("liv {}", livtk_build::DESCRIBE);
+            return;
+        }
+        Some("--identity") => {
+            println!("app_id={}", identity::APP_ID);
+            println!("name={}", identity::NAME);
+            if let Some(f) = identity::Folders::here() {
+                println!("updates={}", f.updates.display());
+            }
+            return;
+        }
+        _ => {}
     }
     liv::log_file::init();
     log::info!("starting liv {}", livtk_build::DESCRIBE);

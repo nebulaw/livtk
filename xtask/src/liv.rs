@@ -254,12 +254,15 @@ impl DevKey {
                 .to_box(Some("Liv's local signing key: this machine only"))
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             std::fs::write(&public_path, kp.pk.to_base64())?;
-            std::fs::write(&secret_path, secret.to_string())?;
+            // Readable by its owner only, from the moment it exists.
+            let mut file = std::fs::OpenOptions::new();
+            file.write(true).create_new(true);
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600))?;
-            }
+            std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+            std::io::Write::write_all(
+                &mut file.open(&secret_path)?,
+                secret.to_string().as_bytes(),
+            )?;
             println!("made Liv's local signing key in {}", dir.display());
         }
         let secret = minisign::SecretKeyBox::from_string(&std::fs::read_to_string(&secret_path)?)

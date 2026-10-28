@@ -254,15 +254,147 @@ fn a_newer_signed_build_on_the_channel_is_found_checked_and_staged() {
     );
 
     let source = LocalFolder::trusting(&f.updates, ours.keys());
-    let staged = updates::check(&source, &NoNetwork, &f, 8).unwrap().unwrap();
+    let staged = updates::check(&source, &NoNetwork, &f, 8, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(staged.manifest.build, 9);
     assert!(staged.app.starts_with(f.cache.join("staging")));
     assert!(
-        updates::check(&source, &NoNetwork, &f, 9)
+        updates::check(&source, &NoNetwork, &f, 9, None)
             .unwrap()
             .is_none(),
         "already the newest"
     );
+}
+
+/// A Liv.app of `build` at `dir/name`, as far as the updater reads it.
+#[cfg(target_os = "macos")]
+fn liv_app(dir: &Path, name: &str, build: u64) -> PathBuf {
+    let app = dir.join(name);
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::write(
+        app.join("Contents/Info.plist"),
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>{}</string>
+<key>CFBundleVersion</key><string>{build}</string>
+</dict></plist>"#,
+            identity::APP_ID
+        ),
+    )
+    .unwrap();
+    app
+}
+
+/// A build already staged and ready is never staged again over itself: Restart to Update may
+/// be handing it over.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_build_already_ready_is_kept_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = folders(dir.path());
+    let ours = Signer::new();
+    std::fs::create_dir_all(&f.updates).unwrap();
+    let zip = f.updates.join("liv-9.zip");
+    let app = liv_app(&dir.path().join("src"), "Liv.app", 9);
+    assert!(
+        std::process::Command::new("ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(&app)
+            .arg(&zip)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let sha = livtk_update::stage::sha256_of(&zip).unwrap();
+    let size = std::fs::metadata(&zip).unwrap().len();
+    ours.publish(
+        &f.updates,
+        "liv-9.json",
+        &manifest(9, "liv-9.zip", &sha, size),
+    );
+    let source = LocalFolder::trusting(&f.updates, ours.keys());
+    let staged = updates::check(&source, &NoNetwork, &f, 8, None)
+        .unwrap()
+        .unwrap();
+    let marker = staged.app.join("Contents/handed-over");
+    std::fs::write(&marker, "").unwrap();
+
+    let again = updates::check(&source, &NoNetwork, &f, 8, Some(&staged))
+        .unwrap()
+        .unwrap();
+    assert_eq!(again, staged);
+    assert!(
+        marker.exists(),
+        "the staged app was left as it was, not unpacked again"
+    );
+}
+
+/// A launcher that records what it starts.
+#[derive(Default)]
+struct Starts(Vec<PathBuf>);
+
+impl livtk_update::swap::Launcher for Starts {
+    fn start(&mut self, app: &Path, _: Option<&Path>) -> livtk_update::Result<()> {
+        self.0.push(app.to_path_buf());
+        Ok(())
+    }
+    fn stop(&mut self, _: &Path) {}
+}
+
+/// The pid of a process that has already exited, as the Liv that handed over has.
+fn gone_pid() -> u32 {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// Once the old Liv has quit for an update, a Liv is left running whatever fails.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_hand_over_that_can_t_finish_starts_the_installed_liv() {
+    let dir = tempfile::tempdir().unwrap();
+    let installed = liv_app(&dir.path().join("Applications"), "Liv.app", 8);
+    let request = |staged: PathBuf| Finish {
+        pid: gone_pid(),
+        installed: installed.clone(),
+        staged,
+        health: dir.path().join("healthy"),
+        build: 9,
+    };
+
+    // The staged app is another build than the one asked for.
+    let wrong = liv_app(&dir.path().join("staging"), "Liv.app", 7);
+    let mut starts = Starts::default();
+    assert!(request(wrong).run_with(&mut starts).is_err());
+    assert_eq!(
+        starts.0,
+        vec![installed.clone()],
+        "the installed Liv is started"
+    );
+
+    // The staged app is gone.
+    let mut starts = Starts::default();
+    assert!(
+        request(dir.path().join("nowhere/Liv.app"))
+            .run_with(&mut starts)
+            .is_err()
+    );
+    assert_eq!(starts.0, vec![installed.clone()]);
+    assert!(installed.exists(), "and left where it was");
+}
+
+#[test]
+fn github_s_channels_trust_the_release_key_only() {
+    for c in [Channel::Stable, Channel::Preview] {
+        assert_eq!(
+            updates::keys_for(c).is_empty(),
+            updates::RELEASE_KEY.is_empty(),
+            "no other key on {c:?}"
+        );
+    }
 }
 
 /// The local channel never goes to the network.

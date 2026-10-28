@@ -224,6 +224,22 @@ fn setup(dir: &Path, build: u64, wait: Duration) -> Swap {
 }
 
 #[test]
+fn a_swap_that_fails_before_anything_starts_leaves_the_old_app_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = setup(dir.path(), 12, Duration::from_secs(1));
+    // The staged build is gone by the time the swap runs (cleaned away, a full disk).
+    std::fs::remove_dir_all(&s.staged).unwrap();
+    let mut fake = Fake::new();
+    assert!(swap(&s, &mut fake).is_err());
+    assert_eq!(mark(&s.installed), "old", "the old app is where it was");
+    assert_eq!(
+        fake.started,
+        vec![("old".to_owned(), false)],
+        "and running again: it had quit for the update"
+    );
+}
+
+#[test]
 fn the_swap_puts_the_new_build_in_place_once_it_starts_well() {
     let dir = tempfile::tempdir().unwrap();
     let s = setup(dir.path(), 12, Duration::from_secs(2));

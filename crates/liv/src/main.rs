@@ -36,6 +36,9 @@ struct Welcome {
     update: Update,
     /// Whether a check is under way: one at a time.
     checking: bool,
+    /// Restart to Update was asked while a check ran: it restarts once the check is done, never
+    /// in the middle of one.
+    restart_after_check: bool,
 }
 
 impl Welcome {
@@ -50,19 +53,30 @@ impl Welcome {
             self.update = Update::Checking;
             cx.notify();
         }
+        let ready = match &self.update {
+            Update::Ready(staged) => Some((**staged).clone()),
+            _ => None,
+        };
         let found = cx.background_executor().spawn(async move {
             let folders = Folders::here().ok_or("no folders for Liv on this system")?;
             let settings = Settings::load(&settings::path_in(&folders.config));
             let channel = updates::channel(&settings);
-            let source = updates::source(channel, &folders, updates::keys());
-            updates::check(&*source, &updates::http(), &folders, livtk_build::BUILD)
-                .map_err(|e| e.to_string())
+            let source = updates::source(channel, &folders, updates::keys_for(channel));
+            updates::check(
+                &*source,
+                &updates::http(),
+                &folders,
+                livtk_build::BUILD,
+                ready.as_ref(),
+            )
+            .map_err(|e| e.to_string())
         });
         cx.spawn(async move |this, cx| {
             let found = found.await;
             let _ = this.update(cx, |w, cx| {
                 w.checking = false;
-                w.update = match (found, told) {
+                let restart = std::mem::take(&mut w.restart_after_check);
+                w.update = match (found, told || restart) {
                     (Ok(Some(staged)), _) => Update::Ready(Box::new(staged)),
                     (Ok(None), true) => Update::UpToDate,
                     (Err(e), true) => Update::Failed(e),
@@ -72,6 +86,9 @@ impl Welcome {
                     }
                     (Ok(None), false) => return,
                 };
+                if restart {
+                    w.restart_to_update(cx);
+                }
                 cx.notify();
             });
         })
@@ -80,6 +97,10 @@ impl Welcome {
 
     /// Hand over to the staged build and quit: it finishes once Liv has gone.
     fn restart_to_update(&mut self, cx: &mut Context<Self>) {
+        if self.checking {
+            self.restart_after_check = true;
+            return;
+        }
         let Update::Ready(staged) = &self.update else {
             return;
         };
@@ -177,11 +198,6 @@ fn main() {
     }
     liv::log_file::init();
     log::info!("starting liv {}", livtk_build::DESCRIBE);
-    // Started by an update: say so first, so the update keeps this build.
-    let updated = updates::report_started(livtk_build::BUILD)
-        .then(Folders::here)
-        .flatten()
-        .and_then(|f| updates::notes_after_update(&f, livtk_build::BUILD));
     // Only an installed Liv looks for updates: one run from the build folder never does.
     let installed = std::env::current_exe()
         .ok()
@@ -216,15 +232,12 @@ fn main() {
             ..Default::default()
         };
         let mark = Arc::new(Image::from_bytes(ImageFormat::Png, MARK.to_vec()));
-        let update = match updated {
-            Some(notes) => Update::Updated(livtk_build::BUILD, notes),
-            None => Update::Quiet,
-        };
         let opened = gpui_kit::open_window(options, cx, |_, cx| {
             cx.new(|_| Welcome {
                 mark,
-                update,
+                update: Update::Quiet,
                 checking: false,
+                restart_after_check: false,
             })
         });
         let welcome = match opened {
@@ -235,6 +248,17 @@ fn main() {
                 return;
             }
         };
+        // Started by an update: say so only now that the window is open, so a build that can't
+        // get this far is rolled back; then its notes, once.
+        if updates::report_started(livtk_build::BUILD)
+            && let Some(notes) =
+                Folders::here().and_then(|f| updates::notes_after_update(&f, livtk_build::BUILD))
+        {
+            welcome.update(cx, |w, cx| {
+                w.update = Update::Updated(livtk_build::BUILD, notes);
+                cx.notify();
+            });
+        }
         let w = welcome.clone();
         cx.on_action(move |_: &CheckForUpdates, cx| w.update(cx, |w, cx| w.check(true, cx)));
         let w = welcome.clone();

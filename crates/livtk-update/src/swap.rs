@@ -44,10 +44,24 @@ pub trait Launcher {
     fn stop(&mut self, app: &Path);
 }
 
-/// Make the swap. Once the installed app has been moved aside, any failure (the new build will
-/// not start, or does not say it started in time) puts it back and starts it again: the old app
-/// is never lost.
+/// Make the swap. Whatever happens, an app is left in place and started: the new build once it
+/// says it started well; else the old one, put back (it is never lost) and started again, even
+/// when a move failed before anything was started.
 pub fn swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
+    match try_swap(s, launcher) {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            let previous = beside(&s.installed, "previous");
+            if !s.installed.exists() && previous.exists() {
+                let _ = std::fs::rename(&previous, &s.installed);
+            }
+            let _ = launcher.start(&s.installed, None);
+            Err(e)
+        }
+    }
+}
+
+fn try_swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
     let previous = beside(&s.installed, "previous");
     let incoming = beside(&s.installed, "incoming");
     remove(&incoming)?;
@@ -67,7 +81,8 @@ pub fn swap(s: &Swap, launcher: &mut dyn Launcher) -> Result<Outcome> {
     let started_well = launcher.start(&s.installed, Some(&s.health)).is_ok()
         && started(&s.health, s.build, s.wait);
     if started_well {
-        remove(&previous)?;
+        // Done: a leftover copy of the old app is only tidied, never a failure.
+        let _ = remove(&previous);
         return Ok(Outcome::Updated);
     }
     // It did not start well: stopped if it runs, moved out, the old app back and started as

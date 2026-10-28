@@ -3,10 +3,11 @@
 //! finish: it waits for this Liv to quit, swaps itself in, starts, and rolls back if it doesn't
 //! start well. Everything here is plain IO, run off the window's thread; the UI only asks.
 //!
-//! Every channel is signed, and Liv trusts only the keys built into it:
-//! - [`RELEASE_KEY`]: the key releases on GitHub are signed with (TAS-140);
-//! - `LIV_DEV_KEY`, built in by `cargo xtask liv` on the machine it builds on, for the builds it
-//!   releases there (the local channel).
+//! Every channel is signed, and Liv trusts only the keys built into it, each on its own channel
+//! ([`keys_for`]):
+//! - [`RELEASE_KEY`]: the key releases on GitHub are signed with (TAS-140): stable and preview;
+//! - `LIV_DEV_KEY`, built in by `cargo xtask liv` on the machine it builds on: only the local
+//!   channel, where that machine's own builds are published.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +17,7 @@ use livtk_update::github::{GitHubReleases, Track};
 use livtk_update::sign::Keys;
 use livtk_update::source::{LocalFolder, Source, newer};
 use livtk_update::stage::{Staged, stage};
-use livtk_update::swap::{Open, Outcome, Swap, exited, swap};
+use livtk_update::swap::{Launcher, Open, Outcome, Swap, exited, swap};
 
 use crate::identity::{self, Folders};
 use crate::settings::{Channel, Settings};
@@ -32,9 +33,14 @@ pub const HEALTH_VAR: &str = "LIV_UPDATE_HEALTH";
 /// release was made, so this one timer is kept (DEC-8).
 pub const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// The keys this build trusts.
-pub fn keys() -> Keys {
-    Keys::new([RELEASE_KEY, option_env!("LIV_DEV_KEY").unwrap_or("")]).unwrap_or_else(|e| {
+/// The keys this build trusts on `channel`: GitHub's channels the release key only; the local
+/// channel this machine's own key too.
+pub fn keys_for(channel: Channel) -> Keys {
+    let dev = match channel {
+        Channel::Local => option_env!("LIV_DEV_KEY").unwrap_or(""),
+        Channel::Stable | Channel::Preview => "",
+    };
+    Keys::new([RELEASE_KEY, dev]).unwrap_or_else(|e| {
         log::error!("a built-in update key is not one: {e}");
         Keys::default()
     })
@@ -87,16 +93,22 @@ pub fn source(channel: Channel, folders: &Folders, keys: Keys) -> Box<dyn Source
 }
 
 /// Look for a build newer than `this_build` in `source`, and stage it: `None` when this is the
-/// newest. Slow (it downloads, hashes and unpacks): run it off the window's thread.
+/// newest. A build already staged and `ready` is kept as it is, never staged again over itself
+/// (Restart to Update may be handing it over). Slow (it downloads, hashes and unpacks): run it off
+/// the window's thread.
 pub fn check(
     source: &dyn Source,
     fetch: &dyn livtk_update::fetch::Fetch,
     folders: &Folders,
     this_build: u64,
+    ready: Option<&Staged>,
 ) -> livtk_update::Result<Option<Staged>> {
     let Some(found) = newer(source, identity::APP_ID, this_build)? else {
         return Ok(None);
     };
+    if let Some(r) = ready.filter(|r| r.manifest.build == found.manifest.build) {
+        return Ok(Some(r.clone()));
+    }
     let here = livtk_update::fetch::download(&found, fetch, &folders.cache.join("downloads"))?;
     stage(&here, &folders.cache.join("staging")).map(Some)
 }
@@ -209,19 +221,35 @@ impl Finish {
         })
     }
 
-    /// Finish it: wait for the old Liv to quit, swap this build in, start it, and roll back if
-    /// it doesn't say it started well. Runs without a window.
+    /// Finish it: wait for the old Liv to quit, check the staged build is the one asked for,
+    /// swap it in, start it, and roll back if it doesn't say it started well. Whatever fails once
+    /// the old Liv has quit, a Liv is left running. Runs without a window.
     pub fn run(&self) -> Result<Outcome, String> {
+        self.run_with(&mut Open {
+            program: identity::SHORT.into(),
+            health_var: HEALTH_VAR.into(),
+        })
+    }
+
+    /// [`Finish::run`], starting apps with `launcher`.
+    pub fn run_with(&self, launcher: &mut dyn Launcher) -> Result<Outcome, String> {
         if !exited(self.pid, Duration::from_secs(30)) {
+            // It never quit: it runs as it was, and nothing changed.
             return Err(format!(
                 "Liv (pid {}) is still running; nothing changed",
                 self.pid
             ));
         }
-        let mut launcher = Open {
-            program: identity::SHORT.into(),
-            health_var: HEALTH_VAR.into(),
-        };
+        match livtk_update::stage::identity(&self.staged) {
+            Ok((id, build)) if id == identity::APP_ID && build == self.build => {}
+            found => {
+                let _ = launcher.start(&self.installed, None);
+                return Err(format!(
+                    "the staged app isn't Liv build {}: {found:?}; the installed Liv is started",
+                    self.build
+                ));
+            }
+        }
         swap(
             &Swap {
                 installed: self.installed.clone(),
@@ -230,7 +258,7 @@ impl Finish {
                 build: self.build,
                 wait: Duration::from_secs(20),
             },
-            &mut launcher,
+            launcher,
         )
         .map_err(|e| e.to_string())
     }

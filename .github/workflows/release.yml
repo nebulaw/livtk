@@ -1,0 +1,56 @@
+# A version tag (`cargo xtask release VERSION` pushes one) becomes a GitHub release of Liv:
+# built, packed and signed with the release key (the repository's LIV_SIGNING_KEY secret), checked
+# to stage as Liv's updater stages it, then published. A tag with a pre-release part (v0.5.0-pre.1)
+# is a prerelease, which only Liv's preview channel takes.
+#
+# macOS for now; Linux and Windows packages come with their installers (TAS-143).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build number is the count of commits on HEAD (livtk-build).
+          fetch-depth: 0
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo-bundle
+        run: cargo install --locked cargo-bundle --version 0.12.0
+      - name: The tag is the workspace's version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="liv"))')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "the tag $GITHUB_REF_NAME isn't the workspace's version v$version" >&2
+            exit 1
+          fi
+      - name: Build, pack and sign
+        env:
+          LIV_SIGNING_KEY: ${{ secrets.LIV_SIGNING_KEY }}
+        run: |
+          notes=$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")
+          cargo xtask release-assets dist "$notes"
+      - name: It stages as Liv's updater stages it
+        run: |
+          LIV_CHANNEL=dist LIV_CHANNEL_KEY="$(cat crates/liv/release.pub)" \
+            cargo test --locked -p xtask -- --ignored a_published_build_stages
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* $pre --title "Liv $GITHUB_REF_NAME" --generate-notes

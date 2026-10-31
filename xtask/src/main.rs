@@ -19,6 +19,7 @@
 
 mod fixture;
 mod liv;
+mod release;
 
 use std::path::{Path, PathBuf};
 
@@ -39,8 +40,11 @@ fn main() -> Result<()> {
         }
         "fixture" => fixture::run(&std::env::args().skip(2).collect::<Vec<_>>()),
         "liv" => liv::run(&std::env::args().skip(2).collect::<Vec<_>>()),
+        "keygen" => release::keygen(&std::env::args().skip(2).collect::<Vec<_>>()),
+        "release" => release::release(&std::env::args().skip(2).collect::<Vec<_>>()),
+        "release-assets" => release::assets(&std::env::args().skip(2).collect::<Vec<_>>()),
         _ => bail!(
-            "usage: cargo xtask icons | fixture --events N --out DIR | liv [--install] [--publish [NOTES]] [--profile quick|release]"
+            "usage: cargo xtask icons | fixture --events N --out DIR | liv [--install] [--publish [NOTES]] [--profile quick|release] | keygen | release VERSION | release-assets DIR [NOTES]"
         ),
     }
 }

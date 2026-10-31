@@ -50,6 +50,14 @@ first.
 ## Building and running
 
 - `scripts/check`: format, lint, every test, the benchmarks.
+- **CI** (`.github/workflows/ci.yml`): every push and pull request, format, lint and tests on
+  macOS, Linux and Windows (Windows: Liv and the crates it is built on; the core and CLI are
+  Unix-only for now).
+- **Releases** (`.github/workflows/release.yml`): `cargo xtask release VERSION` commits the version,
+  tags `vVERSION` and pushes; the workflow builds Liv, signs it with the release key (the
+  `LIV_SIGNING_KEY` secret; its public half is `crates/liv/release.pub`, made once by
+  `cargo xtask keygen`), checks it stages as the updater stages it, and publishes the GitHub
+  release. A version with a pre-release part is a prerelease, for the preview channel.
 - **Liv:** `cargo xtask liv` bundles it with `cargo bundle` (install it once:
   `cargo install --locked cargo-bundle`), from the metadata in `crates/liv/Cargo.toml`, and signs
   it ad hoc. `--install` puts it in ~/Applications; `--publish [notes]` puts it, signed with

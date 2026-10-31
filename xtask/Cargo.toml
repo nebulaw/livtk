@@ -14,6 +14,7 @@ livtk-update.workspace = true
 minisign.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"
+toml_edit.workspace = true
 # Already in the tree through GPUI: the same version, PNG only.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 

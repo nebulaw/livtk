@@ -46,11 +46,15 @@ mime_types = ["x-scheme-handler/liv"]
 
 [dev-dependencies]
 etcetera.workspace = true
-livtk-core.workspace = true
 minisign.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
+
+# The core is Unix-only (its runs use process groups); the one test comparing with its folders
+# runs on macOS and Linux.
+[target.'cfg(unix)'.dev-dependencies]
+livtk-core.workspace = true
 
 [lints]
 workspace = true

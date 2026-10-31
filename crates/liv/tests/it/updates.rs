@@ -76,7 +76,7 @@ fn the_channel_is_the_settings_else_the_build_s_default() {
 
 #[test]
 fn releases_come_from_the_workspace_s_repository() {
-    assert_eq!(updates::repo(), "nebulaw/tasks");
+    assert_eq!(updates::repo(), "nebulaw/livtk");
 }
 
 /// A key pair, and a way to sign a manifest with it.

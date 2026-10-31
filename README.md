@@ -17,8 +17,8 @@ The `livtk` command, then the Claude Code plugin (hooks, skills, agents) from th
 
 ```
 cargo install --locked --path crates/livtk-cli      # the livtk command
-claude plugin marketplace add /path/to/this/repo     # or: /plugin marketplace add nebulaw/tasks
-claude plugin install livtk@livtk                    # or: /plugin install livtk --marketplace nebulaw/tasks
+claude plugin marketplace add /path/to/this/repo     # or: /plugin marketplace add nebulaw/livtk
+claude plugin install livtk@livtk                    # or: /plugin install livtk --marketplace nebulaw/livtk
 ```
 
 The app is **Liv** (`crates/liv`), being built from scratch (proposal 0003, PRJ-6). On macOS:
@@ -40,6 +40,9 @@ builds made on this machine come from Liv's local channel:
 ```
 cargo xtask liv --publish "what changed"   # commit first: a build is numbered by its commit
 ```
+
+A release (maintainers): `cargo xtask release 0.5.0` sets the version, tags `v0.5.0` and pushes;
+the release workflow builds, signs and publishes it. `0.5.0-pre.1` makes a preview release.
 
 The plugin is silent in any project without a `.livtk/` directory, so it can stay enabled
 everywhere. Its hooks only do what livtk alone knows: brief Claude at session start and before a

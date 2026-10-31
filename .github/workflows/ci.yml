@@ -1,0 +1,57 @@
+# Every push to main and every pull request: format, lint and tests, on macOS, Linux and Windows.
+# Kept to what matters: no bundling here, no benchmarks or model tests (scripts/check runs those).
+#
+# Windows checks what is meant to run there (Liv and the crates it is built on); the core and the
+# CLI are Unix-only for now (their runs use process groups).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            crates: --workspace
+          - os: ubuntu-latest
+            crates: --workspace
+          - os: windows-latest
+            crates: -p liv -p livtk-ui -p livtk-update -p livtk-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build number is the count of commits on HEAD (livtk-build).
+          fetch-depth: 0
+      - name: GPUI's libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libfontconfig-dev libvulkan1 libglib2.0-dev libssl-dev libzstd-dev libasound2-dev
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy ${{ matrix.crates }} --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test ${{ matrix.crates }} --locked

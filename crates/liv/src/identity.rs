@@ -12,7 +12,17 @@ use std::path::{Path, PathBuf};
 
 use etcetera::BaseStrategy;
 use etcetera::app_strategy::AppStrategyArgs;
-use livtk_update::paths::{Env, process_env};
+
+/// The environment Liv's folders are worked out from: the process's ([`process_env`]), or a fixed
+/// one in tests, so a test never depends on the machine it runs on.
+pub type Env<'a> = &'a dyn Fn(&str) -> Option<PathBuf>;
+
+/// The process's environment. An empty value counts as unset.
+pub fn process_env(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
 
 /// The bundle identifier, and the app identity GPUI gives notifications. It is also the name of
 /// Liv's folders on macOS, as Apple's convention has it (`identifier_is_the_platform_s_args`).

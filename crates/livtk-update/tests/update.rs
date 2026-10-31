@@ -102,7 +102,7 @@ fn an_artifact_is_checked_by_size_then_by_hash() {
     );
 }
 
-/// A bundle as `scripts/bundle-app` makes it, zipped as `scripts/release` does.
+/// An app bundle, zipped as a release zips it (`ditto -c -k --keepParent`).
 #[cfg(target_os = "macos")]
 fn packed_app(dir: &Path, build: u64) -> std::path::PathBuf {
     use std::process::Command;

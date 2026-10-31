@@ -9,7 +9,8 @@ repository.workspace = true
 publish = false
 
 [features]
-# The real HTTPS client for updates from GitHub Releases (Liv); livtk.app does without.
+# The real HTTPS client for updates from GitHub Releases; without it, sources are read through
+# `fetch::Fetch` only (tests use a fake).
 http = ["dep:ureq"]
 
 [dependencies]

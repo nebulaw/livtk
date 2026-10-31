@@ -205,12 +205,12 @@ fn liv_writes_nothing_of_livtk_app_s() {
         )
     };
     let liv = Folders::of(&e, platform);
+    // livtk.app's folders in the same environment: the CLI's config from the core's own function,
+    // the rest as the installed (frozen) livtk.app has them.
     let livtk = [
         livtk_core::registry::config_dir_with(&e).unwrap(),
-        livtk_update::paths::base_with(&e).unwrap(),
-        livtk_update::paths::source_with(&e).unwrap(),
-        // livtk.app's log folder: livtk-app's `applog`, typed here so Liv's tests don't build
-        // the old app.
+        PathBuf::from("/h/Library/Application Support/livtk"),
+        PathBuf::from("/h/.local/share/livtk"),
         PathBuf::from("/h/Library/Logs/livtk"),
     ];
     for (what, p) in [

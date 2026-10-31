@@ -11,7 +11,6 @@ mod error;
 pub mod fetch;
 pub mod github;
 pub mod manifest;
-pub mod paths;
 pub mod sign;
 pub mod source;
 pub mod stage;

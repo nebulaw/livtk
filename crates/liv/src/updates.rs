@@ -22,9 +22,10 @@ use livtk_update::swap::{Launcher, Open, Outcome, Swap, exited, swap};
 use crate::identity::{self, Folders};
 use crate::settings::{Channel, Settings};
 
-/// The public key Liv's releases on GitHub are signed with. Empty until the release key exists
-/// (TAS-140): until then, nothing from GitHub is trusted.
-pub const RELEASE_KEY: &str = "";
+/// The public key Liv's releases on GitHub are signed with, from `crates/liv/release.pub`
+/// (`cargo xtask keygen` makes it). Empty until it exists: until then, nothing from GitHub is
+/// trusted.
+pub const RELEASE_KEY: &str = include_str!("../release.pub");
 
 /// The variable a Liv started by an update reads to know where to say it started.
 pub const HEALTH_VAR: &str = "LIV_UPDATE_HEALTH";

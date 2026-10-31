@@ -407,8 +407,25 @@ fn a_build_that_cannot_even_be_started_is_rolled_back_and_the_old_app_never_lost
 fn an_artifact_beyond_the_manifests_folder_is_refused() {
     let mut m = manifest(1, "/etc/hosts", HASH, 1);
     assert!(Manifest::parse(&serde_json::to_string(&m).unwrap()).is_err());
-    m.artifact = "../x.zip".into();
-    assert!(Manifest::parse(&serde_json::to_string(&m).unwrap()).is_err());
+    for name in [
+        "../x.zip",
+        "..",
+        ".",
+        "",
+        "sub/x.zip",
+        "sub\\x.zip",
+        "C:x.zip",
+        "C:\\x.zip",
+        "\\\\host\\x.zip",
+    ] {
+        m.artifact = name.into();
+        assert!(
+            Manifest::parse(&serde_json::to_string(&m).unwrap()).is_err(),
+            "{name}"
+        );
+    }
+    m.artifact = "liv-macos-aarch64.zip".into();
+    assert!(Manifest::parse(&serde_json::to_string(&m).unwrap()).is_ok());
 }
 
 #[test]

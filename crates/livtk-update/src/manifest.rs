@@ -97,6 +97,12 @@ pub struct Manifest {
     pub notes: String,
 }
 
+/// A single file name, read the same on every platform: no folder, root or drive (`/`, `\`, `:`),
+/// and not `.` or `..`.
+fn plain_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':'])
+}
+
 impl Manifest {
     /// Read a manifest: `Ok(None)` for a newer format this app does not read, an error for one
     /// that is not a manifest at all.
@@ -113,9 +119,8 @@ impl Manifest {
         if m.sha256.len() != 64 || !m.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("sha256 is not 64 hex digits".into());
         }
-        let path = std::path::Path::new(&m.artifact);
-        if m.artifact.is_empty() || path.is_absolute() || m.artifact.contains("..") {
-            return Err("artifact is not a plain path beside the manifest".into());
+        if !plain_name(&m.artifact) {
+            return Err("artifact is not a plain file name beside the manifest".into());
         }
         Ok(Some(m))
     }

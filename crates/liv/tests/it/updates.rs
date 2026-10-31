@@ -8,6 +8,7 @@ use liv::identity::{self, Folders, Platform};
 use liv::settings::{Channel, Settings, path_in};
 use liv::updates::{self, Finish};
 use livtk_update::sign::{Keys, signature_name};
+#[cfg(target_os = "macos")]
 use livtk_update::source::LocalFolder;
 
 /// Liv's folders, all under `root`.
@@ -333,16 +334,20 @@ fn a_build_already_ready_is_kept_as_it_is() {
 }
 
 /// A source that offers one build by URL, and the web that serves it.
+#[cfg(target_os = "macos")]
 struct ByUrl(livtk_update::Found);
 
+#[cfg(target_os = "macos")]
 impl livtk_update::Source for ByUrl {
     fn newest(&self, _: &str) -> livtk_update::Result<Option<livtk_update::Found>> {
         Ok(Some(self.0.clone()))
     }
 }
 
+#[cfg(target_os = "macos")]
 struct Serves(Vec<u8>);
 
+#[cfg(target_os = "macos")]
 impl livtk_update::fetch::Fetch for Serves {
     fn get(&self, _: &str) -> livtk_update::Result<Option<Vec<u8>>> {
         Ok(Some(self.0.clone()))
@@ -393,9 +398,11 @@ fn downloads_and_staged_builds_don_t_pile_up() {
 }
 
 /// A launcher that records what it starts.
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct Starts(Vec<PathBuf>);
 
+#[cfg(target_os = "macos")]
 impl livtk_update::swap::Launcher for Starts {
     fn start(&mut self, app: &Path, _: Option<&Path>) -> livtk_update::Result<()> {
         self.0.push(app.to_path_buf());
@@ -405,6 +412,7 @@ impl livtk_update::swap::Launcher for Starts {
 }
 
 /// The pid of a process that has already exited, as the Liv that handed over has.
+#[cfg(target_os = "macos")]
 fn gone_pid() -> u32 {
     let mut child = std::process::Command::new("true").spawn().unwrap();
     let pid = child.id();
@@ -544,9 +552,11 @@ fn a_rollback_records_the_build_that_failed() {
 }
 
 /// A launcher whose start of the old app fails, after the new build was tried.
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct OldWontStart(Vec<PathBuf>);
 
+#[cfg(target_os = "macos")]
 impl livtk_update::swap::Launcher for OldWontStart {
     fn start(&mut self, app: &Path, health: Option<&Path>) -> livtk_update::Result<()> {
         self.0.push(app.to_path_buf());
@@ -626,8 +636,10 @@ fn a_ready_build_stays_ready_until_a_newer_one_replaces_it() {
 }
 
 /// The local channel never goes to the network.
+#[cfg(target_os = "macos")]
 struct NoNetwork;
 
+#[cfg(target_os = "macos")]
 impl livtk_update::fetch::Fetch for NoNetwork {
     fn get(&self, url: &str) -> livtk_update::Result<Option<Vec<u8>>> {
         panic!("no network on the local channel: {url}")

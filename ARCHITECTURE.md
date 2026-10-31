@@ -18,8 +18,8 @@ crates/
   livtk-build    which build this is (version, build number, commit)
   livtk-ui       the design system: tokens, themes, components. Knows nothing of tasks
   liv            Liv, the new app, on livtk-ui (being built: PRJ-6)
-  livtk-app      the app in use today, until Liv takes over (then deleted)
 xtask            the project's own tasks: `cargo xtask icons | fixture | liv`
+legacy/          the first app (livtk.app), its helper and scripts: kept for reading, never built
 plugin/          the Claude Code plugin: skills, agents, hooks
 ```
 
@@ -50,8 +50,6 @@ first.
 ## Building and running
 
 - `scripts/check`: format, lint, every test, the benchmarks.
-- **The app in use:** `scripts/release --quick` builds `livtk.app` and puts it in livtk's
-  update channel.
 - **Liv:** `cargo xtask liv` bundles it with `cargo bundle` (install it once:
   `cargo install --locked cargo-bundle`), from the metadata in `crates/liv/Cargo.toml`, and signs
   it ad hoc. `--install` puts it in ~/Applications; `--publish [notes]` puts it, signed with

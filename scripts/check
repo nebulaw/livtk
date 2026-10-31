@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
 # Everything a change must pass, fastest first, each step timed:
-#   scripts/check            format, lint, supply chain, every test (debug), benchmarks and model
-#                            tests (quick)
-#   scripts/check --install  then install: on macOS ~/Applications/livtk.app and links to it on
-#                            PATH; elsewhere both binaries with cargo install
-#   scripts/check --energy   then what the app costs at idle (scripts/energy, on macOS): it opens
-#                            a few windows for half a minute, so it is asked for, not run always
+#   scripts/check   format, lint, supply chain, every test (debug), benchmarks and model tests
 #
-# UI tests run in debug only (GPUI records the debug selectors they use only there). The CLI's
-# benchmarks time the binary that gets installed, start-up included, so they run in release; the
-# rest run in the `quick` profile: release speed, no LTO, rebuilt in seconds. Installing reuses
-# target/, so it compiles only what changed.
+# The CLI's benchmarks time the binary that gets installed, start-up included, so they run in
+# release; the core's run in the `quick` profile: release speed, no LTO, rebuilt in seconds.
+# The old app (legacy/livtk-app) is kept for reading only: nothing here builds or tests it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Run inside a livtk run, the run's session and task are in the environment: the tests are no
@@ -45,7 +39,6 @@ else
   step "supply chain (cargo deny)" cargo deny --offline check
 fi
 step "tests: core, CLI and updater" cargo test -q
-step "tests: the app, with UI tests" cargo test -q -p livtk-app
 step "tests: Liv and livtk-ui" cargo test -q -p liv -p livtk-ui
 if [ -d "$models/potion-retrieval-32M" ]; then
   with_models=(env LIVTK_TEST_MODELS="$models")
@@ -55,22 +48,7 @@ else
   with_models=()
   skip=(--skip with_model)
 fi
-step "benchmarks and model tests: core, app" \
-  "${with_models[@]}" cargo test -q --profile quick -p livtk-core -p livtk-app -- --ignored "${skip[@]}"
+step "benchmarks and model tests: core" \
+  "${with_models[@]}" cargo test -q --profile quick -p livtk-core -- --ignored "${skip[@]}"
 step "benchmarks and model tests: CLI (release)" \
   "${with_models[@]}" cargo test -q --release -p livtk-cli -- --ignored "${skip[@]}"
-# An idle app draws nothing and costs next to no CPU: a quick build, left alone in each state.
-if [ "${1:-}" = "--energy" ] && [ "$(uname)" = Darwin ]; then
-  step "bundle (quick) for energy" scripts/bundle-app --quick
-  step "energy: idle within its budgets" scripts/energy --gate
-fi
-if [ "${1:-}" = "--install" ]; then
-  if [ "$(uname)" = Darwin ]; then
-    # One bundle holds the app and the CLI; the commands on PATH link into it.
-    step "install livtk.app" scripts/bundle-app --install
-    "$HOME/Applications/livtk.app/Contents/MacOS/livtk-app" --install-cli
-  else
-    step "install livtk" cargo install -q --locked --path crates/livtk-cli --target-dir target
-    step "install livtk-app" cargo install -q --locked --path crates/livtk-app --target-dir target
-  fi
-fi

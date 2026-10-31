@@ -1,16 +1,12 @@
 [package]
 name = "livtk-update"
-description = "livtk's updates: the manifest every update is described by, where updates come from, staging and verifying one, and the helper that swaps the app and rolls back"
+description = "Updates for livtk's apps: the signed manifest every update is described by, where updates come from, staging and verifying one, and the swap that rolls back"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-
-[[bin]]
-name = "livtk-update"
-path = "src/main.rs"
 
 [features]
 # The real HTTPS client for updates from GitHub Releases (Liv); livtk.app does without.

@@ -33,7 +33,7 @@ From the research (sources in §9). Each has a target the refuter or a test can 
 | # | Principle | Target | Checked by |
 |---|---|---|---|
 | 1 | **Instant** | ≥95% of interactions draw their result in <100 ms, goal <50 ms; local changes show before any I/O; no spinner on a local action | input-to-frame timing in debug builds; a test per action that the view changes in the same frame |
-| 2 | **Still when idle** | no frame drawn, no work done while nothing changes (DEC-6, DEC-8) | `an_idle_view_draws_nothing`, energy gate |
+| 2 | **Still when idle** | no frame drawn, no work done while nothing changes (DEC-6, DEC-8) | an idle-frames test (no frame drawn while idle) |
 | 3 | **Keyboard reaches everything** | every action has a command in the command bar, with its shortcut shown; every button shows its shortcut on hover | a test that every action is registered as a command |
 | 4 | **One primary action per view** | at most one accent-coloured control in a view; chrome lower in contrast than content | review against the component rules |
 | 5 | **Motion only for a change** | small parts 100–200 ms, panels 200–300 ms, never >400 ms; exits shorter than entries; Reduce Motion → a fade or nothing | durations are tokens; a test that Reduce Motion requests no frames |
@@ -160,7 +160,7 @@ service work of 0002 lands, only the real `Source` changes.
 
 ## 6. Performance and quality gates
 
-- **Idle:** draws no frames and stays within the energy budget (kept from today).
+- **Idle:** draws no frames while nothing changes, held by a test. Efficiency comes from the design (strip and refactor before adding), not from measuring after.
 - **Latency:** input-to-frame for each action under 100 ms, measured in debug builds, with a test per view.
 - **Tokens only:** no colour or size literals outside `livtk-ui`, checked by grep in `xtask check`.
 - **Size:** no module over about 1k lines, and no type with more than about 30 methods. The reviewer flags both.
